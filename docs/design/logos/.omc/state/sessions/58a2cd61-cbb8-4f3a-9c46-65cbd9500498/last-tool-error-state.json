@@ -1,0 +1,7 @@
+{
+  "tool_name": "mcp__plugin_paper-desktop_paper__rename_nodes",
+  "tool_input_preview": "{\"fileId\":\"01M5A05NG88FC2PXKH46DR6K57\",\"nodes\":\"[{\\\"id\\\": \\\"1AP-0\\\", \\\"name\\\": \\\"02 Итоги звонка — готово\\\"}]\"}",
+  "error": "Invalid arguments for tool rename_nodes: [\n  {\n    \"expected\": \"array\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"updates\"\n    ],\n    \"message\": \"Invalid input\"\n  }\n]\n\nTry once more, and if it still fails, ask the user to restart their MCP connection to get the latest tool definitions.",
+  "timestamp": "2026-10-19T12:33:15.938Z",
+  "retry_count": 1
+}

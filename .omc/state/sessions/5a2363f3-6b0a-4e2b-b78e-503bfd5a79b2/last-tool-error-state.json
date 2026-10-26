@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd /tmp/rg-scaffold && bunx --bun shadcn@latest init --template next --name realtime-grilling --preset base-nova --no-monorepo -y 2>&1 | tail -30; ls -la realtime-grilling\",\"timeout\":60000...",
+  "error": "Exit code 1\nResolving dependencies\nResolved, downloaded and extracted [2]\nInvalid preset: base-nova. Available presets: nova, vega, maia, lyra, mira, luma, sera, rhea\n\nls: realtime-grilling: No such file or directory",
+  "timestamp": "2026-10-26T10:53:32.609Z",
+  "retry_count": 1
+}

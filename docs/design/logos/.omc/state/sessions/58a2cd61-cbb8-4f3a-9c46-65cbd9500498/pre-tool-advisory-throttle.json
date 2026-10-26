@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "entries": {
+    "466399dafa2d20f60587180bad0a07358eb7f2bce724df0ff682f038ad33f5ad": {
+      "last_emitted_at_ms": 1792414010009,
+      "message": "Read multiple files in parallel when possible for faster analysis."
+    },
+    "445ed27a3872b681d98190bae61ccb84954e1bc4e140df5370be958dee776b3a": {
+      "last_emitted_at_ms": 1792413988687,
+      "message": "Verify changes work after editing. Test functionality before marking complete."
+    },
+    "79a93d4a2f8f50b95f852280616242fee1855dc99a3c75211917f55e72e95fae": {
+      "last_emitted_at_ms": 1792413678974,
+      "message": "Use parallel execution for independent tasks. Use run_in_background for long operations (npm install, builds, tests)."
+    },
+    "852c2fe34dca3b9974668c75ac4f8e95b751adee1c418525ae6ed5fb0a102f4d": {
+      "last_emitted_at_ms": 1792412964469,
+      "message": "Spawning agent: general-purpose (inherit) [BACKGROUND] | Task: Paper: projects & settings"
+    },
+    "7461063aaa64db294793254820426c22f528cc7e38ea4edf15787551525bc511": {
+      "last_emitted_at_ms": 1792412952304,
+      "message": "Spawning agent: general-purpose (inherit) [BACKGROUND] | Task: Paper: onboarding & integrations"
+    },
+    "5044c1e1d33b36131cba387aac1bc841528de4dad9c7249a7f22471484107e1a": {
+      "last_emitted_at_ms": 1792412939600,
+      "message": "Spawning agent: general-purpose (inherit) [BACKGROUND] | Task: Paper: post-call screens"
+    },
+    "0fd67cec44c8f8cdec40d7fb5cd20097f93191ee4da964fc53fc80aef617dbfc": {
+      "last_emitted_at_ms": 1792412926667,
+      "message": "Spawning agent: general-purpose (inherit) [BACKGROUND] | Task: Paper: in-call flow states"
+    },
+    "33bb3169c6865b2b775a6c954e88d07e081165c383c46fca57215110e2da1f84": {
+      "last_emitted_at_ms": 1792412911662,
+      "message": "Spawning agent: general-purpose (inherit) [BACKGROUND] | Task: Paper: component library"
+    }
+  },
+  "updated_at": "2026-10-19T12:46:50.009Z"
+}
