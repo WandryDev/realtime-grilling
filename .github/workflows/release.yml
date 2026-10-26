@@ -1,0 +1,168 @@
+name: Release
+
+# 1. Pushes to main with pending changesets open/update the "chore: release" PR.
+# 2. Merging that PR bumps the version and writes CHANGELOG.md; this workflow then
+#    builds the app for macOS and Windows and publishes a GitHub release `v<version>`.
+
+on:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  changesets:
+    name: Changesets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile
+
+      - name: Create or update release PR
+        uses: changesets/action@v2.1.2
+        with:
+          # A PAT, so the release PR triggers CI (PRs opened with GITHUB_TOKEN don't).
+          github-token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          version-script: bun run version
+          commit-message: "chore: release"
+          pr-title: "chore: release"
+
+  # Runs on every push (not only when no changesets are pending): a run for a merged
+  # release PR can be superseded by a newer push, and the version must still ship.
+  # Versions that are already published or have no CHANGELOG entry are skipped.
+  prepare:
+    name: Prepare release
+    needs: [ ci, changesets ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.release.outputs.id }}
+      version: ${{ steps.version.outputs.version }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="v$VERSION"
+
+          # Only versions produced by `changeset version` are released.
+          awk -v heading="## $VERSION" '
+            $0 == heading { found = 1; next }
+            /^## / && found { exit }
+            found { print }
+          ' CHANGELOG.md 2>/dev/null > notes.md || true
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG.md entry for $VERSION, nothing to release."
+            exit 0
+          fi
+
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$tag\") | {id, draft}" | jq -s .)
+          if jq -e 'any(.draft == false)' <<< "$releases" > /dev/null; then
+            echo "$tag is already published."
+            exit 0
+          fi
+
+          id=$(jq -r '.[0].id // empty' <<< "$releases")
+          if [ -n "$id" ]; then
+            # Draft left over from a failed run: point it at this commit and rebuild into it.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+              -f target_commitish="$GITHUB_SHA" \
+              -F body=@notes.md > /dev/null
+          else
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$tag" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="$tag" \
+              -F body=@notes.md \
+              -F draft=true \
+              --jq .id)
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: prepare
+    if: needs.prepare.outputs.release-id != ''
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            platform: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows
+            platform: windows-latest
+            args: ""
+            rust-targets: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: bun install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release-id }}
+          tauriScript: bun run tauri
+          args: ${{ matrix.args }}
+          uploadUpdaterJson: false
+          retryAttempts: 1
+
+  publish:
+    name: Publish release
+    needs: [ prepare, build ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+        run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true
