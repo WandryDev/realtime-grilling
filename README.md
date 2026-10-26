@@ -10,6 +10,7 @@
 - **Ultracite** (Biome) — линтинг и форматирование фронтенда; `rustfmt` + `clippy` для Rust
 - **Vitest** + Testing Library — тесты фронтенда; `cargo test` — тесты Rust
 - **Changesets** — версии и CHANGELOG
+- **OpenSpec** — спецификации и предложения изменений (`openspec/`)
 - **bun** — пакетный менеджер
 
 ## Команды
@@ -32,6 +33,19 @@ cargo test
 ```
 
 Компоненты shadcn: `bunx --bun shadcn@latest add <component>`.
+
+## OpenSpec
+
+Изменения поведения сначала описываются в OpenSpec, потом реализуются:
+
+```text
+/opsx:explore            # обсудить идею
+/opsx:propose "<идея>"   # proposal, design, specs и tasks в openspec/changes/<change>/
+/opsx:apply              # реализовать задачи
+/opsx:archive            # перенести итоговые спецификации в openspec/specs/
+```
+
+CLI: `bunx openspec list`, `bunx openspec validate`, `bunx openspec view`. Контекст проекта для агента лежит в `openspec/config.yaml`. CodeRabbit папку `openspec/` не ревьюит.
 
 ## CI и релизы
 

@@ -49,6 +49,8 @@ reviews:
     - "!CHANGELOG.md"
     - "!.changeset/*.md"
     - "!.omc/**"
+    # Specs and change proposals (OpenSpec), not code.
+    - "!openspec/**"
     - "!docs/references/**"
     - "!**/*.svg"
     - "!src-tauri/icons/**"
