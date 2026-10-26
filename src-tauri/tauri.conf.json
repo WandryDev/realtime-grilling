@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "realtime-grilling",
-  "version": "0.1.0",
-  "identifier": "com.dev_wandry.realtime-grilling",
+  "version": "../package.json",
+  "identifier": "com.dev-wandry.realtime-grilling",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:3000",
@@ -30,6 +30,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }
