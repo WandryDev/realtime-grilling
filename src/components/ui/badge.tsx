@@ -1,42 +1,97 @@
 import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
+import { CheckIcon } from "lucide-react"
 import { cn } from "cn"
 
+/*
+ * Paper "04 Метки и пилюли", "Статус вопроса": a 26px pill on a soft fill with
+ * a 6px dot (a check for confirmed, nothing for waiting) and 13px lowercase
+ * text. Status variants render their marker themselves; pass
+ * `indicator={false}` to drop it. `neutral` is the gray tag ("без жаргона").
+ */
 const badgeVariants = cva(
-  "group/badge inline-flex h-5 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-4xl border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
+  "group/badge inline-flex w-fit shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-full border border-transparent text-sm whitespace-nowrap transition-colors focus-visible:focus-ring [&>svg]:pointer-events-none [&>svg]:shrink-0 [&>svg:not([class*='size-'])]:size-3",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
-        secondary:
-          "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
-        destructive:
-          "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
+        contradiction: "bg-contradiction-soft text-contradiction",
+        assumption: "bg-assumption-soft text-assumption",
+        confirmed: "bg-confirmed-soft text-confirmed",
+        waiting: "bg-accent-soft text-accent-ink",
+        empty: "bg-surface text-muted-foreground",
+        neutral: "bg-surface text-muted-foreground [a]:hover:bg-border",
+        // shadcn names, kept for compatibility
+        default: "bg-primary text-primary-foreground [a]:hover:bg-ink-hover",
+        secondary: "bg-surface text-muted-foreground [a]:hover:bg-border",
+        destructive: "bg-contradiction-soft text-contradiction",
         outline:
-          "border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground",
-        ghost:
-          "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
-        link: "text-primary underline-offset-4 hover:underline",
+          "border-border-strong text-muted-foreground [a]:hover:bg-surface",
+        ghost: "text-muted-foreground hover:bg-surface",
+        link: "text-foreground underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-[26px] px-2.5",
+        sm: "h-6 px-2.5",
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: "neutral",
+      size: "default",
     },
   }
 )
 
+type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>
+
+const DOT_COLOR: Partial<Record<BadgeVariant, string>> = {
+  contradiction: "bg-contradiction",
+  assumption: "bg-assumption",
+  empty: "bg-empty",
+}
+
+function BadgeIndicator({ variant }: { variant: BadgeVariant }) {
+  if (variant === "confirmed") {
+    return <CheckIcon aria-hidden strokeWidth={3} data-slot="badge-icon" />
+  }
+  const dot = DOT_COLOR[variant]
+  if (!dot) {
+    return null
+  }
+  return (
+    <span
+      aria-hidden
+      data-slot="badge-dot"
+      className={cn("size-1.5 shrink-0 rounded-full", dot)}
+    />
+  )
+}
+
 function Badge({
   className,
-  variant = "default",
+  variant = "neutral",
+  size = "default",
+  indicator = true,
   render,
+  children,
   ...props
-}: useRender.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
+}: useRender.ComponentProps<"span"> &
+  VariantProps<typeof badgeVariants> & {
+    /** Show the status dot or check. Only status variants have one. */
+    indicator?: boolean
+  }) {
+  const resolvedVariant = variant ?? "neutral"
   return useRender({
     defaultTagName: "span",
     props: mergeProps<"span">(
       {
-        className: cn(badgeVariants({ variant }), className),
+        className: cn(badgeVariants({ variant, size }), className),
+        children: (
+          <>
+            {indicator ? <BadgeIndicator variant={resolvedVariant} /> : null}
+            {children}
+          </>
+        ),
       },
       props
     ),
@@ -49,3 +104,4 @@ function Badge({
 }
 
 export { Badge, badgeVariants }
+export type { BadgeVariant }

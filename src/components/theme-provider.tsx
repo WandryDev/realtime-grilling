@@ -1,8 +1,9 @@
 "use client";
 
-import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
-import { type ComponentProps, useEffect } from "react";
+import { ThemeProvider as NextThemesProvider } from "next-themes";
+import type { ComponentProps } from "react";
 
+// The Grill design system is light only ("ink on paper"), see globals.css.
 function ThemeProvider({
   children,
   ...props
@@ -10,62 +11,13 @@ function ThemeProvider({
   return (
     <NextThemesProvider
       attribute="class"
-      defaultTheme="system"
       disableTransitionOnChange
-      enableSystem
+      forcedTheme="light"
       {...props}
     >
-      <ThemeHotkey />
       {children}
     </NextThemesProvider>
   );
-}
-
-function isTypingTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  return (
-    target.isContentEditable ||
-    target.tagName === "INPUT" ||
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT"
-  );
-}
-
-function ThemeHotkey() {
-  const { resolvedTheme, setTheme } = useTheme();
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || event.repeat) {
-        return;
-      }
-
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
-
-      if (event.key.toLowerCase() !== "d") {
-        return;
-      }
-
-      if (isTypingTarget(event.target)) {
-        return;
-      }
-
-      setTheme(resolvedTheme === "dark" ? "light" : "dark");
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [resolvedTheme, setTheme]);
-
-  return null;
 }
 
 export { ThemeProvider };
