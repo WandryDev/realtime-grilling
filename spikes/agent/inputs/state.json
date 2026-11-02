@@ -1,0 +1,37 @@
+{
+  "cards": [
+    {
+      "id": "C1",
+      "title": "Маршрутизация входящих звонков на единый номер",
+      "fields": {
+        "goal": { "value": "Перестать терять звонки в часы пик: единый номер, звонок попадает к свободному администратору или в колл-центр.", "sources": ["B3", "B4"] },
+        "users": { "value": "Пациенты (звонящие), администраторы филиалов, операторы колл-центра (3 человека).", "sources": ["B2", "B8"] },
+        "scenarios": { "value": "", "sources": [] },
+        "edge_cases": { "value": "", "sources": [] },
+        "integrations": { "value": "Бинотел в трёх филиалах, договор до марта.", "sources": ["B5"] },
+        "constraints": { "value": "Бюджет до $15k с лицензиями; запуск к 1 сентября; записи хранить в Украине/ЕС не дольше года.", "sources": ["B9", "B10"] },
+        "acceptance": { "value": "", "sources": [] }
+      }
+    },
+    {
+      "id": "C2",
+      "title": "Перезвон по пропущенным звонкам",
+      "fields": {
+        "goal": { "value": "Пациенты, которым не ответили, получают обратный звонок и не уходят к конкурентам.", "sources": ["B3"] },
+        "users": { "value": "", "sources": [] },
+        "scenarios": { "value": "", "sources": [] },
+        "edge_cases": { "value": "", "sources": [] },
+        "integrations": { "value": "", "sources": [] },
+        "constraints": { "value": "", "sources": [] },
+        "acceptance": { "value": "", "sources": [] }
+      }
+    }
+  ],
+  "open_questions": [
+    { "id": "Q1", "card_id": "C1", "card_field": "scenarios", "priority": "blocker", "text": "Номера филиалов остаются рабочими или все звонки переводим на один номер?" },
+    { "id": "Q2", "card_id": "C1", "card_field": "acceptance", "priority": "important", "text": "Сколько звонков в день реально приходит и как мы поймём, что пропущенных стало меньше?" },
+    { "id": "Q3", "card_id": "C1", "card_field": "integrations", "priority": "important", "text": "Остаёмся на Бинотел во всех филиалах или рассматриваете другую АТС?" },
+    { "id": "Q4", "card_id": "C2", "card_field": "users", "priority": "important", "text": "Кто будет перезванивать по пропущенным — администратор филиала или колл-центр?" },
+    { "id": "Q5", "card_id": "C1", "card_field": "users", "priority": "nice", "text": "Кто со стороны клиники будет отвечать за систему после запуска?" }
+  ]
+}

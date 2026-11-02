@@ -30,3 +30,11 @@ pnpm-debug.log*
 *.suo
 *.sw?
 *.pem
+
+# spikes: build output, downloaded models, generated audio and raw run logs
+spikes/**/target/
+spikes/**/models/
+spikes/**/data/
+spikes/**/runs/
+spikes/**/.venv/
+spikes/**/__pycache__/
