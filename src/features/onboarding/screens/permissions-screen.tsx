@@ -182,7 +182,12 @@ export interface PermissionsHandlers {
   onRecheck?: () => void;
   onRequestMicrophone?: () => void;
   onRequestScreenAudio?: () => void;
+  /** macOS applied the screen audio access only after a restart. */
+  onRestart?: () => void;
 }
+
+const RESTART_HINT =
+  "Если вы уже разрешили доступ, перезапустите Grill: macOS применит его только после перезапуска.";
 
 function AccessStatus({
   access,
@@ -211,12 +216,14 @@ function PermissionRows({
   handlers,
   messages,
   microphone,
+  restartNeeded,
   screenAudio,
   windows,
 }: {
   handlers: PermissionsHandlers;
   messages: AccessMessages;
   microphone: AccessState;
+  restartNeeded: boolean;
   screenAudio: AccessState;
   windows: boolean;
 }) {
@@ -247,15 +254,25 @@ function PermissionRows({
         />
       ) : (
         <PermissionRow
-          description={messages.screenAudio ?? SCREEN_AUDIO.description}
+          description={
+            restartNeeded
+              ? RESTART_HINT
+              : (messages.screenAudio ?? SCREEN_AUDIO.description)
+          }
           icon={<ScreenAudioIcon />}
           status={
-            <AccessStatus
-              access={screenAudio}
-              onRequest={handlers.onRequestScreenAudio}
-              // The next thing to press once the microphone is allowed
-              primary={microphone === "granted"}
-            />
+            restartNeeded ? (
+              <Button onClick={handlers.onRestart} variant="secondary">
+                Перезапустить
+              </Button>
+            ) : (
+              <AccessStatus
+                access={screenAudio}
+                onRequest={handlers.onRequestScreenAudio}
+                // The next thing to press once the microphone is allowed
+                primary={microphone === "granted"}
+              />
+            )
           }
           title={SCREEN_AUDIO.title}
         />
@@ -547,6 +564,7 @@ export function PermissionsScreen({
   microphone: microphoneProp,
   microphoneLevel,
   nextHref,
+  restartNeeded = false,
   screenAudio: screenAudioProp,
   silentSystemAudio = false,
   soundLevels = SOUND_LEVELS,
@@ -575,6 +593,11 @@ export function PermissionsScreen({
    */
   microphoneLevel?: LevelReading;
   nextHref?: string;
+  /**
+   * macOS: the screen audio prompt was answered but this process still
+   * reads "not asked"; the access shows up after a restart.
+   */
+  restartNeeded?: boolean;
   /** Overrides the screen recording access implied by `state`. */
   screenAudio?: AccessState;
   /**
@@ -634,6 +657,7 @@ export function PermissionsScreen({
       handlers={handlers}
       messages={messages}
       microphone={microphone}
+      restartNeeded={restartNeeded && !windows}
       screenAudio={screenAudio}
       windows={windows}
     />

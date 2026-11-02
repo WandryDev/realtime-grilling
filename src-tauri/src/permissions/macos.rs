@@ -27,8 +27,10 @@ use crate::{
 
 /// How long the tap of a request runs: macOS prompts on its creation.
 const REQUEST_TAP: Duration = Duration::from_millis(500);
-/// How long a request waits for the user's answer to the prompt.
-const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a request waits for the answer to show in this process. macOS
+/// 26 applies an access granted in the prompt only to a new process, so a
+/// longer wait doesn't help: the step offers a restart instead.
+const ANSWER_WAIT: Duration = Duration::from_secs(5);
 const ANSWER_POLL: Duration = Duration::from_millis(300);
 
 pub fn status(kind: PermissionKind) -> PermissionStatus {

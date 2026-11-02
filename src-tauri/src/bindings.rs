@@ -77,6 +77,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::agent_login_cancel,
             commands::audio_level_start,
             commands::audio_level_stop,
+            commands::app_restart,
         ])
         .events(collect_events![
             AgentInstallProgress,

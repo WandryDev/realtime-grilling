@@ -29,6 +29,13 @@ impl QuitRequested {
         app.state::<Self>().0.store(true, Ordering::SeqCst);
         app.exit(0);
     }
+
+    /// Starts the app again: macOS applies the system audio access only to
+    /// a new process.
+    pub fn restart<R: Runtime>(app: &AppHandle<R>) -> ! {
+        app.state::<Self>().0.store(true, Ordering::SeqCst);
+        app.restart()
+    }
 }
 
 /// Whether onboarding is done and the storage works: which window "open the

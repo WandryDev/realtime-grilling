@@ -1088,6 +1088,7 @@ fn capabilities_match_the_command_list() {
         "agent_login_cancel",
         "audio_level_start",
         "audio_level_stop",
+        "app_restart",
     ] {
         assert!(
             !floating.iter().any(|command| command == forbidden),

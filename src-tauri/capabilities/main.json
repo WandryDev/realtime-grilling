@@ -67,6 +67,7 @@
     "allow-agent-login-submit",
     "allow-agent-login-cancel",
     "allow-audio-level-start",
-    "allow-audio-level-stop"
+    "allow-audio-level-stop",
+    "allow-app-restart"
   ]
 }

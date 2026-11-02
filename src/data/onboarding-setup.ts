@@ -13,7 +13,9 @@ import {
   type Permissions,
   type SpeechModelEvent,
 } from "@/features/onboarding/backend";
+import { routes } from "@/lib/routes";
 
+import { rememberOnboardingResume } from "./onboarding";
 import { createStore } from "./store";
 
 /*
@@ -76,6 +78,11 @@ export interface PermissionsSetup {
   screenAudio: ScreenAudioAccess;
   /** Why the system sound can't be allowed here (an old macOS). */
   screenAudioMessage: string | null;
+  /**
+   * The system sound prompt was answered but this process still reads "not
+   * asked": macOS shows the access only after a restart.
+   */
+  screenAudioRestart: boolean;
 }
 
 export interface SpeechSetup {
@@ -137,6 +144,7 @@ const INITIAL: OnboardingSetup = {
     privacySettingsOpened: false,
     screenAudio: "idle",
     screenAudioMessage: null,
+    screenAudioRestart: false,
   },
   speech: { language: "ru", percent: 0, status: "idle" },
 };
@@ -267,11 +275,14 @@ function setAccess(kind: PermissionKind, access: ScreenAudioAccess) {
 /** Writes a read of both accesses; a pending ask stays pending. */
 function applyPermissions(read: Permissions) {
   const current = setupStore.get().permissions;
+  const systemAudioKnown =
+    read.systemAudio.state === "granted" || read.systemAudio.state === "denied";
   setPermissions({
     microphone: toMicrophoneAccess(read.microphone, current.microphone),
     microphoneMessage: read.microphone.message,
     screenAudio: toScreenAudioAccess(read.systemAudio, current.screenAudio),
     screenAudioMessage: read.systemAudio.message,
+    screenAudioRestart: current.screenAudioRestart && !systemAudioKnown,
   });
 }
 
@@ -299,7 +310,11 @@ function request(kind: PermissionKind) {
           setPermissions(
             kind === "microphone"
               ? { microphoneMessage: status.message }
-              : { screenAudioMessage: status.message }
+              : {
+                  screenAudioMessage: status.message,
+                  // Asked, but macOS keeps answering "not asked" here
+                  screenAudioRestart: status.state === "notDetermined",
+                }
           );
         })
       ),
@@ -331,6 +346,21 @@ export function requestScreenAudio() {
 
 export function answerScreenAudio(allowed: boolean) {
   answer("systemAudio", allowed);
+}
+
+/**
+ * "Перезапустить": macOS applies the system sound access only to a new
+ * process. The app restarts and onboarding opens on this step again.
+ */
+export function restartForPermissions() {
+  rememberOnboardingResume(routes.onboarding("permissions"));
+  runCancelable(
+    OnboardingBackend.use((backend) => backend.restartApp).pipe(
+      // The mock (browser) doesn't restart: read the accesses again instead.
+      Effect.tap(() => Effect.sync(loadPermissions)),
+      Effect.ignore
+    )
+  );
 }
 
 /*

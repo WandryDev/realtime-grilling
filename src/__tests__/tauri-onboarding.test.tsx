@@ -49,7 +49,10 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(() => Promise.resolve()),
 }));
 
-const navigation = vi.hoisted(() => ({ params: new URLSearchParams() }));
+const navigation = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  replace: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/onboarding",
@@ -57,7 +60,7 @@ vi.mock("next/navigation", () => ({
     back: vi.fn(),
     prefetch: vi.fn(),
     push: vi.fn(),
-    replace: vi.fn(),
+    replace: navigation.replace,
   }),
   useSearchParams: () => navigation.params,
 }));
@@ -69,9 +72,13 @@ const { PermissionsPage } = await import(
   "@/features/onboarding/pages/permissions-page"
 );
 const { AgentPage } = await import("@/features/onboarding/pages/agent-page");
+const { WelcomePage } = await import(
+  "@/features/onboarding/pages/welcome-page"
+);
 
 const LOGIN_URL = "https://claude.ai/oauth/authorize?code=true";
 const INSTALL_LOG_LINE = /Could not resolve host/u;
+const RESTART_HINT = /перезапустите Grill/u;
 
 function status(state: PermissionStatus["state"]): PermissionStatus {
   return { message: null, state };
@@ -141,12 +148,15 @@ beforeEach(() => {
     "agent_install_cancel",
     "agent_login_cancel",
     "permission_open_settings",
+    "app_restart",
   ]) {
     answer(command, null);
   }
 });
 
 afterEach(() => {
+  window.localStorage.clear();
+  navigation.replace.mockReset();
   resetOnboardingSetup();
   vi.restoreAllMocks();
 });
@@ -202,6 +212,40 @@ describe("PermissionsPage in Tauri", () => {
 
     act(() => settle(status("granted")));
     expect(await screen.findByText("Разрешено")).toBeTruthy();
+  });
+
+  it("offers a restart when macOS still says the system sound wasn't asked", async () => {
+    setPermissions("granted", "notDetermined");
+    answer("permission_request", status("notDetermined"));
+    render(<PermissionsPage />);
+    await waitFor(() => expect(calls("permissions_get")).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Разрешить" }));
+    const restart = await screen.findByRole("button", {
+      name: "Перезапустить",
+    });
+    expect(screen.getByText(RESTART_HINT)).toBeTruthy();
+
+    fireEvent.click(restart);
+    await waitFor(() => expect(calls("app_restart")).toHaveLength(1));
+    expect(window.localStorage.getItem("grill.onboarding-resume")).toBe(
+      "/onboarding/permissions"
+    );
+  });
+
+  it("drops the restart hint once the access is known", async () => {
+    setPermissions("granted", "notDetermined");
+    answer("permission_request", status("notDetermined"));
+    render(<PermissionsPage />);
+    await waitFor(() => expect(calls("permissions_get")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Разрешить" }));
+    await screen.findByRole("button", { name: "Перезапустить" });
+
+    setPermissions("granted", "granted");
+    focusWindow();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Перезапустить" })).toBeNull()
+    );
   });
 
   it("stops the microphone level when the user leaves the step", async () => {
@@ -308,6 +352,27 @@ describe("PermissionsPage in Tauri", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("WelcomePage after a restart", () => {
+  it("goes on from the step that asked for the restart", () => {
+    window.localStorage.setItem(
+      "grill.onboarding-resume",
+      "/onboarding/permissions"
+    );
+    render(<WelcomePage />);
+    expect(navigation.replace).toHaveBeenCalledWith("/onboarding/permissions");
+    expect(window.localStorage.getItem("grill.onboarding-resume")).toBeNull();
+  });
+
+  it("ignores a stored route outside onboarding", () => {
+    window.localStorage.setItem(
+      "grill.onboarding-resume",
+      "https://example.com"
+    );
+    render(<WelcomePage />);
+    expect(navigation.replace).not.toHaveBeenCalled();
   });
 });
 

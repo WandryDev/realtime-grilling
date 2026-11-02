@@ -144,6 +144,11 @@ export const commands = {
 	 *  device. Hiding or closing a window ends its subscriptions too.
 	 */
 	audioLevelStop: (source: AudioSource) => typedError<null, CommandError>(__TAURI_INVOKE("audio_level_stop", { source })),
+	/**
+	 *  "Перезапустить": macOS shows a system audio access granted in this
+	 *  process only after a restart.
+	 */
+	appRestart: () => typedError<null, CommandError>(__TAURI_INVOKE("app_restart")),
 };
 
 /** Events */

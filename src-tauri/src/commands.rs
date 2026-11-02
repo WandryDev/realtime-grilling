@@ -771,6 +771,14 @@ pub async fn agent_login_cancel(sessions: State<'_, AgentSessions>) -> CommandRe
     Ok(())
 }
 
+/// "Перезапустить": macOS shows a system audio access granted in this
+/// process only after a restart.
+#[tauri::command]
+#[specta::specta]
+pub fn app_restart(app: AppHandle) -> CommandResult<()> {
+    shell::QuitRequested::restart(&app)
+}
+
 /* Level meters */
 
 /// Subscribes the calling window to `AudioLevel` of a source, opening the

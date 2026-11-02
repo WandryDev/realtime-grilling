@@ -87,3 +87,30 @@ export function resetOnboarding() {
   }
   write(false);
 }
+
+/*
+ * Where onboarding goes on after a restart ("Перезапустить" on the
+ * permissions step). Kept in localStorage, which outlives the process in
+ * Tauri too, and read once.
+ */
+const RESUME_KEY = "grill.onboarding-resume";
+const ONBOARDING_PREFIX = "/onboarding";
+
+export function rememberOnboardingResume(route: string) {
+  try {
+    window.localStorage.setItem(RESUME_KEY, route);
+  } catch {
+    // Storage is unavailable: after the restart onboarding starts over.
+  }
+}
+
+/** The route to reopen, once; only onboarding routes are accepted. */
+export function takeOnboardingResume(): string | null {
+  try {
+    const route = window.localStorage.getItem(RESUME_KEY);
+    window.localStorage.removeItem(RESUME_KEY);
+    return route?.startsWith(ONBOARDING_PREFIX) ? route : null;
+  } catch {
+    return null;
+  }
+}

@@ -54,4 +54,5 @@ pub const APP_COMMANDS: &[&str] = &[
     "agent_login_cancel",
     "audio_level_start",
     "audio_level_stop",
+    "app_restart",
 ];

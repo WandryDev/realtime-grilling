@@ -189,6 +189,11 @@ export class OnboardingBackend extends Context.Service<
     readonly loginCancel: Effect.Effect<void, BackendError>;
     /** Opens the login page again in the default browser. */
     readonly openLoginPage: (url: string) => Effect.Effect<void, BackendError>;
+    /**
+     * Starts the app again. macOS shows a system audio access granted in
+     * the prompt only to a new process. In Tauri this never resolves.
+     */
+    readonly restartApp: Effect.Effect<void, BackendError>;
 
     /* Audio, clipboard, window --------------------------------------- */
 
@@ -273,6 +278,7 @@ export class OnboardingBackend extends Context.Service<
         call(() => commands.permissionRequest(kind)).pipe(
           Effect.map(fromBindingsStatus)
         ),
+      restartApp: Effect.asVoid(call(() => commands.appRestart())),
       windowFocus: Stream.callback<void, BackendError>((queue) =>
         Effect.acquireRelease(
           Effect.tryPromise({
@@ -346,6 +352,7 @@ export class OnboardingBackend extends Context.Service<
       ),
       requestPermission: (kind: PermissionKind) =>
         Effect.suspend(() => mockComputer.ask(kind)),
+      restartApp: Effect.void,
       windowFocus: Stream.never,
     })
   );

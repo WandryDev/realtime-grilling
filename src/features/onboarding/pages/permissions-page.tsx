@@ -13,6 +13,7 @@ import {
   recheckPermissions,
   requestMicrophone,
   requestScreenAudio,
+  restartForPermissions,
   usePermissionsSetup,
 } from "@/data/onboarding-setup";
 import { inTauri } from "@/effect/runtime";
@@ -79,6 +80,7 @@ const HANDLERS: PermissionsHandlers = {
   onRecheck: recheck,
   onRequestMicrophone: requestMicrophone,
   onRequestScreenAudio: requestScreenAudio,
+  onRestart: restartForPermissions,
 };
 
 /* /onboarding/permissions: step 02, microphone and call audio. */
@@ -119,6 +121,7 @@ export function PermissionsPage() {
       microphone={permissions.microphone}
       microphoneLevel={{ ...microphone.bars, problem: microphone.problem }}
       nextHref={routes.onboarding("speech")}
+      restartNeeded={permissions.screenAudioRestart}
       screenAudio={permissions.screenAudio}
       silentSystemAudio={system.silentWhilePlaying}
       soundActive={system.bars.active}
