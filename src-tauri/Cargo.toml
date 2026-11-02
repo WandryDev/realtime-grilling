@@ -51,7 +51,7 @@ objc2-av-foundation = { version = "0.3", default-features = false, features = ["
 objc2-core-audio = "0.3.2"
 objc2-core-audio-types = "0.3.2"
 objc2-core-foundation = { version = "0.3", features = ["CFString", "CFDictionary"] }
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSDictionary", "NSProcessInfo", "NSString", "NSValue"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSBundle", "NSDictionary", "NSProcessInfo", "NSString", "NSValue"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

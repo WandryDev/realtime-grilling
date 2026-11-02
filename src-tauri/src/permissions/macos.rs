@@ -12,13 +12,13 @@ use block2::RcBlock;
 use objc2::runtime::Bool;
 use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeAudio};
 use objc2_core_foundation::CFString;
-use objc2_foundation::NSProcessInfo;
+use objc2_foundation::{NSBundle, NSProcessInfo};
 use tauri::{AppHandle, Runtime};
 use tokio::sync::oneshot;
 
 use super::{
-    OLD_MACOS, PermissionKind, PermissionState, PermissionStatus, blocking, from_av_status,
-    from_tcc_preflight, tap_supported,
+    OLD_MACOS, PermissionKind, PermissionState, PermissionStatus, UNBUNDLED, blocking,
+    from_av_status, from_tcc_preflight, tap_supported,
 };
 use crate::{
     audio::{level::Feed, mac::tap::SystemTap},
@@ -32,20 +32,38 @@ const ANSWER_WAIT: Duration = Duration::from_secs(30);
 const ANSWER_POLL: Duration = Duration::from_millis(300);
 
 pub fn status(kind: PermissionKind) -> PermissionStatus {
-    match kind {
+    with_dev_note(match kind {
         PermissionKind::Microphone => PermissionStatus::new(microphone()),
         PermissionKind::SystemAudio => system_audio(),
-    }
+    })
 }
 
 pub async fn request<R: Runtime>(
     _app: &AppHandle<R>,
     kind: PermissionKind,
 ) -> CommandResult<PermissionStatus> {
-    Ok(match kind {
+    Ok(with_dev_note(match kind {
         PermissionKind::Microphone => PermissionStatus::new(request_microphone().await?),
         PermissionKind::SystemAudio => request_system_audio().await?,
-    })
+    }))
+}
+
+/// Whether this is the bare binary of `tauri dev`, not the `.app` bundle.
+fn unbundled() -> bool {
+    NSBundle::mainBundle().bundleIdentifier().is_none()
+}
+
+/// In `tauri dev` TCC answers for the terminal: say so instead of letting
+/// the prompt silently not appear.
+fn with_dev_note(status: PermissionStatus) -> PermissionStatus {
+    if status.message.is_none() && unbundled() {
+        PermissionStatus {
+            message: Some(UNBUNDLED.to_owned()),
+            ..status
+        }
+    } else {
+        status
+    }
 }
 
 pub fn microphone() -> PermissionState {

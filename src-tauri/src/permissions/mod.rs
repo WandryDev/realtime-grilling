@@ -229,6 +229,9 @@ pub const fn tap_supported(major: u32, minor: u32) -> bool {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const OLD_MACOS: &str = "Запись системного звука работает на macOS 14.2 или новее";
+/// `tauri dev` runs the bare binary: macOS asks on behalf of the terminal
+/// that started it, with that app's texts, or doesn't ask at all.
+pub const UNBUNDLED: &str = "Запущено без бандла (tauri dev): macOS спрашивает доступ от имени терминала. Проверяйте разрешения в собранном приложении";
 
 #[cfg(test)]
 mod tests {
