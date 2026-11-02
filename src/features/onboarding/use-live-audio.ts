@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-import { type AudioSource, listenToAudioLevel, listenToMicCheck } from "./api";
+import { listenToAudioLevel, listenToMicCheck } from "./api";
+import type { AudioSource } from "./backend";
 
 const BAR_COUNT = 10;
 const REST_HEIGHT = 4;

@@ -1,10 +1,18 @@
 "use client";
 
 import NextLink from "next/link";
-import { type ComponentProps, type ReactNode, useMemo } from "react";
+import {
+  type ComponentProps,
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useMemo,
+} from "react";
 
 import type { CallRecord } from "@/data/calls";
 import { useProject } from "@/data/projects";
+import { inTauri } from "@/effect/runtime";
+import { showFloatingWindow, windowOfRoute } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
 
 import {
@@ -23,8 +31,30 @@ import { NotFoundState } from "../components/not-found-state";
 /** Window size in the app: the whole viewport. */
 export const APP_WINDOW = "h-svh";
 
-export function AppLink(props: ComponentProps<"a"> & { href: string }) {
-  return <NextLink {...props} />;
+/**
+ * A link of the main window. In Tauri a route of a floating window
+ * ("Начать звонок" → the start widget) shows that window instead of
+ * loading its page here.
+ */
+export function AppLink({
+  href,
+  onClick,
+  ...props
+}: ComponentProps<"a"> & { href: string }) {
+  const show = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>) => {
+      onClick?.(event);
+      if (!event.defaultPrevented) {
+        event.preventDefault();
+        showFloatingWindow(href);
+      }
+    },
+    [href, onClick]
+  );
+  if (!inTauri || windowOfRoute(href) === "main") {
+    return <NextLink href={href} onClick={onClick} {...props} />;
+  }
+  return <a href={href} onClick={show} {...props} />;
 }
 
 /** Links that don't depend on a call: history, search, start a call. */

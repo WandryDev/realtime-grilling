@@ -39,6 +39,7 @@ export function WidgetSettings({
   onRecord,
   onResetShortcuts,
   recording,
+  shortcutErrors,
   shortcuts = SHORTCUTS,
   values = DEFAULT_SETTINGS,
 }: {
@@ -48,6 +49,8 @@ export function WidgetSettings({
   onRecord?: (id: string) => void;
   onResetShortcuts?: () => void;
   recording?: string;
+  /** Shortcuts the OS refused, by id: why. They keep their previous keys. */
+  shortcutErrors?: Record<string, string>;
   shortcuts?: Shortcut[];
   values?: SettingsValues;
 }) {
@@ -133,6 +136,7 @@ export function WidgetSettings({
           const keys = values.shortcuts[shortcut.id] ?? shortcut.keys;
           return (
             <ShortcutRow
+              error={shortcutErrors?.[shortcut.id]}
               id={shortcut.id}
               key={shortcut.id}
               keys={isRecording ? heldKeys : keys}

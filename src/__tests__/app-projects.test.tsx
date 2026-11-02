@@ -9,7 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { completeOnboarding, resetOnboarding } from "@/data/onboarding";
-import { getProjects } from "@/data/projects";
+import { createProject, getProjects } from "@/data/projects";
 import { HomePage } from "@/features/projects/pages/home-page";
 import { NewProjectPage } from "@/features/projects/pages/new-project-page";
 import { PersonPage } from "@/features/projects/pages/person-page";
@@ -19,6 +19,8 @@ const OLGA = /Ольга Демченко/u;
 const MARINA = /Марина Ковальчук/u;
 const NEXT = /Далее/u;
 const SAVE = /Сохранить/u;
+const UUID_V7 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 const push = vi.fn();
 const replace = vi.fn();
@@ -76,9 +78,7 @@ describe("HomePage", () => {
       screen.getByRole("heading", { name: "Начнём с первого проекта" })
     ).toBeTruthy();
     expect(
-      screen
-        .getByRole("button", { name: "Создать проект" })
-        .getAttribute("href")
+      screen.getByRole("link", { name: "Создать проект" }).getAttribute("href")
     ).toBe("/project/new");
   });
 });
@@ -95,10 +95,29 @@ describe("ProjectPage", () => {
       "/project/person?id=olga&project=telemedia"
     );
     expect(
-      screen
-        .getByRole("button", { name: "Показать ещё 3" })
-        .getAttribute("href")
+      screen.getByRole("link", { name: "Показать ещё 3" }).getAttribute("href")
     ).toBe("/history?project=telemedia");
+  });
+
+  it("opens two projects with the same name by their own ids", async () => {
+    const first = await createProject({ description: "Первый", name: "Ромб" });
+    const second = await createProject({ description: "Второй", name: "Ромб" });
+    expect(first).toMatch(UUID_V7);
+    expect(second).toMatch(UUID_V7);
+    expect(first).not.toBe(second);
+
+    for (const [id, description] of [
+      [first, "Первый"],
+      [second, "Второй"],
+    ]) {
+      setSearch(`id=${id}`);
+      const { unmount } = render(<ProjectPage />);
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Ромб" })
+      ).toBeTruthy();
+      expect(screen.getByText(description ?? "")).toBeTruthy();
+      unmount();
+    }
   });
 
   it("falls back to an empty state for an unknown id", () => {
@@ -187,11 +206,12 @@ describe("NewProjectPage", () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
     expect(screen.getByRole("heading", { name: "Бриф готов" })).toBeTruthy();
+    // The id comes from the backend (UUID v7), not from the name.
+    const created = getProjects().find((project) => project.name === "Ромашка");
+    expect(created?.id).toMatch(UUID_V7);
     expect(
-      screen
-        .getByRole("button", { name: "Открыть проект" })
-        .getAttribute("href")
-    ).toBe(`/project?id=${encodeURIComponent("ромашка")}`);
+      screen.getByRole("link", { name: "Открыть проект" }).getAttribute("href")
+    ).toBe(`/project?id=${created?.id}`);
   });
 
   it("asks before leaving a filled wizard", async () => {

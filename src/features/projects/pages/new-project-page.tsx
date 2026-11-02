@@ -29,9 +29,9 @@ import { useIntegrations } from "@/data/integrations";
 import { addPerson, initialsOf } from "@/data/people";
 import { createProject, useProjects } from "@/data/projects";
 import { MainSidebar } from "@/features/shell/app-sidebar";
+import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
-
 import {
   sendBriefBuildToBackground,
   startBriefBuild,
@@ -304,27 +304,33 @@ export function NewProjectPage() {
       setNameError("empty");
       return;
     }
-    // The project is saved right away; the agent builds the brief after.
-    const id = createProject({
+    // The project is saved right away with the id the backend gives it;
+    // the agent builds the brief after. A failed save (toast) goes back.
+    setStep("building");
+    createProject({
       description: description.trim(),
       name: projectName,
+    }).then((id) => {
+      if (!id) {
+        setStep("notes");
+        return;
+      }
+      for (const person of people) {
+        const tech = LEVEL_BY_CHOICE[person.level] ?? 3;
+        addPerson({
+          howToAsk: defaultHowToAsk(tech),
+          initials: person.initials,
+          name: person.name,
+          notes: notes.trim() || undefined,
+          project: 2,
+          projectId: id,
+          role: person.role,
+          tech,
+        });
+      }
+      startBriefBuild(id, projectName);
+      setProjectId(id);
     });
-    for (const person of people) {
-      const tech = LEVEL_BY_CHOICE[person.level] ?? 3;
-      addPerson({
-        howToAsk: defaultHowToAsk(tech),
-        initials: person.initials,
-        name: person.name,
-        notes: notes.trim() || undefined,
-        project: 2,
-        projectId: id,
-        role: person.role,
-        tech,
-      });
-    }
-    startBriefBuild(id, projectName);
-    setProjectId(id);
-    setStep("building");
   }, [description, name, notes, people]);
 
   const handleStop = useCallback(() => {
@@ -531,18 +537,12 @@ function WizardActions({
     return (
       <WizardFooter
         end={
-          <WizardButton
-            nativeButton={false}
-            render={<Link href={projectHref} />}
-          >
+          <WizardButton {...linkButtonProps(projectHref)}>
             Открыть проект
           </WizardButton>
         }
         start={
-          <WizardTextAction
-            nativeButton={false}
-            render={<Link href={routes.home()} />}
-          >
+          <WizardTextAction {...linkButtonProps(routes.home())}>
             На главную
           </WizardTextAction>
         }

@@ -2,16 +2,28 @@
 
 import { useSyncExternalStore } from "react";
 
+import { events } from "@/bindings";
+import { inTauri } from "@/effect/runtime";
+
+import { setOnboardingCompleted, useOnboardingCompleted } from "./settings";
+
 /*
- * Whether the first-run setup is done. Unlike the other slices this one is
- * persisted (localStorage now, the app config later): the setup shows once.
+ * Whether the first-run setup is done; the setup shows once.
  *
- * `useOnboardingDone()` returns `null` until the client has read the flag,
- * so prerendered HTML never guesses.
+ * - In Tauri the flag is the `onboardingCompleted` setting: Rust reads it
+ *   to open onboarding or the main window, and `onboarding_complete`
+ *   swaps the windows.
+ * - In the browser it lives in localStorage, as the mock of that setting.
+ *
+ * `useOnboardingDone()` returns `null` until the flag is read, so
+ * prerendered HTML never guesses.
  */
 
 const STORAGE_KEY = "grill.onboarding-done";
 const listeners = new Set<() => void>();
+
+/** The window Rust shows once onboarding is done. */
+const MAIN_WINDOW = "main";
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -45,14 +57,33 @@ function write(done: boolean) {
   }
 }
 
-export function useOnboardingDone(): boolean | null {
+function useStoredFlag(): boolean | null {
   return useSyncExternalStore(subscribe, read, () => null);
 }
 
-export function completeOnboarding() {
-  write(true);
+export const useOnboardingDone: () => boolean | null = inTauri
+  ? useOnboardingCompleted
+  : useStoredFlag;
+
+/**
+ * "Готово": the setup is done. In Tauri onboarding hides and the main
+ * window shows; `next` is the route it opens there.
+ */
+export async function completeOnboarding(next?: string) {
+  if (!inTauri) {
+    write(true);
+    return;
+  }
+  const done = await setOnboardingCompleted(true);
+  if (done !== undefined && next) {
+    await events.navigate.emitTo(MAIN_WINDOW, { route: next });
+  }
 }
 
 export function resetOnboarding() {
+  if (inTauri) {
+    setOnboardingCompleted(false);
+    return;
+  }
   write(false);
 }

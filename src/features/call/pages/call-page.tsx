@@ -16,15 +16,17 @@ import { useDemoState } from "@/lib/use-demo-state";
 
 import {
   collectSummary,
-  FEED_LENGTH,
-  feedCheckpoint,
-  RECONNECTED_GITHUB,
   reconnectSource,
   requestSystemAudio,
   retryAgent,
   subscribeToCallFeed,
   waitForTranscript,
 } from "../api";
+import {
+  FEED_LENGTH,
+  feedCheckpoint,
+  RECONNECTED_GITHUB,
+} from "../feed-script";
 import {
   createLiveCall,
   type LiveCallState,

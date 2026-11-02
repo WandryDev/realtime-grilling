@@ -11,10 +11,9 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Spinner } from "@/components/ui/spinner";
+import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
-
 import { ConnectedMark } from "./connected-card";
-import { linkButtonProps } from "./link-button";
 import type { ServiceConnection } from "./mock";
 
 /*

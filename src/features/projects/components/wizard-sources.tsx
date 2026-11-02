@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   type ChangeEvent,
   type ReactNode,
@@ -31,8 +30,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchIcon } from "@/features/shell/icons";
+import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
-
 import type { SourceKind } from "../mock";
 import { SourceTile } from "./source-mark";
 
@@ -114,11 +113,7 @@ export function SourceBlock({
         {connected ? (
           children
         ) : (
-          <Button
-            nativeButton={false}
-            render={<Link href={connectHref ?? "#"} />}
-            variant="secondary"
-          >
+          <Button {...linkButtonProps(connectHref ?? "#")} variant="secondary">
             Подключить {name}
           </Button>
         )}

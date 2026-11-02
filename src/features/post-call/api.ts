@@ -1,5 +1,7 @@
 "use client";
 
+import { Effect, Stream } from "effect";
+
 import { CURRENT_CALL_ID, resetCall } from "@/data/call-session";
 import {
   type CallRecord,
@@ -8,7 +10,9 @@ import {
   type TaskSyncService,
   updateTaskCard,
 } from "@/data/calls";
+import { appRuntime } from "@/effect/runtime";
 
+import { PostCallBackend } from "./backend";
 import {
   PROCESSING_STEPS,
   type ProcessingStepData,
@@ -19,20 +23,16 @@ import {
 } from "./mock";
 
 /*
- * What the local agent does after a call, faked with timers. This is the
- * one place the backend replaces: building the summary, sending a task card
- * to ClickUp or GitHub, searching transcripts. State goes to the calls
- * slice (`src/data/calls.ts`), so the screens only read hooks.
+ * React-facing side of what the local agent does after a call. Building the
+ * summary and sending a task card run the PostCallBackend Effect service
+ * (`./backend.ts`); searching the transcripts is local. State goes to the
+ * calls slice (`src/data/calls.ts`), so the screens only read hooks.
  *
- * The timers live in this module, not in a component: like the real agent,
- * the summary keeps building after the window is closed.
+ * The effects run outside React: like the real agent, the summary keeps
+ * building after the window is closed.
  */
 
 /* ------------------------------------------------------ Сборка итогов */
-
-const TICKS_PER_STEP = 3;
-const TICK_MS = 200;
-const PERCENT = 100;
 
 /** Meta of a finished step: how long it took. */
 const DONE_META = ["0:08", "0:41", "0:06", "0:12"];
@@ -55,29 +55,24 @@ export function collectSummary(
     return;
   }
   running.add(callId);
-
-  let tick = 0;
-  const total = PROCESSING_STEPS.length * TICKS_PER_STEP;
   setSummaryProgress(callId, { progress: 0, step: 0 }, options.patch);
 
-  const advance = () => {
-    tick += 1;
-    if (tick >= total) {
-      running.delete(callId);
-      setSummaryProgress(callId, undefined);
-      resetCall();
-      options.onDone?.();
-      return;
-    }
-    setSummaryProgress(callId, {
-      progress: Math.round(
-        ((tick % TICKS_PER_STEP) / TICKS_PER_STEP) * PERCENT
-      ),
-      step: Math.floor(tick / TICKS_PER_STEP),
-    });
-    setTimeout(advance, TICK_MS);
-  };
-  setTimeout(advance, TICK_MS);
+  appRuntime.runFork(
+    PostCallBackend.use((backend) =>
+      Stream.runForEach(backend.buildSummary(callId), (progress) =>
+        Effect.sync(() => setSummaryProgress(callId, progress))
+      )
+    ).pipe(
+      Effect.ensuring(Effect.sync(() => running.delete(callId))),
+      Effect.andThen(
+        Effect.sync(() => {
+          setSummaryProgress(callId, undefined);
+          resetCall();
+          options.onDone?.();
+        })
+      )
+    )
+  );
 }
 
 export function isCollectingSummary(callId: string) {
@@ -112,10 +107,6 @@ export function processingSteps(
 
 /* ------------------------------------------- Отправка карточки задачи */
 
-const SEND_MS = 1400;
-let nextClickUpTask = 612;
-let nextGitHubIssue = 48;
-
 /** Creates a ClickUp task or a GitHub issue from a task card. */
 export function sendTaskCard(
   callId: string,
@@ -127,22 +118,20 @@ export function sendTaskCard(
     sync: { ...review.sync, [service]: { status: "sending" } },
   }));
 
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      let ref = `#${nextGitHubIssue}`;
-      if (service === "clickup") {
-        ref = `CU-${nextClickUpTask}`;
-        nextClickUpTask += 1;
-      } else {
-        nextGitHubIssue += 1;
-      }
-      updateTaskCard(callId, cardId, (review) => ({
-        ...review,
-        sync: { ...review.sync, [service]: { ref, status: "sent" } },
-      }));
-      resolve(ref);
-    }, SEND_MS);
-  });
+  return appRuntime.runPromise(
+    PostCallBackend.use((backend) =>
+      backend.sendTaskCard(callId, cardId, service)
+    ).pipe(
+      Effect.tap((ref) =>
+        Effect.sync(() =>
+          updateTaskCard(callId, cardId, (review) => ({
+            ...review,
+            sync: { ...review.sync, [service]: { ref, status: "sent" } },
+          }))
+        )
+      )
+    )
+  );
 }
 
 /* ------------------------------------------------- Поиск по звонкам */

@@ -34,6 +34,8 @@ vi.mock("next/navigation", () => ({
 
 const SETTINGS_NAV = "Разделы настроек";
 const OVERLAY_SHORTCUT = /Показать или скрыть оверлей/u;
+const CALL_SHORTCUT = /Начать или завершить звонок/u;
+const SHORTCUT_TAKEN = /его занимает другое приложение/u;
 const INTEGRATIONS_ALERT = /Интеграции, требует внимания/u;
 const ASYNC_TIMEOUT = { timeout: 4000 };
 
@@ -112,6 +114,25 @@ describe("settings app", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(field.getAttribute("aria-pressed")).toBe("false");
     expect(getSettings().shortcuts["toggle-overlay"]).toEqual(["⌥", "⌘", "K"]);
+  });
+
+  it("shows the refusal of the OS on that shortcut and keeps its keys", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage section="shortcuts" />);
+
+    // The mock refuses ⌘ Space like a shortcut Spotlight holds.
+    const field = screen.getByRole("button", { name: CALL_SHORTCUT });
+    await user.click(field);
+    fireEvent.keyDown(window, { code: "Space", key: " ", metaKey: true });
+
+    expect(await screen.findByText(SHORTCUT_TAKEN)).toBeTruthy();
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(getSettings().shortcuts["toggle-call"]).toEqual(["⌥", "⌘", "G"]);
+    expect(
+      screen
+        .getByRole("button", { name: OVERLAY_SHORTCUT })
+        .getAttribute("aria-invalid")
+    ).toBeNull();
   });
 
   it("disconnects a service after the confirmation", async () => {

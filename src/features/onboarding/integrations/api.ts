@@ -1,19 +1,25 @@
 "use client";
 
+import { Effect } from "effect";
+
 import { toast } from "@/components/ui/toast";
 import {
   disconnectIntegration,
   type IntegrationState,
   setIntegration,
 } from "@/data/integrations";
+import { type AppServices, appRuntime, runCancelable } from "@/effect/runtime";
+import { OnboardingBackend } from "@/features/onboarding/backend";
 import type { IntegrationService } from "@/lib/routes";
 
+import { IntegrationsBackend } from "./backend";
 import { GITHUB_DEVICE } from "./mock";
 
 /*
- * Fake backend of the onboarding integration steps. Everything that will be
- * a Tauri command lives here: the GitHub device flow, the Outline key check,
- * the ClickUp OAuth round trip, opening the browser and the clipboard.
+ * React-facing side of the onboarding integration steps. The round trips
+ * live in the IntegrationsBackend Effect service (`./backend.ts`), the
+ * clipboard in OnboardingBackend; this module runs them through the app
+ * runtime.
  *
  * Connections write to the integrations store (`src/data/integrations.ts`),
  * so the list, the service steps and the summary all read the same state.
@@ -22,39 +28,34 @@ import { GITHUB_DEVICE } from "./mock";
  * "Ждём браузер" until it flips to "Подключено".
  */
 
-/** How long each fake round trip takes. */
-export const CONNECT_DELAY_MS = {
-  clickup: 2200,
-  github: 2500,
-  outline: 1200,
-} as const satisfies Record<IntegrationService, number>;
+const pending = new Map<IntegrationService, () => void>();
 
-/** What the list shows for each service once it is connected. */
-export const CONNECTED_ACCOUNTS = {
-  clickup: "Workspace «Pixel Agency», 38 списков",
-  github: "dima-kapish, доступ к 12 репозиториям",
-  outline: "docs.pixel.agency, 14 коллекций",
-} as const satisfies Record<IntegrationService, string>;
-
-const pending = new Map<IntegrationService, ReturnType<typeof setTimeout>>();
-
-function schedule(service: IntegrationService, run: () => void) {
+/** Runs the connection of `service`, replacing the one already pending. */
+function schedule(
+  service: IntegrationService,
+  connect: Effect.Effect<void, never, AppServices>
+) {
   cancelConnect(service);
-  pending.set(
-    service,
-    setTimeout(() => {
-      pending.delete(service);
-      run();
-    }, CONNECT_DELAY_MS[service])
+  const cancel = runCancelable(
+    connect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (pending.get(service) === cancel) {
+            pending.delete(service);
+          }
+        })
+      )
+    )
   );
+  pending.set(service, cancel);
 }
 
 /** Stops waiting for a service; its state is left to the caller. */
 export function cancelConnect(service: IntegrationService) {
-  const timer = pending.get(service);
-  if (timer !== undefined) {
-    clearTimeout(timer);
+  const cancel = pending.get(service);
+  if (cancel) {
     pending.delete(service);
+    cancel();
   }
 }
 
@@ -65,14 +66,15 @@ export function cancelAllConnects() {
   }
 }
 
-function connected(service: IntegrationService): IntegrationState {
-  return { account: CONNECTED_ACCOUNTS[service], status: "connected" };
+function connected(account: string): IntegrationState {
+  return { account, status: "connected" };
 }
 
 /* Browser and clipboard ------------------------------------------------ */
 
-/** Opens a page in the default browser. Simulated: says so in a toast. */
+/** Opens a page in the default browser and says so in a toast. */
 export function openInBrowser(url: string) {
+  runCancelable(IntegrationsBackend.use((backend) => backend.openUrl(url)));
   toast.add({
     description: url,
     title: "Открыли страницу в браузере",
@@ -80,14 +82,23 @@ export function openInBrowser(url: string) {
   });
 }
 
-export async function copyToClipboard(text: string) {
-  try {
-    await navigator.clipboard?.writeText(text);
-  } catch {
-    // Clipboard is unavailable (no focus, no permission): the toast still
-    // tells the user what to paste.
-  }
-  toast.add({ description: text, title: "Код скопирован", type: "success" });
+export function copyToClipboard(text: string): Promise<void> {
+  return appRuntime.runPromise(
+    OnboardingBackend.use((backend) => backend.copyText(text)).pipe(
+      // Clipboard is unavailable (no focus, no permission): the toast still
+      // tells the user what to paste.
+      Effect.ignore,
+      Effect.andThen(
+        Effect.sync(() => {
+          toast.add({
+            description: text,
+            title: "Код скопирован",
+            type: "success",
+          });
+        })
+      )
+    )
+  );
 }
 
 /* GitHub: device flow -------------------------------------------------- */
@@ -113,11 +124,16 @@ export function requestGitHubDeviceCode() {
 
 /*
  * The user opened github.com/login/device: Grill polls GitHub until they
- * press Authorize. Simulated: authorized after a short delay.
+ * press Authorize.
  */
 export function startGitHubAuthorization() {
   setIntegration("github", { status: "connecting" });
-  schedule("github", () => setIntegration("github", connected("github")));
+  schedule(
+    "github",
+    IntegrationsBackend.use((backend) => backend.authorizeGitHub).pipe(
+      Effect.map((account) => setIntegration("github", connected(account)))
+    )
+  );
 }
 
 /* Outline: address and API key ---------------------------------------- */
@@ -130,12 +146,9 @@ export type OutlineCheckResult =
 export const OUTLINE_REJECTED_SUMMARY = "Ключ не подошёл, проверьте его";
 const OUTLINE_UNREACHABLE_SUMMARY = "Адрес не отвечает, проверьте его";
 
-// Outline keys look like ol_api_ followed by a long token
-const OUTLINE_KEY_PATTERN = /^ol_api_[A-Za-z0-9]{20,}$/u;
-
 /*
- * One auth.info request with the key. Simulated: a host without a dot
- * doesn't answer, a key that isn't ol_api_ + 20 characters gets a 401.
+ * One auth.info request with the key: a 401 marks the key, an address that
+ * doesn't answer marks the address. Never resolves when cancelled.
  */
 export function connectOutline(
   url: string,
@@ -143,36 +156,30 @@ export function connectOutline(
 ): Promise<OutlineCheckResult> {
   setIntegration("outline", { status: "connecting" });
   return new Promise((resolve) => {
-    schedule("outline", () => {
-      const host = new URL(url).hostname;
-      if (!host.includes(".")) {
-        setIntegration("outline", {
-          error: OUTLINE_UNREACHABLE_SUMMARY,
-          status: "error",
-        });
-        resolve({
-          field: "url",
-          message: `${host} не отвечает. Проверьте адрес.`,
-          ok: false,
-        });
-        return;
-      }
-      if (!OUTLINE_KEY_PATTERN.test(apiKey)) {
-        setIntegration("outline", {
-          error: OUTLINE_REJECTED_SUMMARY,
-          status: "error",
-        });
-        resolve({
-          field: "key",
-          message:
-            "Ключ не подошёл. Скопируйте его целиком или создайте новый.",
-          ok: false,
-        });
-        return;
-      }
-      setIntegration("outline", connected("outline"));
-      resolve({ ok: true });
-    });
+    schedule(
+      "outline",
+      IntegrationsBackend.use((backend) =>
+        backend.connectOutline(url, apiKey)
+      ).pipe(
+        Effect.map((account): OutlineCheckResult => {
+          setIntegration("outline", connected(account));
+          return { ok: true };
+        }),
+        Effect.catchTag("OutlineCheckError", ({ field, message }) =>
+          Effect.sync((): OutlineCheckResult => {
+            setIntegration("outline", {
+              error:
+                field === "url"
+                  ? OUTLINE_UNREACHABLE_SUMMARY
+                  : OUTLINE_REJECTED_SUMMARY,
+              status: "error",
+            });
+            return { field, message, ok: false };
+          })
+        ),
+        Effect.map(resolve)
+      )
+    );
   });
 }
 
@@ -183,12 +190,17 @@ export const CLICKUP_DENIED_SUMMARY = "Доступ не выдан, попро�
 
 /*
  * Opens ClickUp OAuth in the browser and waits for the redirect to the
- * local address. Simulated: the workspace is connected after a delay.
+ * local address.
  */
 export function startClickUpAuthorization() {
   openInBrowser("app.clickup.com/api");
   setIntegration("clickup", { status: "connecting" });
-  schedule("clickup", () => setIntegration("clickup", connected("clickup")));
+  schedule(
+    "clickup",
+    IntegrationsBackend.use((backend) => backend.authorizeClickUp).pipe(
+      Effect.map((account) => setIntegration("clickup", connected(account)))
+    )
+  );
 }
 
 /** "Отменить" while waiting for the browser. */

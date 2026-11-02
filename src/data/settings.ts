@@ -1,18 +1,25 @@
 "use client";
 
+import { Effect } from "effect";
+
+import { toast } from "@/components/ui/toast";
+import { appRuntime, inTauri } from "@/effect/runtime";
 import { AGENT, RECORDINGS, SHORTCUTS } from "@/features/settings/mock";
 
+import {
+  ONBOARDING_COMPLETED,
+  SettingsData,
+  type SettingsMap,
+} from "./services/settings";
 import { createStore } from "./store";
+import { createSyncedStore } from "./synced-store";
 
 /*
- * App preferences from Settings. Persisted (localStorage now, the app config
- * file later): every control in Settings writes here at once, there is no
- * "Save" button. When the backend arrives `updateSetting` becomes a Tauri
- * command and `useSettings` keeps its signature.
- *
- * The server snapshot is always DEFAULT_SETTINGS (see createStore), so the
- * prerendered HTML and the hydration render match; the stored values show
- * right after hydration.
+ * App preferences from Settings. Every control writes here at once, there
+ * is no "Save" button. In Tauri they go to the local database through
+ * `settings_update`, which also applies autostart, hiding from screen
+ * sharing and the global shortcuts; in the browser the mock keeps them in
+ * localStorage.
  */
 
 export interface SettingsValues {
@@ -85,69 +92,169 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   transcriptRetention: "6m",
 };
 
-const STORAGE_KEY = "grill.settings";
+/* ------------------------------------------------------------- Adapter */
 
-function load(): SettingsValues {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return DEFAULT_SETTINGS;
+export interface StoredSettings {
+  /** Rust shows onboarding or the main window by it. */
+  onboardingCompleted: boolean;
+  values: SettingsValues;
+}
+
+const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof SettingsValues)[];
+
+/**
+ * The stored preferences over the frontend defaults. Values are taken as
+ * stored: every key is written by these screens, so its type matches.
+ */
+export function toStoredSettings(stored: SettingsMap): StoredSettings {
+  const values: Record<string, unknown> = { ...DEFAULT_SETTINGS };
+  for (const key of SETTING_KEYS) {
+    if (stored[key] !== undefined && stored[key] !== null) {
+      values[key] = stored[key];
     }
-    // Merge over the defaults: preferences added later get their default.
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as object) };
-  } catch {
-    return DEFAULT_SETTINGS;
   }
+  return {
+    onboardingCompleted: stored[ONBOARDING_COMPLETED] === true,
+    values: values as unknown as SettingsValues,
+  };
 }
 
-function save(values: SettingsValues) {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(values));
-  } catch {
-    // Storage is unavailable (private mode): values live until reload.
-  }
+/** One preference as the backend stores it. */
+function toSettingsPatch(patch: Partial<SettingsValues>): SettingsMap {
+  return JSON.parse(JSON.stringify(patch)) as SettingsMap;
 }
 
-const settingsStore = createStore<SettingsValues>(DEFAULT_SETTINGS);
+/* --------------------------------------------------------------- Store */
 
-if (typeof window !== "undefined") {
-  settingsStore.set(load());
-  settingsStore.subscribe(() => save(settingsStore.get()));
+const readSettings = SettingsData.use((settings) => settings.get).pipe(
+  Effect.map(toStoredSettings)
+);
+
+/*
+ * The server snapshot is always DEFAULT_SETTINGS, so the prerendered HTML
+ * and the hydration render match; the stored values show right after.
+ */
+const settingsStore = createSyncedStore({
+  empty: { onboardingCompleted: false, values: DEFAULT_SETTINGS },
+  live: inTauri,
+  onChange: (change) =>
+    change.entity === "settings"
+      ? { update: Effect.map(readSettings, (stored) => () => stored) }
+      : undefined,
+  read: readSettings,
+  runtime: appRuntime,
+  seed: () => ({ onboardingCompleted: false, values: DEFAULT_SETTINGS }),
+});
+
+/** Why the OS refused a shortcut, by action id; from the last save. */
+const shortcutErrorsStore = createStore<Record<string, string>>({});
+
+function selectValues(stored: StoredSettings) {
+  return stored.values;
 }
 
 export function useSettings() {
-  return settingsStore.use();
+  return selectValues(settingsStore.use());
+}
+
+export function useSettingsState() {
+  return settingsStore.useState();
 }
 
 export function getSettings() {
-  return settingsStore.get();
+  return settingsStore.get().values;
+}
+
+/** `null` until a live store has read the settings. */
+export function useOnboardingCompleted(): boolean | null {
+  const { data, status } = settingsStore.useState();
+  return status === "ready" ? data.onboardingCompleted : null;
+}
+
+/**
+ * Shortcuts the OS didn't register after the last change: action id → why.
+ * Those keep their previous keys.
+ */
+export function useShortcutErrors() {
+  return shortcutErrorsStore.use();
+}
+
+/**
+ * Writes preferences. Rust applies their effects at once (autostart,
+ * hiding from screen sharing, global shortcuts) and reports what it
+ * could not apply.
+ */
+export function updateSettings(patch: Partial<SettingsValues>) {
+  const shortcutsChanged = patch.shortcuts !== undefined;
+  return settingsStore
+    .mutate(
+      SettingsData.use((settings) => settings.update(toSettingsPatch(patch))),
+      { error: "Не удалось сохранить настройку" }
+    )
+    .then((result) => {
+      if (!result) {
+        return;
+      }
+      if (shortcutsChanged) {
+        shortcutErrorsStore.set(
+          Object.fromEntries(
+            result.shortcutErrors.map((error) => [error.action, error.message])
+          )
+        );
+      }
+      if (result.launchAtLoginError) {
+        toast.add({
+          description: result.launchAtLoginError,
+          title: "Не удалось изменить автозапуск",
+          type: "error",
+        });
+      }
+    });
 }
 
 export const updateSetting: SettingChange = (key, value) => {
-  settingsStore.set((state) => ({ ...state, [key]: value }));
+  updateSettings({ [key]: value });
 };
 
-export function updateSettings(patch: Partial<SettingsValues>) {
-  settingsStore.set((state) => ({ ...state, ...patch }));
-}
-
+/**
+ * Changes one shortcut. Only that action is sent: the backend merges it
+ * over the stored shortcuts, so a change made meanwhile (another window,
+ * a quick second edit) is not undone by a stale copy.
+ */
 export function setShortcut(id: string, keys: string[]) {
-  settingsStore.set((state) => ({
-    ...state,
-    shortcuts: { ...state.shortcuts, [id]: keys },
-  }));
+  updateSettings({ shortcuts: { [id]: keys } });
 }
 
 /** Back to the default shortcuts; returns the previous ones for "Вернуть". */
 export function resetShortcuts() {
-  const previous = settingsStore.get().shortcuts;
-  settingsStore.set((state) => ({ ...state, shortcuts: DEFAULT_SHORTCUTS }));
+  const previous = getSettings().shortcuts;
+  updateSettings({ shortcuts: DEFAULT_SHORTCUTS });
   return previous;
+}
+
+/**
+ * Marks the first-run setup done or not. Done goes through
+ * `onboarding_complete`, which in Tauri also hides onboarding and shows
+ * the main window.
+ */
+export function setOnboardingCompleted(completed: boolean) {
+  return settingsStore.mutate(
+    SettingsData.use((settings) =>
+      Effect.as(
+        completed
+          ? settings.completeOnboarding
+          : settings.update({ [ONBOARDING_COMPLETED]: completed }),
+        completed
+      )
+    ),
+    { error: "Не удалось сохранить настройку" }
+  );
 }
 
 /** Every preference back to its default (tests, "delete everything"). */
 export function resetSettings() {
-  settingsStore.set(DEFAULT_SETTINGS);
+  shortcutErrorsStore.set({});
+  updateSettings(DEFAULT_SETTINGS);
 }
 
 /*
@@ -164,4 +271,9 @@ export function useMicrophoneMissing(): boolean {
 
 export function setMicrophoneMissing(missing: boolean) {
   microphoneMissingStore.set(missing);
+}
+
+/** Reads the settings again (the storage error screen's "Повторить"). */
+export function refreshSettings() {
+  return settingsStore.refresh();
 }

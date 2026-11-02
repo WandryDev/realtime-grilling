@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,9 +10,9 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { PlusIcon } from "@/features/shell/icons";
+import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
-
 import { FolderPlusIcon } from "../icons";
 import { FIRST_RUN_STEPS, type SourceKind } from "../mock";
 import { SourceTile } from "./source-mark";
@@ -62,8 +61,7 @@ export function FirstRun({
       <EmptyContent className="gap-3">
         <Button
           className="pr-5 pl-4"
-          nativeButton={false}
-          render={<Link href={routes.newProject()} />}
+          {...linkButtonProps(routes.newProject())}
           size="lg"
         >
           <PlusIcon className="size-3.5" />

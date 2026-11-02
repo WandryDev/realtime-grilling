@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -8,8 +7,8 @@ import {
   PageContent,
   TitlebarSearch,
 } from "@/features/shell/main-window";
+import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
-
 import {
   AddPersonDialog,
   DeleteProjectDialog,
@@ -120,10 +119,9 @@ export function ProjectScreen({
             action={
               <Button
                 className="h-9 px-4"
-                nativeButton={false}
-                render={
-                  <Link href={routes.callProposals(shownProposals.callId)} />
-                }
+                {...linkButtonProps(
+                  routes.callProposals(shownProposals.callId)
+                )}
               >
                 Разобрать
               </Button>

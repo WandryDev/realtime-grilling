@@ -133,11 +133,35 @@ Biome will catch most mechanical issues automatically. Focus your attention on:
 
 Most formatting and common issues are automatically fixed by Biome. Run `bunx ultracite fix` before committing to ensure compliance.
 
+# shadcn components
+
+`src/components/ui/*` are owned, restyled components (the Grill design system), not upstream copies. `shadcn add` must never replace them.
+
+- Preview first: `bunx --bun shadcn@latest add <component> --dry-run` or `--diff`. The dry run marks any existing file that differs from the registry as `~ overwrite`: that is what *would* change, not what `add` does without `-o`.
+- Without `-o`, `add` keeps an existing file: it asks "overwrite?" (default No, also with `--yes`). Answer No and port the wanted changes from `--diff` by hand.
+- Never run `add` with `-o` / `--overwrite` or `--all`.
+- If a file got overwritten anyway, restore it from git: `git restore src/components/ui/<file>`.
+
 # Effect
 
 Backend calls go through [Effect](https://effect.website/) 4 services. Before writing Effect code read `node_modules/effect/AGENTS.md` and the examples it links (the API differs from Effect 3, don't rely on memory).
 
-- Each area's backend contract is a `Context.Service` in `src/features/<area>/backend.ts` with a `layerMock` (fake timers today) and, later, a Tauri layer.
-- Layers are composed in `src/effect/runtime.ts` (`AppLayer`, `appRuntime`). React code runs effects with `runCancelable` / `appRuntime.runPromise`; screens don't import Effect.
-- Errors are `Schema.TaggedError`, handled with `Effect.catchTag` at the edge.
-- Test services with `@effect/vitest` (`it.effect`, `TestClock`).
+**Contract types.** Commands, events and records come only from `src/bindings.ts`, which tauri-specta generates from `src-tauri` (`cargo test` or a debug build). Don't edit it and don't copy its types by hand; CI fails when it is stale.
+
+**Bridge.** `src/effect/tauri.ts` is the only way to Rust:
+- `call(() => commands.projectsList())` → `Effect<T, BackendError>`, where `BackendError.kind` is `NotFound` / `Invalid` / `Storage` / `Transport` (the IPC itself failed);
+- `listen(events.dataChanged)` → `Stream`; the listener is removed when the stream stops, interruption included. For one window, pass `events.x(getCurrentWindow())`.
+
+**Services.** Each is a `Context.Service` with two layers, `layerTauri` (through the bridge) and `layerMock`:
+- areas: `src/features/<area>/backend.ts`. Most have only `layerMock` so far (fake timers); the Tauri set reuses it until Rust has the commands;
+- data: `src/data/services/*` (`ProjectsData`, `PeopleData`, `CallsData`, `SettingsData`, `DataEvents`). Their `layerMock` is an in-memory repository (`MockDatabase`) with the Rust contract: UUID v7 ids, `NotFound` / `Invalid`, cascade deletes, one `DataChanged` per write. `src/__tests__/data-contract.test.ts` holds the contract; change it together with the Rust storage tests.
+
+**Composition.** `src/effect/runtime.ts` builds `MockLayer` and `TauriLayer` and picks one by `isTauri()` when it loads (`inTauri`; `false` in the browser, the tests and the prerender). React code runs effects with `runCancelable` / `appRuntime.runPromise`; screens don't import Effect.
+
+**Stores.** `src/data/*` keep their hooks and actions; the entity stores sit on `createSyncedStore` (`src/data/synced-store.ts`) over the data services:
+- mock: seeded synchronously from `src/data/services/mock-seed.ts`. A write runs synchronously and is in the store before the action returns, then every mock store re-reads (the cascade). Screen tests never wait;
+- Tauri: the store starts in `loading` and reads on its first subscriber. It re-reads on `DataChanged` from any window: its own entity, and children by `projectId` when the parent changes. A write waits for the command and re-reads; a failed one shows a toast and leaves the store as the storage has it. Actions that create resolve to the backend id (`createProject` → UUID), never a slug;
+- every store maps backend shapes (JSON `profile` / `summary`, timestamps in ms) to the screens' types in its own adapter section, and only there;
+- the main window (`src/features/shell/app-frame.tsx`) waits for the first read, shows a full-window error on a failed one (`Storage`), and opens the routes of `events.navigate`.
+
+**Errors and tests.** Errors are `Schema.TaggedError`, handled with `Effect.catchTag` at the edge. Test services with `@effect/vitest` (`it.effect`, `TestClock`). To run screens in Tauri mode, mock the IPC with `src/__tests__/helpers/fake-tauri.ts` (see `tauri-stores.test.tsx`).

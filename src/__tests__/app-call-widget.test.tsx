@@ -36,10 +36,9 @@ function open(Page: ComponentType, demo?: string) {
   return render(<Page />);
 }
 
-/** Link buttons are <a> with role="button" (Base UI, nativeButton={false}). */
+/** Link buttons are plain <a> links (`linkButtonProps` clears role="button"). */
 function linkHref(name: string) {
-  const element = screen.getByRole("button", { name });
-  return element.closest("a")?.getAttribute("href");
+  return screen.getByRole("link", { name }).getAttribute("href");
 }
 
 function advance(ms: number) {

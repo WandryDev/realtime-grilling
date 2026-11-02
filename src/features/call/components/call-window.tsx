@@ -11,8 +11,11 @@ import {
   WindowTitlebar,
   WindowTitlebarEnd,
   WindowTitlebarStart,
-  WindowTrafficLights,
 } from "@/components/ui/window-titlebar";
+import {
+  WindowChromeEnd,
+  WindowChromeStart,
+} from "@/features/shell/window-chrome";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";
@@ -77,7 +80,7 @@ export function CallTitlebar({
   return (
     <WindowTitlebar className={className}>
       <WindowTitlebarStart>
-        <WindowTrafficLights />
+        <WindowChromeStart />
         <WindowTitle>
           {call.project}
           <WindowSubtitle>{call.participants}</WindowSubtitle>
@@ -106,6 +109,7 @@ export function CallTitlebar({
             Завершить
           </Button>
         )}
+        <WindowChromeEnd />
       </WindowTitlebarEnd>
     </WindowTitlebar>
   );

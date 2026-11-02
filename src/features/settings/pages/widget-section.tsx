@@ -9,6 +9,7 @@ import {
   setShortcut,
   updateSetting,
   useSettings,
+  useShortcutErrors,
 } from "@/data/settings";
 
 import { SHORTCUTS } from "../mock";
@@ -121,6 +122,7 @@ function useShortcutRecorder(initial?: string) {
  */
 export function WidgetSection({ recordingDemo }: { recordingDemo?: string }) {
   const values = useSettings();
+  const shortcutErrors = useShortcutErrors();
   const { held, recording, toggle } = useShortcutRecorder(recordingDemo);
 
   const resetAll = useCallback(() => {
@@ -137,6 +139,7 @@ export function WidgetSection({ recordingDemo }: { recordingDemo?: string }) {
       onRecord={toggle}
       onResetShortcuts={resetAll}
       recording={recording}
+      shortcutErrors={shortcutErrors}
       values={values}
     />
   );

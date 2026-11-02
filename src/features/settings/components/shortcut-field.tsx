@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useId } from "react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
@@ -12,12 +12,15 @@ import { cn } from "@/lib/utils";
  */
 export function ShortcutField({
   className,
+  errorId,
   keys,
   label,
   onClick,
   recording = false,
 }: {
   className?: string;
+  /** Id of the error under the field: the OS refused these keys. */
+  errorId?: string;
   keys: string[];
   /** Action name, for the accessible label. */
   label: string;
@@ -27,6 +30,8 @@ export function ShortcutField({
   const empty = keys.length === 0 && !recording;
   return (
     <button
+      aria-describedby={errorId}
+      aria-invalid={errorId ? true : undefined}
       aria-label={`${label}: ${empty ? "не задано" : keys.join(" ")}. Изменить сочетание`}
       aria-pressed={recording}
       className={cn(
@@ -34,6 +39,7 @@ export function ShortcutField({
         recording
           ? "field-focus border-foreground"
           : "border-border-strong hover:border-subtle",
+        errorId && !recording && "border-destructive",
         className
       )}
       onClick={onClick}
@@ -65,9 +71,13 @@ export function ShortcutField({
   );
 }
 
-/** Action name left, its ShortcutField right; the hint shows while recording. */
+/**
+ * Action name left, its ShortcutField right; the hint shows while recording,
+ * the error when the OS refused the keys (the previous ones still work).
+ */
 export function ShortcutRow({
   className,
+  error,
   id,
   keys,
   label,
@@ -75,6 +85,8 @@ export function ShortcutRow({
   recording = false,
 }: {
   className?: string;
+  /** Why the OS didn't register the shortcut. */
+  error?: string;
   /** Action id, passed to `onRecord`. */
   id?: string;
   keys: string[];
@@ -83,6 +95,8 @@ export function ShortcutRow({
   onRecord?: (id: string) => void;
   recording?: boolean;
 }) {
+  const errorId = useId();
+  const showError = Boolean(error) && !recording;
   const handleClick = useCallback(() => {
     if (id) {
       onRecord?.(id);
@@ -101,6 +115,7 @@ export function ShortcutRow({
       </p>
       <div className="flex w-50 shrink-0 flex-col items-end gap-1.5">
         <ShortcutField
+          errorId={showError ? errorId : undefined}
           keys={keys}
           label={label}
           onClick={onRecord ? handleClick : undefined}
@@ -109,6 +124,11 @@ export function ShortcutRow({
         {recording ? (
           <p aria-live="polite" className="text-muted-foreground text-xs">
             Нажмите сочетание, Esc отменит
+          </p>
+        ) : null}
+        {showError ? (
+          <p className="text-destructive text-right text-xs" id={errorId}>
+            {error}
           </p>
         ) : null}
       </div>

@@ -18,13 +18,13 @@ import {
 } from "@/features/onboarding/components/onboarding-window";
 import { CapabilityList } from "@/features/onboarding/integrations/capability-list";
 import { ConnectedCard } from "@/features/onboarding/integrations/connected-card";
-import { linkButtonProps } from "@/features/onboarding/integrations/link-button";
 import {
   CLICKUP_CAPABILITIES,
   CLICKUP_WORKSPACE,
 } from "@/features/onboarding/integrations/mock";
 import { BrowserButton } from "@/features/onboarding/integrations/step-actions";
 import { ServiceStepHeading } from "@/features/onboarding/integrations/step-heading";
+import { linkButtonProps } from "@/lib/link-button";
 
 /*
  * Paper "05c ClickUp", OAuth in the default browser.

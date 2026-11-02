@@ -1,11 +1,17 @@
 "use client";
 
+import { Effect, Stream } from "effect";
+
 import { finishCall, startCall } from "@/data/call-session";
 import type { ClientPerson } from "@/data/people";
+import { runCancelable } from "@/effect/runtime";
 
 import {
-  type BriefStepItem,
-  INCOMING_QUESTIONS,
+  type AgentEvent,
+  type BriefProgress,
+  CallWidgetBackend,
+} from "./backend";
+import {
   LAST_CALL_PARTICIPANTS,
   NAME_FORMS,
   type Participant,
@@ -14,13 +20,12 @@ import {
 } from "./mock";
 
 /*
- * Everything the floating widgets would ask the backend for, faked with
- * timers. Each function is what a Tauri command or event replaces later:
- * - getLastCallParticipantIds: who was on the project's last call
+ * React-facing side of the floating widgets:
+ * - getLastCallParticipantIds / toPickerProject: who was on the project's
+ *   last call (mock data until the calls store reads the backend)
  * - startRecording / endCall: start and stop the recorder
- * - buildBrief: the agent refreshing the brief (progress events)
- * - subscribeToAgent: the agent's live feed (status, new questions)
- * Every async op returns a cancel function; call it on unmount.
+ * - buildBrief / subscribeToAgent: run the CallWidgetBackend Effect service
+ *   (`./backend.ts`) and return a cancel function; call it on unmount.
  */
 
 /* ---------------------------------------------------------------- People */
@@ -77,36 +82,6 @@ export function endCall() {
 
 /* ----------------------------------------------------------------- Brief */
 
-export interface BriefProgress {
-  done: boolean;
-  /** Percent of the brief prepared. */
-  progress: number;
-  steps: BriefStepItem[];
-}
-
-/** "Ольги и Игоря", "Натальи", "Сергея, Анны и Елены". */
-export function joinNames(names: string[]) {
-  if (names.length <= 1) {
-    return names.join("");
-  }
-  return `${names.slice(0, -1).join(", ")} и ${names.at(-1)}`;
-}
-
-function briefPlan(participants: Participant[]) {
-  const names = participants.map((person) => person.genitive ?? person.name);
-  return [
-    { id: "agent", label: "Claude Code на связи" },
-    {
-      id: "profiles",
-      label: names.length > 0 ? `Профили ${joinNames(names)}` : "Профили",
-    },
-    { id: "outline", label: "Освежаю бриф по Outline", meta: "12 док." },
-    { id: "clickup", label: "Ищу вопросы в ClickUp" },
-  ];
-}
-
-const BRIEF_STEP_MS = [700, 900, 1600, 1200];
-
 /**
  * Refreshes the brief step by step and reports after every step. Calls
  * `onProgress` right away with the first step running.
@@ -115,42 +90,16 @@ export function buildBrief(
   participants: Participant[],
   onProgress: (progress: BriefProgress) => void
 ): () => void {
-  const plan = briefPlan(participants);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const report = (active: number) => {
-    const done = active >= plan.length;
-    onProgress({
-      done,
-      progress: done ? 100 : Math.round(((active + 0.5) / plan.length) * 100),
-      steps: plan.map((step, index) => {
-        let status: BriefStepItem["status"] = "pending";
-        if (index < active) {
-          status = "done";
-        } else if (index === active) {
-          status = "active";
-        }
-        return { ...step, status };
-      }),
-    });
-    if (!done) {
-      timer = setTimeout(() => report(active + 1), BRIEF_STEP_MS[active]);
-    }
-  };
-
-  report(0);
-  return () => clearTimeout(timer);
+  return runCancelable(
+    CallWidgetBackend.use((backend) =>
+      Stream.runForEach(backend.buildBrief(participants), (progress) =>
+        Effect.sync(() => onProgress(progress))
+      )
+    )
+  );
 }
 
 /* ------------------------------------------------------------ Agent feed */
-
-export type AgentEvent =
-  | { type: "thinking" }
-  | { question: string; type: "question" };
-
-const FIRST_QUESTION_MS = 4000;
-const NEXT_QUESTION_MS = 20_000;
-const THINKING_MS = 1500;
 
 /**
  * The agent's live feed: it thinks for a moment, then a new question
@@ -160,21 +109,11 @@ const THINKING_MS = 1500;
 export function subscribeToAgent(
   onEvent: (event: AgentEvent) => void
 ): () => void {
-  let index = 0;
-  let timer: ReturnType<typeof setTimeout>;
-
-  const think = (delay: number) => {
-    timer = setTimeout(() => {
-      onEvent({ type: "thinking" });
-      timer = setTimeout(() => {
-        const question = INCOMING_QUESTIONS[index % INCOMING_QUESTIONS.length];
-        index += 1;
-        onEvent({ question, type: "question" });
-        think(NEXT_QUESTION_MS);
-      }, THINKING_MS);
-    }, delay - THINKING_MS);
-  };
-
-  think(FIRST_QUESTION_MS);
-  return () => clearTimeout(timer);
+  return runCancelable(
+    CallWidgetBackend.use((backend) =>
+      Stream.runForEach(backend.agentFeed, (event) =>
+        Effect.sync(() => onEvent(event))
+      )
+    )
+  );
 }

@@ -21,6 +21,7 @@ import { NavMenu } from "@/components/ui/nav-item";
 import { formatOpenQuestions } from "@/components/ui/row-status";
 import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MainWindow } from "@/features/shell/main-window";
+import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
 
 import { CrossIcon, SearchIcon } from "../icons";
@@ -62,8 +63,7 @@ export function StartCallButton({
   return (
     <Button
       className={cn(size === "lg" && "px-5", className)}
-      nativeButton={startCall === undefined}
-      render={startCall === undefined ? undefined : <Link href={startCall} />}
+      {...linkButtonProps(startCall, Link)}
       size={size}
       variant={variant}
       {...props}

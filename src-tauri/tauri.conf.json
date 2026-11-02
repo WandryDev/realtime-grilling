@@ -12,11 +12,63 @@
   "app": {
     "windows": [
       {
-        "title": "realtime-grilling",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "url": "/",
+        "title": "Grill",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "onboarding",
+        "url": "onboarding",
+        "title": "Grill",
+        "width": 960,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "widget",
+        "url": "widget",
+        "title": "Grill",
+        "width": 360,
+        "height": 600,
+        "center": true,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "visible": false
+      },
+      {
+        "label": "overlay",
+        "url": "overlay",
+        "title": "Grill",
+        "width": 420,
+        "height": 720,
+        "contentProtected": true,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "visible": false
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

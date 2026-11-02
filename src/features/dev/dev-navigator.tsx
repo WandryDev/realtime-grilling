@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
 import { resetOnboarding } from "@/data/onboarding";
@@ -18,7 +18,9 @@ import { cn } from "@/lib/utils";
 /*
  * Development-only jump list: every screen and every state that the mock
  * data can't reach by clicking (errors, empty states, flow steps). Rendered
- * from the root layout outside production.
+ * from the root layout outside production, bottom left: the main actions of
+ * every window live bottom right. Not in the floating windows (widget,
+ * overlay), which are only as big as their card.
  */
 
 const GROUPS = [
@@ -36,7 +38,39 @@ const CATALOG = [
   { href: "/dev/screens", label: "Все экраны на одной странице" },
 ];
 
+const FLOATING_WINDOW = '[data-window="floating"]';
+
+/** Re-checks on every DOM change: client navigation swaps the page. */
+function subscribeToDom(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.body, {
+    attributeFilter: ["data-window"],
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+  return () => observer.disconnect();
+}
+
+function hasFloatingWindow() {
+  return document.querySelector(FLOATING_WINDOW) !== null;
+}
+
+function noFloatingWindowOnServer() {
+  return false;
+}
+
+/** Whether the page is a floating window (`data-window="floating"`). */
+function useFloatingWindow() {
+  return useSyncExternalStore(
+    subscribeToDom,
+    hasFloatingWindow,
+    noFloatingWindowOnServer
+  );
+}
+
 export function DevNavigator({ className }: { className?: string }) {
+  const floating = useFloatingWindow();
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const toggle = useCallback(() => setOpen((value) => !value), []);
@@ -45,12 +79,17 @@ export function DevNavigator({ className }: { className?: string }) {
     setOpen(false);
   }, []);
 
+  if (floating) {
+    return null;
+  }
+
   return (
     <div
       className={cn(
-        "fixed right-4 bottom-4 z-[100] flex flex-col items-end gap-2",
+        "fixed bottom-4 left-4 z-[100] flex flex-col items-start gap-2",
         className
       )}
+      data-slot="dev-navigator"
     >
       {open ? (
         <nav

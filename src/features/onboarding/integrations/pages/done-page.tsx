@@ -45,7 +45,8 @@ export function DonePage() {
   const router = useRouter();
 
   const finish = useCallback(() => {
-    completeOnboarding();
+    // In Tauri the main window opens on the new project; here the route.
+    completeOnboarding(routes.newProject());
     router.push(routes.newProject());
   }, [router]);
 

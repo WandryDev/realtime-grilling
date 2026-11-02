@@ -2,12 +2,14 @@
 
 import { setIntegration, useIntegrations } from "@/data/integrations";
 import {
-  CONNECTED_ACCOUNTS,
   cancelAllConnects,
   OUTLINE_REJECTED_SUMMARY,
 } from "@/features/onboarding/integrations/api";
 import { toServiceListItems } from "@/features/onboarding/integrations/list-items";
-import type { ServiceId } from "@/features/onboarding/integrations/mock";
+import {
+  CONNECTED_ACCOUNTS,
+  type ServiceId,
+} from "@/features/onboarding/integrations/mock";
 import { useOnboardingIntegrationsSession } from "@/features/onboarding/integrations/session";
 import { IntegrationsScreen } from "@/features/onboarding/screens/integrations-screen";
 import { routes } from "@/lib/routes";

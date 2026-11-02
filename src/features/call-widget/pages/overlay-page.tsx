@@ -1,15 +1,16 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useCallSession } from "@/data/call-session";
 import { useProject } from "@/data/projects";
 import { useSettings } from "@/data/settings";
+import { useOpenRoute } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
-import { type AgentEvent, endCall, subscribeToAgent } from "../api";
+import { endCall, subscribeToAgent } from "../api";
+import type { AgentEvent } from "../backend";
 import { DesktopStage } from "../components/desktop-stage";
 import {
   CALL_PROJECT,
@@ -34,6 +35,11 @@ import {
  * card under the pill for 8 seconds. "Выйти из встречи" in the stand-in
  * Zoom frees the microphone: the offer to end the call replaces the overlay
  * and counts down to the auto end from Settings.
+ *
+ * In Tauri the overlay is its own window, the only one hidden from screen
+ * sharing. It shows the call the start widget started (the session is
+ * shared between windows) and starts over with each new call. The call
+ * window and the summary open in the main window, and the overlay hides.
  */
 
 type View = "expanded" | "collapsed";
@@ -79,7 +85,7 @@ function autoEndSeconds(setting: string) {
 }
 
 function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
-  const router = useRouter();
+  const openRoute = useOpenRoute();
   const session = useCallSession();
   const project = useProject(session.projectId);
   const { autoEnd } = useSettings();
@@ -143,8 +149,8 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     }
     ended.current = true;
     endCall();
-    router.push(routes.callSummary(session.callId));
-  }, [router, session.callId]);
+    openRoute(routes.callSummary(session.callId));
+  }, [openRoute, session.callId]);
 
   const total = autoEndSeconds(autoEnd);
   const passed = releasedAt !== null && now !== null ? now - releasedAt : 0;
@@ -226,6 +232,8 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
 
 export function OverlayPage() {
   const demo = useDemoState(DEMO_STATES);
-  // A new ?demo= restarts the overlay in that state
-  return <OverlayFlow demo={demo} key={demo} />;
+  const { startedAt } = useCallSession();
+  // A new ?demo= or a new call restarts the overlay: in Tauri the window
+  // stays loaded from one call to the next.
+  return <OverlayFlow demo={demo} key={`${demo}:${startedAt ?? ""}`} />;
 }

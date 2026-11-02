@@ -1,15 +1,27 @@
 "use client";
 
+import { Effect, Stream } from "effect";
+
+import type { CallSession as SharedCallSession } from "@/bindings";
+import { appRuntime, runCancelable } from "@/effect/runtime";
+import { currentWindowLabel } from "@/lib/window-label";
+
+import { CallSessionEvents } from "./services/call-session";
+import { DEMO_CALL_ID } from "./services/mock-seed";
 import { createStore } from "./store";
 
 /*
  * The call in progress. The start widget begins it, the call window and the
  * compact overlay show it, "Завершить" ends it and the app moves on to the
  * summary of that call.
+ *
+ * In Tauri those are different windows, so every change is sent to all of
+ * them (`CallSessionChanged`) and each window applies the others' changes
+ * (`followCallSession`, started once per window by the app frame).
  */
 
 /** Id of the call the demo records; the post-call screens have its data. */
-export const CURRENT_CALL_ID = "telemedia-19-oct";
+export const CURRENT_CALL_ID = DEMO_CALL_ID;
 
 export type CallStatus = "idle" | "live" | "finishing";
 
@@ -33,6 +45,56 @@ const IDLE: CallSession = {
 
 const callSessionStore = createStore<CallSession>(IDLE);
 
+function fromShared(session: SharedCallSession): CallSession {
+  const { callId, participants, projectId, startedAt, status } = session;
+  return {
+    callId,
+    participants,
+    projectId,
+    status,
+    ...(startedAt === undefined || startedAt === null ? {} : { startedAt }),
+  };
+}
+
+/** Changes the session here and, in Tauri, in every other window. */
+function setSession(
+  next: CallSession | ((session: CallSession) => CallSession)
+) {
+  callSessionStore.set(next);
+  const source = currentWindowLabel();
+  if (source === null) {
+    return;
+  }
+  const session = callSessionStore.get();
+  appRuntime.runFork(
+    CallSessionEvents.use((events) => events.share({ session, source })).pipe(
+      Effect.catch(() => Effect.void)
+    )
+  );
+}
+
+/**
+ * Tauri: applies the call session changes other windows make. Returns a
+ * function that stops; a no-op in the browser (one page, one session).
+ */
+export function followCallSession(): () => void {
+  const label = currentWindowLabel();
+  if (label === null) {
+    return () => undefined;
+  }
+  return runCancelable(
+    CallSessionEvents.use((events) =>
+      Stream.runForEach(events.changes, (change) =>
+        Effect.sync(() => {
+          if (change.source !== label) {
+            callSessionStore.set(fromShared(change.session));
+          }
+        })
+      )
+    ).pipe(Effect.catch(() => Effect.void))
+  );
+}
+
 export function useCallSession() {
   return callSessionStore.use();
 }
@@ -41,7 +103,7 @@ export function startCall(input: {
   participants: string[];
   projectId: string | null;
 }) {
-  callSessionStore.set({
+  setSession({
     callId: CURRENT_CALL_ID,
     participants: input.participants,
     projectId: input.projectId,
@@ -52,16 +114,16 @@ export function startCall(input: {
 
 /** "Завершить": the agent collects the summary. */
 export function finishCall() {
-  callSessionStore.set((session) => ({ ...session, status: "finishing" }));
+  setSession((session) => ({ ...session, status: "finishing" }));
 }
 
 /** "Отменить завершение": back to the live call. */
 export function resumeCall() {
-  callSessionStore.set((session) =>
+  setSession((session) =>
     session.status === "finishing" ? { ...session, status: "live" } : session
   );
 }
 
 export function resetCall() {
-  callSessionStore.set(IDLE);
+  setSession(IDLE);
 }

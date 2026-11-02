@@ -245,4 +245,9 @@
   html {
     @apply font-sans;
   }
+  /* Widget and overlay: transparent windows, only the card is drawn. */
+  :root:has([data-window="floating"]),
+  :root:has([data-window="floating"]) body {
+    background: transparent;
+  }
 }

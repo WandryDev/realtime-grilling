@@ -11,11 +11,11 @@ import {
   WindowTitlebar,
   WindowTitlebarEnd,
   WindowTitlebarStart,
-  WindowTrafficLights,
 } from "@/components/ui/window-titlebar";
 import { cn } from "@/lib/utils";
 
 import { SearchIcon } from "./icons";
+import { WindowChromeEnd, WindowChromeStart } from "./window-chrome";
 
 /*
  * The main window: gray window with the title bar, an optional sidebar and
@@ -57,13 +57,16 @@ export function MainWindow({
     <AppWindow className={cn("relative", className)}>
       <WindowTitlebar>
         <WindowTitlebarStart>
-          <WindowTrafficLights />
+          <WindowChromeStart />
           <WindowTitle>
             {title}
             {subtitle ? <WindowSubtitle>{subtitle}</WindowSubtitle> : null}
           </WindowTitle>
         </WindowTitlebarStart>
-        {actions ? <WindowTitlebarEnd>{actions}</WindowTitlebarEnd> : null}
+        <WindowTitlebarEnd>
+          {actions}
+          <WindowChromeEnd />
+        </WindowTitlebarEnd>
       </WindowTitlebar>
       <AppWindowBody>
         {sidebar}

@@ -315,3 +315,40 @@ export interface CallScreenActions {
   /** "Открепить". */
   onUnpin?: (topicId: string) => void;
 }
+
+/* ------------------------------------------------------------ Call feed */
+
+/** What the recorder and the agent push during a call (`CallBackend.feed`). */
+export type CallFeedEvent =
+  /** Adds a phrase or replaces the one with the same id (speech finished). */
+  | { item: TranscriptItem; type: "transcript" }
+  /**
+   * A new topic under discussion. The current one moves down as the
+   * previous topic, `previousRange` becomes its time range.
+   */
+  | { previousRange?: string; topic: TopicData; type: "topic" }
+  /** A new open question; moves it if another topic already has it. */
+  | { question: OpenQuestionData; topicId: string; type: "question" }
+  /** A new main question; the old main joins the open questions. */
+  | { main: MainQuestionData; topicId: string; type: "main-question" }
+  /** The agent heard an answer: a row in "Обсудили в этой теме". */
+  | {
+      entry: HistoryEntry;
+      /** Open question the answer closes. */
+      questionId?: string;
+      topicId: string;
+      type: "answered";
+    }
+  /** Adds or replaces a context card, removes the listed ones. */
+  | {
+      description?: string;
+      item?: ContextItem;
+      remove?: string[];
+      type: "context";
+    }
+  /** The agent hears the call wind down. */
+  | { finalCheck: FinalCheckData; type: "final-check" }
+  /** Nobody but us holds the microphone any more. */
+  | { type: "mic-released" };
+
+export type FeedCheckpoint = "reference" | "final-check";

@@ -100,9 +100,12 @@ function PersonView({
         suggestion:
           person.suggestion === "pending" ? "accepted" : person.suggestion,
         tech: editLevels.tech,
+      }).then((saved) => {
+        if (saved) {
+          toast.add({ title: "Профиль сохранён", type: "success" });
+        }
       });
       setEditLevels(null);
-      toast.add({ title: "Профиль сохранён", type: "success" });
     },
     [editLevels, person, profile]
   );

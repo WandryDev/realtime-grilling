@@ -134,13 +134,17 @@ function ProjectView({ id }: { id: string | null }) {
       if (!project) {
         return;
       }
+      setDialog(null);
+      // A failed save shows its own toast.
       updateProject(project.id, {
         description: values.description,
         initial: values.name.charAt(0).toUpperCase(),
         name: values.name,
+      }).then((saved) => {
+        if (saved) {
+          toast.add({ title: "Проект сохранён", type: "success" });
+        }
       });
-      setDialog(null);
-      toast.add({ title: "Проект сохранён", type: "success" });
     },
     [project]
   );
@@ -151,6 +155,7 @@ function ProjectView({ id }: { id: string | null }) {
         return;
       }
       const tech = LEVEL_BY_CHOICE[input.tech] ?? 2;
+      setDialog(null);
       addPerson({
         howToAsk: defaultHowToAsk(tech),
         name: input.name,
@@ -159,9 +164,11 @@ function ProjectView({ id }: { id: string | null }) {
         projectId: project.id,
         role: input.role,
         tech,
+      }).then((personId) => {
+        if (personId) {
+          toast.add({ title: `${input.name} в проекте`, type: "success" });
+        }
       });
-      setDialog(null);
-      toast.add({ title: `${input.name} в проекте`, type: "success" });
     },
     [project]
   );

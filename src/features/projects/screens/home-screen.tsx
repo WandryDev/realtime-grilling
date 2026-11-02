@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { useId } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -10,9 +9,9 @@ import {
   PageHeader,
   TitlebarSearch,
 } from "@/features/shell/main-window";
+import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
-
 import { CallLineList } from "../components/call-line";
 import { FirstRun } from "../components/first-run";
 import { ProjectsTable } from "../components/projects-table";
@@ -63,8 +62,7 @@ export function HomeScreen({
             actions={
               <Button
                 className="h-9 pr-4 pl-3"
-                nativeButton={false}
-                render={<Link href={routes.newProject()} />}
+                {...linkButtonProps(routes.newProject())}
               >
                 <PlusIcon className="size-3.5" />
                 Новый проект
@@ -82,8 +80,7 @@ export function HomeScreen({
               action={
                 <Button
                   className="-mx-2 -my-1.5 px-2"
-                  nativeButton={false}
-                  render={<Link href={routes.history()} />}
+                  {...linkButtonProps(routes.history())}
                   size="sm"
                   variant="ghost"
                 >

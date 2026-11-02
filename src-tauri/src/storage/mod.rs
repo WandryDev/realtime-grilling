@@ -1,0 +1,525 @@
+//! Local SQLite database (design.md, decisions 8–10).
+//!
+//! One connection behind a `Mutex`; commands run their queries in
+//! `spawn_blocking` so the main thread never waits for the disk. If the
+//! database can't be opened or migrated the app still starts: the storage is
+//! an `Err` and every data command answers `Storage`.
+
+pub mod calls;
+pub mod json;
+pub mod people;
+pub mod projects;
+pub mod questions;
+pub mod settings;
+pub mod task_cards;
+pub mod topics;
+pub mod transcript;
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use rusqlite::{Connection, Transaction};
+use rusqlite_migration::{M, Migrations, SchemaVersion};
+
+use crate::{
+    error::{CommandError, CommandResult},
+    events::{DataChanged, EventSink},
+};
+
+pub const DATABASE_FILE: &str = "grill.db";
+
+/// How many `grill.db.bak-v<N>` copies to keep.
+const BACKUPS_TO_KEEP: usize = 2;
+
+const MIGRATION_LIST: &[M<'static>] = &[M::up(include_str!("../../migrations/0001_init.sql"))];
+
+pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
+
+/// Schema version this build knows.
+#[cfg(test)]
+pub const SCHEMA_VERSION: usize = MIGRATION_LIST.len();
+
+type Db = Arc<Mutex<Connection>>;
+
+/// The database or the reason it is unavailable. Managed as Tauri state.
+///
+/// A failed open can be retried (`storage_reopen`, "Повторить" on the
+/// storage error screen): the state then switches to the database.
+pub struct Storage {
+    db: RwLock<Result<Db, String>>,
+    /// Where `grill.db` lives; `None` when the app has no data folder.
+    dir: Option<PathBuf>,
+}
+
+impl Storage {
+    /// Opens `<dir>/grill.db`, migrating it to [`SCHEMA_VERSION`].
+    pub fn open_in(dir: &Path) -> Self {
+        Self {
+            db: RwLock::new(open_dir(dir)),
+            dir: Some(dir.to_owned()),
+        }
+    }
+
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            db: RwLock::new(Err(message.into())),
+            dir: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_result(result: Result<Connection, String>) -> Self {
+        Self {
+            db: RwLock::new(result.map(|connection| Arc::new(Mutex::new(connection)))),
+            dir: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn in_memory() -> Self {
+        Self::from_result(open_in_memory())
+    }
+
+    /// Why the database is unavailable, if it is.
+    pub fn error(&self) -> Option<String> {
+        self.state().as_ref().err().cloned()
+    }
+
+    fn state(&self) -> std::sync::RwLockReadGuard<'_, Result<Db, String>> {
+        self.db
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn db(&self) -> CommandResult<Db> {
+        self.state().clone().map_err(CommandError::storage)
+    }
+
+    /// Opens and migrates the database again if it failed before; a
+    /// working database is kept as it is. `Storage` when it still fails.
+    pub async fn reopen(&self) -> CommandResult<()> {
+        if self.db().is_ok() {
+            return Ok(());
+        }
+        let Some(dir) = self.dir.clone() else {
+            return self.db().map(|_| ());
+        };
+        let opened = tauri::async_runtime::spawn_blocking(move || open_dir(&dir))
+            .await
+            .map_err(|error| CommandError::storage(error.to_string()))?;
+        let mut state = self
+            .db
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Another retry may have opened it meanwhile: keep that connection.
+        if state.is_err() {
+            *state = opened;
+        }
+        state.clone().map(|_| ()).map_err(CommandError::storage)
+    }
+
+    /// Runs a read off the main thread.
+    pub async fn read<T, F>(&self, read: F) -> CommandResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> CommandResult<T> + Send + 'static,
+    {
+        let db = self.db()?;
+        tauri::async_runtime::spawn_blocking(move || read(&lock(&db)))
+            .await
+            .map_err(|error| CommandError::storage(error.to_string()))?
+    }
+
+    /// Runs a write in one transaction off the main thread. The events go out
+    /// only after the commit succeeded.
+    pub async fn write<T, F>(&self, sink: &impl EventSink, write: F) -> CommandResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Transaction) -> CommandResult<(T, Vec<DataChanged>)> + Send + 'static,
+    {
+        let db = self.db()?;
+        let (value, events) = tauri::async_runtime::spawn_blocking(move || {
+            let mut connection = lock(&db);
+            let transaction = connection.transaction()?;
+            let output = write(&transaction)?;
+            transaction.commit()?;
+            Ok::<_, CommandError>(output)
+        })
+        .await
+        .map_err(|error| CommandError::storage(error.to_string()))??;
+        for event in events {
+            sink.data_changed(event);
+        }
+        Ok(value)
+    }
+
+    /// Synchronous read for app setup, before the event loop runs.
+    pub fn read_now<T>(
+        &self,
+        read: impl FnOnce(&Connection) -> CommandResult<T>,
+    ) -> CommandResult<T> {
+        let db = self.db()?;
+        read(&lock(&db))
+    }
+}
+
+/// Opens `<dir>/grill.db`, creating the folder first.
+fn open_dir(dir: &Path) -> Result<Db, String> {
+    fs::create_dir_all(dir)
+        .map_err(|error| format!("Не удалось создать папку данных {}: {error}", dir.display()))
+        .and_then(|()| open(&dir.join(DATABASE_FILE), &MIGRATIONS))
+        .map(|connection| Arc::new(Mutex::new(connection)))
+}
+
+/// A panic while holding the lock leaves the connection usable: every write
+/// is a transaction that rolled back on drop.
+fn lock(db: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    db.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Milliseconds since the Unix epoch, UTC.
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
+/// A new time-ordered id.
+pub fn new_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
+/// Opens the database file, backs it up and migrates it.
+///
+/// Never writes to a database that is newer than `migrations`.
+pub fn open(path: &Path, migrations: &Migrations) -> Result<Connection, String> {
+    let latest = migration_count(migrations)?;
+    let mut connection = Connection::open(path)
+        .map_err(|error| format!("Не удалось открыть базу {}: {error}", path.display()))?;
+    let version = schema_version(&connection, migrations)?;
+    if version > latest {
+        return Err(format!(
+            "База данных создана более новой версией Grill (схема v{version}, \
+             эта версия знает v{latest}). Обновите приложение."
+        ));
+    }
+    configure(&connection)?;
+    if version > 0 && version < latest {
+        backup(&connection, path, version)?;
+    }
+    migrate(&mut connection, migrations)?;
+    Ok(connection)
+}
+
+#[cfg(test)]
+pub fn open_in_memory() -> Result<Connection, String> {
+    let mut connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    configure(&connection)?;
+    migrate(&mut connection, &MIGRATIONS)?;
+    Ok(connection)
+}
+
+fn migration_count(migrations: &Migrations) -> Result<usize, String> {
+    // `pending_migrations` on an empty in-memory database = number of migrations.
+    let empty = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    migrations
+        .pending_migrations(&empty)
+        .map_err(|error| error.to_string())
+        .and_then(|count| usize::try_from(count).map_err(|error| error.to_string()))
+}
+
+fn schema_version(connection: &Connection, migrations: &Migrations) -> Result<usize, String> {
+    let version = migrations
+        .current_version(connection)
+        .map_err(|error| format!("Не удалось прочитать версию схемы: {error}"))?;
+    Ok(match version {
+        SchemaVersion::NoneSet => 0,
+        SchemaVersion::Inside(v) | SchemaVersion::Outside(v) => v.get(),
+    })
+}
+
+fn configure(connection: &Connection) -> Result<(), String> {
+    connection
+        .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))
+        .and_then(|_| connection.pragma_update(None, "foreign_keys", "ON"))
+        .and_then(|()| connection.pragma_update(None, "busy_timeout", 5000))
+        .map_err(|error| format!("Не удалось настроить базу: {error}"))
+}
+
+fn migrate(connection: &mut Connection, migrations: &Migrations) -> Result<(), String> {
+    // All pending migrations run in one transaction: on failure the database
+    // stays on its previous version.
+    migrations
+        .to_latest(connection)
+        .map_err(|error| format!("Не удалось обновить схему базы: {error}"))
+}
+
+/// `grill.db.bak-v<version>` next to the database.
+pub fn backup_path(path: &Path, version: usize) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".bak-v{version}"));
+    path.with_file_name(name)
+}
+
+/// Copies the database before migrating it and keeps the newest copies.
+fn backup(connection: &Connection, path: &Path, version: usize) -> Result<(), String> {
+    let target = backup_path(path, version);
+    // `VACUUM INTO` refuses to overwrite; a copy of the same version left by a
+    // failed migration holds the same data.
+    if target.exists() {
+        fs::remove_file(&target).map_err(|error| error.to_string())?;
+    }
+    connection
+        .execute("VACUUM INTO ?1", [target.to_string_lossy()])
+        .map_err(|error| format!("Не удалось сделать копию базы перед обновлением: {error}"))?;
+    prune_backups(path);
+    Ok(())
+}
+
+fn prune_backups(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.bak-v", name.to_string_lossy());
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut backups: Vec<(usize, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_name = entry.file_name();
+            let version = file_name.to_str()?.strip_prefix(&prefix)?.parse().ok()?;
+            Some((version, entry.path()))
+        })
+        .collect();
+    backups.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    for (_, stale) in backups.into_iter().skip(BACKUPS_TO_KEEP) {
+        let _ = fs::remove_file(stale);
+    }
+}
+
+/// Validates that a required text is not blank and returns it trimmed.
+pub fn required(value: &str, message: &str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid(message));
+    }
+    Ok(trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pragma<T: rusqlite::types::FromSql>(connection: &Connection, name: &str) -> T {
+        connection
+            .pragma_query_value(None, name, |row| row.get(0))
+            .unwrap()
+    }
+
+    fn version(connection: &Connection) -> i64 {
+        pragma(connection, "user_version")
+    }
+
+    #[test]
+    fn opens_the_database_with_pragmas() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open_in(dir.path());
+        assert!(storage.error().is_none(), "{:?}", storage.error());
+        assert!(dir.path().join(DATABASE_FILE).exists());
+        storage
+            .read_now(|connection| {
+                assert_eq!(pragma::<String>(connection, "journal_mode"), "wal");
+                assert_eq!(pragma::<i64>(connection, "foreign_keys"), 1);
+                assert_eq!(pragma::<i64>(connection, "busy_timeout"), 5000);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn migrates_an_empty_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = open(&dir.path().join(DATABASE_FILE), &MIGRATIONS).unwrap();
+        assert_eq!(version(&connection), SCHEMA_VERSION as i64);
+        assert!(foreign_key_violations(&connection).is_empty());
+        // A fresh database has nothing to back up.
+        assert!(!backup_path(&dir.path().join(DATABASE_FILE), 0).exists());
+    }
+
+    #[test]
+    fn migrates_a_database_on_version_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch("CREATE TABLE unrelated (x INTEGER);")
+                .unwrap();
+            assert_eq!(version(&connection), 0);
+        }
+        let connection = open(&path, &MIGRATIONS).unwrap();
+        assert_eq!(version(&connection), SCHEMA_VERSION as i64);
+        assert!(foreign_key_violations(&connection).is_empty());
+        let tables: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN \
+                 ('projects', 'people', 'calls', 'call_participants', 'topics', 'task_cards', \
+                  'questions', 'transcript_segments', 'settings')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 9);
+    }
+
+    #[test]
+    fn migrations_are_valid() {
+        MIGRATIONS.validate().unwrap();
+    }
+
+    #[test]
+    fn refuses_a_newer_database_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch("CREATE TABLE future (x INTEGER); PRAGMA user_version = 99;")
+                .unwrap();
+        }
+        let before = fs::read(&path).unwrap();
+
+        let storage = Storage::from_result(open(&path, &MIGRATIONS));
+
+        let message = storage.error().expect("a newer database must fail");
+        assert!(message.contains("v99"), "{message}");
+        assert_eq!(fs::read(&path).unwrap(), before, "the file must not change");
+        assert!(!backup_path(&path, 99).exists());
+        let error = storage.read_now(|_| Ok(())).unwrap_err();
+        assert!(matches!(error, CommandError::Storage { .. }));
+    }
+
+    #[test]
+    fn reopen_retries_a_failed_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch("PRAGMA user_version = 99;")
+                .unwrap();
+        }
+        let storage = Storage::open_in(dir.path());
+        assert!(storage.error().is_some());
+
+        // Still newer than the app: the retry fails the same way.
+        let error = tauri::async_runtime::block_on(storage.reopen()).unwrap_err();
+        assert!(matches!(error, CommandError::Storage { .. }));
+
+        // The user restored a backup (here: an empty file); the retry works.
+        fs::remove_file(&path).unwrap();
+        tauri::async_runtime::block_on(storage.reopen()).unwrap();
+        assert!(storage.error().is_none());
+        let version = storage
+            .read_now(|connection| Ok(version(connection)))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION as i64);
+        // A working database stays as it is.
+        tauri::async_runtime::block_on(storage.reopen()).unwrap();
+    }
+
+    #[test]
+    fn failed_migration_keeps_the_version_and_leaves_a_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let first = [M::up("CREATE TABLE notes (text TEXT NOT NULL);")];
+        {
+            let connection = open(&path, &Migrations::from_slice(&first)).unwrap();
+            connection
+                .execute("INSERT INTO notes VALUES ('keep')", [])
+                .unwrap();
+        }
+
+        let broken = [
+            M::up("CREATE TABLE notes (text TEXT NOT NULL);"),
+            M::up("ALTER TABLE notes ADD COLUMN x INTEGER; SELECT * FROM missing_table;"),
+        ];
+        let error = open(&path, &Migrations::from_slice(&broken)).unwrap_err();
+        assert!(error.contains("схему"), "{error}");
+
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(version(&connection), 1);
+        let columns: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('notes')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 1, "the failed migration is rolled back");
+
+        let backup = Connection::open(backup_path(&path, 1)).unwrap();
+        let kept: String = backup
+            .query_row("SELECT text FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kept, "keep");
+        assert_eq!(version(&backup), 1);
+    }
+
+    #[test]
+    fn keeps_the_two_newest_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        for version in 1..=3 {
+            fs::write(backup_path(&path, version), b"old").unwrap();
+        }
+        fs::write(dir.path().join("other.bak-v9"), b"other").unwrap();
+        prune_backups(&path);
+        assert!(!backup_path(&path, 1).exists());
+        assert!(backup_path(&path, 2).exists());
+        assert!(backup_path(&path, 3).exists());
+        assert!(dir.path().join("other.bak-v9").exists());
+    }
+
+    #[test]
+    fn upgrade_backs_up_and_keeps_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let first = [M::up("CREATE TABLE notes (text TEXT NOT NULL);")];
+        {
+            let connection = open(&path, &Migrations::from_slice(&first)).unwrap();
+            connection
+                .execute("INSERT INTO notes VALUES ('keep')", [])
+                .unwrap();
+        }
+        let second = [
+            M::up("CREATE TABLE notes (text TEXT NOT NULL);"),
+            M::up("ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;"),
+        ];
+        let connection = open(&path, &Migrations::from_slice(&second)).unwrap();
+        assert_eq!(version(&connection), 2);
+        let kept: String = connection
+            .query_row("SELECT text FROM notes WHERE pinned = 0", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, "keep");
+        assert!(backup_path(&path, 1).exists());
+    }
+
+    fn foreign_key_violations(connection: &Connection) -> Vec<String> {
+        let mut statement = connection.prepare("PRAGMA foreign_key_check").unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+}

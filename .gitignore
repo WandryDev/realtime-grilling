@@ -38,3 +38,8 @@ spikes/**/data/
 spikes/**/runs/
 spikes/**/.venv/
 spikes/**/__pycache__/
+
+# playwright
+test-results/
+playwright-report/
+blob-report/

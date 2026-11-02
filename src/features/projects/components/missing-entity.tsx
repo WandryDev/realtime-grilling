@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -11,9 +9,9 @@ import {
 } from "@/components/ui/empty";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { MainWindow, TitlebarSearch } from "@/features/shell/main-window";
+import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
-
 import { FolderPlusIcon } from "../icons";
 
 /**
@@ -52,9 +50,7 @@ export function MissingEntity({
           <EmptyDescription>{description}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          <Button nativeButton={false} render={<Link href={backHref} />}>
-            {backLabel}
-          </Button>
+          <Button {...linkButtonProps(backHref)}>{backLabel}</Button>
         </EmptyContent>
       </Empty>
     </MainWindow>

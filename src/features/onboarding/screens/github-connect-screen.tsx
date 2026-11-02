@@ -18,7 +18,6 @@ import {
   DeviceCodeTimer,
 } from "@/features/onboarding/integrations/device-code";
 import { Hint } from "@/features/onboarding/integrations/hint";
-import { linkButtonProps } from "@/features/onboarding/integrations/link-button";
 import {
   GITHUB_ACCOUNT,
   GITHUB_DEVICE,
@@ -26,6 +25,7 @@ import {
 import { PendingStatus } from "@/features/onboarding/integrations/pending-status";
 import { BrowserButton } from "@/features/onboarding/integrations/step-actions";
 import { ServiceStepHeading } from "@/features/onboarding/integrations/step-heading";
+import { linkButtonProps } from "@/lib/link-button";
 
 /*
  * Paper "05a GitHub", sign-in with a device code. The code is copied to the

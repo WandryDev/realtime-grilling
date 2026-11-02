@@ -9,7 +9,6 @@ import {
   OnboardingWindow,
 } from "@/features/onboarding/components/onboarding-window";
 import { StepHeading } from "@/features/onboarding/components/step-heading";
-import { linkButtonProps } from "@/features/onboarding/integrations/link-button";
 import {
   SERVICE_NAMES,
   SERVICES_NOTHING_CONNECTED,
@@ -22,6 +21,7 @@ import {
   ServiceList,
   ServiceRow,
 } from "@/features/onboarding/integrations/service-row";
+import { linkButtonProps } from "@/lib/link-button";
 
 /*
  * Paper "05 Интеграции". GitHub, Outline and ClickUp, all optional. A row

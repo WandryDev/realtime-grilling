@@ -4,10 +4,9 @@ import { ClaudeIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { CheckIcon } from "@/features/onboarding/components/icons";
+import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
-
 import { DashIcon, MicSmallIcon, SpeechBarsIcon } from "./icons";
-import { linkButtonProps } from "./link-button";
 import type { SetupSummaryIcon, SetupSummaryItem } from "./mock";
 import { ServiceLogo } from "./service-logo";
 

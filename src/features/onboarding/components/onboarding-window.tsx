@@ -1,3 +1,5 @@
+"use client";
+
 import type { ComponentProps, ReactNode } from "react";
 
 import {
@@ -9,8 +11,12 @@ import {
   WindowControl,
   WindowControlGroup,
   WindowTitlebar,
-  WindowTrafficLights,
 } from "@/components/ui/window-titlebar";
+import {
+  useWindowActions,
+  WindowChromeStart,
+} from "@/features/shell/window-chrome";
+import { useWindowChrome } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /*
@@ -22,7 +28,8 @@ import { cn } from "@/lib/utils";
  *     <OnboardingFooter start={<OnboardingBackButton />} end={<OnboardingNextButton />} />
  *   </OnboardingWindow>
  *
- * `platform="windows"` swaps the traffic lights for the Windows chrome.
+ * `platform="windows"` swaps the traffic lights for the Windows chrome; in
+ * Tauri on Windows it is always on, and its buttons work.
  *
  *   <OnboardingWindow platform="windows" step="permissions">…
  *   </OnboardingWindow>
@@ -117,6 +124,7 @@ export function OnboardingSteps({ current }: { current: OnboardingStepId }) {
  * between two 160px columns, as on macOS.
  */
 function WindowsTitlebarContent({ step }: { step: OnboardingStepId }) {
+  const actions = useWindowActions();
   return (
     <>
       <p className="text-muted-foreground flex w-40 shrink-0 items-center gap-2 text-sm">
@@ -129,9 +137,21 @@ function WindowsTitlebarContent({ step }: { step: OnboardingStepId }) {
       <OnboardingSteps current={step} />
       <div className="w-40 shrink-0" />
       <WindowControlGroup className="absolute top-0 right-0 h-8">
-        <WindowControl className="h-8" control="minimize" />
-        <WindowControl className="h-8" control="maximize" />
-        <WindowControl className="h-8" control="close" />
+        <WindowControl
+          className="h-8"
+          control="minimize"
+          onClick={actions.minimize}
+        />
+        <WindowControl
+          className="h-8"
+          control="maximize"
+          onClick={actions.toggleMaximize}
+        />
+        <WindowControl
+          className="h-8"
+          control="close"
+          onClick={actions.close}
+        />
       </WindowControlGroup>
     </>
   );
@@ -152,15 +172,17 @@ export function OnboardingWindow({
   platform?: "macos" | "windows";
   step: OnboardingStepId;
 }) {
+  const chrome = useWindowChrome();
+  const windows = platform === "windows" || chrome === "windows";
   return (
     <AppWindow className={cn("relative", className)}>
       <WindowTitlebar className="relative has-data-[slot=window-controls]:pr-5">
-        {platform === "windows" ? (
+        {windows ? (
           <WindowsTitlebarContent step={step} />
         ) : (
           <>
             <div className="w-40 shrink-0">
-              <WindowTrafficLights />
+              <WindowChromeStart />
             </div>
             <OnboardingSteps current={step} />
             <p className="text-muted-foreground w-40 shrink-0 text-right text-sm">

@@ -92,10 +92,7 @@ describe("history", () => {
     expect(screen.getByText("Все проекты", { selector: "p" })).toBeTruthy();
     expect(linkHref(FIRST_CALL)).toBe(routes.callSummary(CURRENT_CALL_ID));
     expect(
-      screen
-        .getByRole("button", { name: "Начать звонок" })
-        .closest("a")
-        ?.getAttribute("href")
+      screen.getByRole("link", { name: "Начать звонок" }).getAttribute("href")
     ).toBe(routes.startWidget());
   });
 

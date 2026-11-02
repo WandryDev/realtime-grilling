@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetIntegrations } from "@/data/integrations";
 import { resetOnboarding } from "@/data/onboarding";
-import {
-  CONNECT_DELAY_MS,
-  cancelAllConnects,
-} from "@/features/onboarding/integrations/api";
+import { cancelAllConnects } from "@/features/onboarding/integrations/api";
+import { CONNECT_DELAY_MS } from "@/features/onboarding/integrations/mock";
 import { normalizeOutlineUrl } from "@/features/onboarding/integrations/outline-url";
 import { DonePage } from "@/features/onboarding/integrations/pages/done-page";
 import { IntegrationsPage } from "@/features/onboarding/integrations/pages/integrations-page";

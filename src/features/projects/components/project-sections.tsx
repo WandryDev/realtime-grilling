@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { type ComponentProps, type ReactNode, useId } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -8,9 +7,9 @@ import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlusIcon } from "@/features/shell/icons";
+import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
-
 import { ClockIcon, RefreshIcon } from "../icons";
 import type {
   BRIEF,
@@ -286,8 +285,7 @@ export function CallsSection({
         <div className="px-4 pt-1">
           <Button
             className="-mx-2 -my-1.5 px-2"
-            nativeButton={!moreHref}
-            render={moreHref ? <Link href={moreHref} /> : undefined}
+            {...linkButtonProps(moreHref)}
             size="sm"
             variant="ghost"
           >
@@ -332,8 +330,7 @@ export function SourcesSection({
             action={
               <Button
                 className="-mr-2 px-2"
-                nativeButton={false}
-                render={<Link href={routes.settings("integrations")} />}
+                {...linkButtonProps(routes.settings("integrations"))}
                 size="sm"
                 variant="ghost"
               >

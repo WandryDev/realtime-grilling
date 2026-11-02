@@ -12,13 +12,13 @@ import {
 import { ConnectedCard } from "@/features/onboarding/integrations/connected-card";
 import { Hint } from "@/features/onboarding/integrations/hint";
 import { HelpIcon } from "@/features/onboarding/integrations/icons";
-import { linkButtonProps } from "@/features/onboarding/integrations/link-button";
 import {
   OUTLINE_CONNECTION,
   OUTLINE_KEYS,
 } from "@/features/onboarding/integrations/mock";
 import { OutlineKeyForm } from "@/features/onboarding/integrations/outline-key-form";
 import { ServiceStepHeading } from "@/features/onboarding/integrations/step-heading";
+import { linkButtonProps } from "@/lib/link-button";
 
 /*
  * Paper "05b Outline", address and API key.

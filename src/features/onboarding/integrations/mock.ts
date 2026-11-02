@@ -3,6 +3,8 @@
  * verbatim from Paper.
  */
 
+import type { IntegrationService } from "@/lib/routes";
+
 export type ServiceId = "github" | "outline" | "clickup";
 
 export type ServiceConnection = "idle" | "connected" | "waiting" | "error";
@@ -130,3 +132,19 @@ export const SETUP_SUMMARY_INTEGRATIONS: SetupSummaryItem[] = [
   { icon: "outline", label: "Outline", skipped: true, value: "пропущено" },
   { icon: "clickup", label: "ClickUp", value: "Pixel Agency" },
 ];
+
+/* Mock backend (`IntegrationsBackend.layerMock`) ------------------------ */
+
+/** How long each fake round trip takes. */
+export const CONNECT_DELAY_MS = {
+  clickup: 2200,
+  github: 2500,
+  outline: 1200,
+} as const satisfies Record<IntegrationService, number>;
+
+/** What the list shows for each service once it is connected. */
+export const CONNECTED_ACCOUNTS = {
+  clickup: "Workspace «Pixel Agency», 38 списков",
+  github: "dima-kapish, доступ к 12 репозиториям",
+  outline: "docs.pixel.agency, 14 коллекций",
+} as const satisfies Record<IntegrationService, string>;

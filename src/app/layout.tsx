@@ -5,6 +5,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/toast";
 import { DevNavigator } from "@/features/dev/dev-navigator";
+import { AppFrame } from "@/features/shell/app-frame";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -42,7 +43,9 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           {/* Toasts from anywhere: `toast.add(…)` from @/components/ui/toast */}
-          <Toaster>{children}</Toaster>
+          <Toaster>
+            <AppFrame>{children}</AppFrame>
+          </Toaster>
           {process.env.NODE_ENV === "production" ? null : <DevNavigator />}
         </ThemeProvider>
       </body>

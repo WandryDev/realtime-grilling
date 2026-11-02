@@ -8,13 +8,13 @@ import {
   OnboardingWindow,
 } from "@/features/onboarding/components/onboarding-window";
 import { StepHeading } from "@/features/onboarding/components/step-heading";
-import { linkButtonProps } from "@/features/onboarding/integrations/link-button";
 import {
   SETUP_SUMMARY_INTEGRATIONS,
   SETUP_SUMMARY_REQUIRED,
   type SetupSummaryItem,
 } from "@/features/onboarding/integrations/mock";
 import { SetupSummary } from "@/features/onboarding/integrations/setup-summary";
+import { linkButtonProps } from "@/lib/link-button";
 
 /*
  * Paper "06 Готово": what was set up. Required steps are always checked,

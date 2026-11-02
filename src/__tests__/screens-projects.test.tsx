@@ -31,7 +31,7 @@ describe("HomeScreen", () => {
       screen.getByRole("heading", { name: "Начнём с первого проекта" })
     ).toBeTruthy();
     expect(screen.getByText("Пока ни одного проекта")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Создать проект" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Создать проект" })).toBeTruthy();
   });
 });
 
