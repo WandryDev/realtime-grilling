@@ -12,6 +12,10 @@ export const onboardingDemo: DemoGroup = {
     { href: permissions, label: "02 Разрешения" },
     { href: withDemo(permissions, "granted"), label: "02 — всё разрешено" },
     { href: withDemo(permissions, "denied"), label: "02 — отказано" },
+    {
+      href: withDemo(permissions, "unknown"),
+      label: "02 — системный звук не узнать",
+    },
     { href: withDemo(permissions, "windows"), label: "02 — Windows" },
     { href: speech, label: "03 Модель речи" },
     { href: withDemo(speech, "downloading"), label: "03 — скачивание" },
@@ -23,9 +27,14 @@ export const onboardingDemo: DemoGroup = {
     { href: agent, label: "04 Агент" },
     { href: withDemo(agent, "ready"), label: "04 — готов к работе" },
     { href: withDemo(agent, "needs-login"), label: "04 — нужен вход" },
+    {
+      href: withDemo(agent, "awaiting-code"),
+      label: "04 — ждём код из браузера",
+    },
     { href: withDemo(agent, "not-installed"), label: "04 — не установлен" },
     { href: withDemo(agent, "installing"), label: "04 — установка" },
     { href: withDemo(agent, "install-error"), label: "04 — ошибка установки" },
+    { href: withDemo(agent, "error"), label: "04 — не отвечает" },
   ],
   title: "Онбординг 01–04",
 };

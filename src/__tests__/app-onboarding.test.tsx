@@ -1,7 +1,12 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resetOnboardingSetup } from "@/data/onboarding-setup";
+import {
+  LOGIN_CODE_REJECTED,
+  LOGIN_EXPIRED,
+  resetOnboardingSetup,
+} from "@/data/onboarding-setup";
+import { MOCK_DELAY_MS, mockComputer } from "@/features/onboarding/backend";
 import { AgentPage } from "@/features/onboarding/pages/agent-page";
 import { PermissionsPage } from "@/features/onboarding/pages/permissions-page";
 import { SpeechPage } from "@/features/onboarding/pages/speech-page";
@@ -24,9 +29,19 @@ vi.mock("next/navigation", () => ({
 }));
 
 const NEXT = "Продолжить";
+// A loading button reads its spinner too
+const CONFIRM_BUSY = /Подтвердить/u;
 
 function nextLink() {
   return screen.getByRole("link", { name: NEXT });
+}
+
+/** Types a code into "Код из браузера" and presses "Подтвердить". */
+function enterLoginCode(code: string) {
+  fireEvent.change(screen.getByLabelText("Код из браузера"), {
+    target: { value: code },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Подтвердить" }));
 }
 
 function advance(ms: number) {
@@ -43,6 +58,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetOnboardingSetup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -215,8 +231,9 @@ describe("AgentPage", () => {
 
     expect(screen.getByText("Вход не выполнен")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Войти" }));
-    advance(2000);
-    advance(1000);
+    advance(MOCK_DELAY_MS.loginStart);
+    enterLoginCode("aB3dE5gH");
+    advance(MOCK_DELAY_MS.loginSubmit);
 
     expect(screen.getByText("Подписка активна")).toBeDefined();
     expect(nextLink().getAttribute("href")).toBe("/onboarding/integrations");
@@ -242,5 +259,97 @@ describe("AgentPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
     expect(screen.getByText("Скачали Claude Code")).toBeDefined();
+  });
+
+  it("passes the code from the browser to the agent", () => {
+    const submit = vi.spyOn(mockComputer, "submitLogin");
+    navigation.params = new URLSearchParams("demo=awaiting-code");
+    render(<AgentPage />);
+
+    expect(screen.getByText("Ждём код")).toBeDefined();
+    enterLoginCode("  aB3dE5gH ");
+    expect(
+      screen.getByRole("button", { busy: true, name: CONFIRM_BUSY })
+    ).toBeDefined();
+    advance(MOCK_DELAY_MS.loginSubmit);
+
+    expect(submit).toHaveBeenCalledWith("aB3dE5gH");
+    expect(screen.getByText("Подписка активна")).toBeDefined();
+  });
+
+  it("shows a wrong code under the field", () => {
+    navigation.params = new URLSearchParams("demo=awaiting-code");
+    render(<AgentPage />);
+
+    enterLoginCode("abc");
+    advance(MOCK_DELAY_MS.loginSubmit);
+
+    const field = screen.getByLabelText("Код из браузера");
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toBe(LOGIN_CODE_REJECTED);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")).toContain(error.id);
+    expect(screen.queryByRole("link", { name: NEXT })).toBeNull();
+
+    // The session is over: a new login, then the right code
+    fireEvent.click(screen.getByRole("button", { name: "Войти ещё раз" }));
+    advance(MOCK_DELAY_MS.loginStart);
+    expect(screen.queryByRole("alert")).toBeNull();
+    enterLoginCode("aB3dE5gH");
+    advance(MOCK_DELAY_MS.loginSubmit);
+    expect(screen.getByText("Подписка активна")).toBeDefined();
+  });
+
+  it("cancels the login back to «Войти»", () => {
+    const cancel = vi.spyOn(mockComputer, "closeLogin");
+    render(<AgentPage />);
+    advance(MOCK_DELAY_MS.agentCheck);
+
+    fireEvent.click(screen.getByRole("button", { name: "Войти" }));
+    advance(MOCK_DELAY_MS.loginStart);
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+
+    expect(screen.getByText("Вход не выполнен")).toBeDefined();
+    expect(screen.queryByLabelText("Код из браузера")).toBeNull();
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("never sends a second code into a closed login", () => {
+    const submit = vi.spyOn(mockComputer, "submitLogin");
+    navigation.params = new URLSearchParams("demo=awaiting-code");
+    render(<AgentPage />);
+
+    enterLoginCode("abc");
+    advance(MOCK_DELAY_MS.loginSubmit);
+    fireEvent.submit(screen.getByRole("form", { name: "Вход в Claude" }));
+    advance(MOCK_DELAY_MS.loginSubmit);
+
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks to start over when the login expired", () => {
+    navigation.params = new URLSearchParams("demo=awaiting-code");
+    render(<AgentPage />);
+
+    // Ten minutes passed, the CLI closed the session
+    mockComputer.closeLogin();
+    enterLoginCode("aB3dE5gH");
+    advance(MOCK_DELAY_MS.loginSubmit);
+
+    expect(screen.getByRole("alert").textContent).toBe(LOGIN_EXPIRED);
+    expect(screen.getByRole("button", { name: "Войти" })).toBeDefined();
+  });
+
+  it("cancels a running install", () => {
+    navigation.params = new URLSearchParams("demo=not-installed");
+    render(<AgentPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Установить" }));
+    advance(1000);
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+    advance(3000);
+
+    expect(screen.getByRole("button", { name: "Установить" })).toBeDefined();
+    expect(screen.queryByText("Вход не выполнен")).toBeNull();
   });
 });

@@ -22,6 +22,12 @@ import { mergePatch } from "@/lib/merge-patch";
 type Handler = (event: { payload: unknown }) => void;
 
 export interface FakeTauri {
+  /**
+   * Answers of commands the fake doesn't know (the onboarding ones), set by
+   * a test. A returned promise is passed through as is, so a test can keep
+   * a command running.
+   */
+  readonly answers: Map<string, (args: Record<string, unknown>) => unknown>;
   dataChanged: (change: DataChanged) => void;
   readonly db: {
     calls: Call[];
@@ -96,6 +102,7 @@ export function createFakeTauri(): FakeTauri {
     projects: [],
     settings: { onboardingCompleted: true },
   };
+  const answers: FakeTauri["answers"] = new Map();
   const failures = new Map<string, CommandError>();
   const handlers = new Map<string, Set<Handler>>();
   const emit = (event: string, payload: unknown) => {
@@ -136,6 +143,7 @@ export function createFakeTauri(): FakeTauri {
   };
 
   return {
+    answers,
     dataChanged: (change) => emit("data-changed", change),
     db,
     emit,
@@ -146,6 +154,13 @@ export function createFakeTauri(): FakeTauri {
       const failure = failures.get(command);
       if (failure) {
         return Promise.reject(failure);
+      }
+      const custom = answers.get(command);
+      if (custom) {
+        const result = custom(args);
+        return result instanceof Promise
+          ? result
+          : Promise.resolve(structuredClone(result));
       }
       try {
         // A copy, like a JSON round trip over the IPC.

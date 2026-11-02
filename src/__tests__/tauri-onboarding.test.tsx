@@ -1,0 +1,446 @@
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  AgentState,
+  CommandError,
+  PermissionStatus,
+  Permissions,
+} from "@/bindings";
+
+/*
+ * Onboarding steps 02 and 04 in Tauri mode, over a fake IPC
+ * (./helpers/fake-tauri.ts): the states come from the Rust commands, the
+ * window focus re-reads them, the level meters subscribe and unsubscribe.
+ */
+
+const fake = await vi.hoisted(async () => {
+  (globalThis as { isTauri?: boolean }).isTauri = true;
+  const { createFakeTauri } = await import("./helpers/fake-tauri");
+  return createFakeTauri();
+});
+
+const FOCUS = "tauri://focus";
+
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
+  invoke: fake.invoke,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  emitTo: vi.fn(() => Promise.resolve()),
+  listen: fake.listen,
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "onboarding",
+    listen: fake.listen,
+    onFocusChanged: (handler: (event: { payload: boolean }) => void) =>
+      fake.listen(FOCUS, () => handler({ payload: true })),
+  }),
+}));
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => "macos" }));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(() => Promise.resolve()),
+}));
+
+const navigation = vi.hoisted(() => ({ params: new URLSearchParams() }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/onboarding",
+  useRouter: () => ({
+    back: vi.fn(),
+    prefetch: vi.fn(),
+    push: vi.fn(),
+    replace: vi.fn(),
+  }),
+  useSearchParams: () => navigation.params,
+}));
+
+const { inTauri } = await import("@/effect/runtime");
+const { LOGIN_CODE_REJECTED, LOGIN_EXPIRED, resetOnboardingSetup } =
+  await import("@/data/onboarding-setup");
+const { PermissionsPage } = await import(
+  "@/features/onboarding/pages/permissions-page"
+);
+const { AgentPage } = await import("@/features/onboarding/pages/agent-page");
+
+const LOGIN_URL = "https://claude.ai/oauth/authorize?code=true";
+const INSTALL_LOG_LINE = /Could not resolve host/u;
+
+function status(state: PermissionStatus["state"]): PermissionStatus {
+  return { message: null, state };
+}
+
+function answer(command: string, value: unknown) {
+  fake.answers.set(command, () => value);
+}
+
+function fail(command: string, error: CommandError) {
+  fake.failures.set(command, error);
+}
+
+function calls(command: string) {
+  return fake.invoked.filter((call) => call.command === command);
+}
+
+/** A command that keeps running until the test settles it. */
+function running(command: string) {
+  let settle: (value: unknown) => void = () => undefined;
+  fake.answers.set(
+    command,
+    () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      })
+  );
+  return (value: unknown) => settle(value);
+}
+
+function focusWindow() {
+  act(() => {
+    fake.emit(FOCUS, true);
+  });
+}
+
+/** Plays a Rust event and lets the stream fibers apply it. */
+async function emit(event: string, payload: unknown) {
+  await act(async () => {
+    fake.emit(event, payload);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+}
+
+function setPermissions(microphone: string, systemAudio: string) {
+  answer("permissions_get", {
+    microphone: status(microphone as PermissionStatus["state"]),
+    systemAudio: status(systemAudio as PermissionStatus["state"]),
+  } satisfies Permissions);
+}
+
+const NEEDS_LOGIN: AgentState = { status: "needsLogin", version: "2.1.316" };
+const READY: AgentState = {
+  status: "ready",
+  subscriptionType: "pro",
+  version: "2.1.316",
+};
+
+beforeEach(() => {
+  navigation.params = new URLSearchParams();
+  fake.answers.clear();
+  fake.failures.clear();
+  fake.invoked.length = 0;
+  for (const command of [
+    "audio_level_start",
+    "audio_level_stop",
+    "agent_install_cancel",
+    "agent_login_cancel",
+    "permission_open_settings",
+  ]) {
+    answer(command, null);
+  }
+});
+
+afterEach(() => {
+  resetOnboardingSetup();
+  vi.restoreAllMocks();
+});
+
+describe("onboarding in Tauri", () => {
+  it("runs on the Tauri layers", () => {
+    expect(inTauri).toBe(true);
+  });
+});
+
+describe("PermissionsPage in Tauri", () => {
+  it("reads the accesses on entering the step", async () => {
+    setPermissions("granted", "denied");
+    render(<PermissionsPage />);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Нужен доступ к звуку звонка",
+      })
+    ).toBeTruthy();
+    // macOS shows its own dialog, the drawn one stays off
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("reads them again when the window gets the focus back", async () => {
+    setPermissions("granted", "denied");
+    render(<PermissionsPage />);
+    await screen.findByText("Запрещено");
+
+    // The user turned the toggle on in System Settings
+    setPermissions("granted", "granted");
+    focusWindow();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Всё разрешено" })
+    ).toBeTruthy();
+    expect(calls("permissions_get").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("asks the OS and shows its answer", async () => {
+    setPermissions("notDetermined", "notDetermined");
+    const settle = running("permission_request");
+    render(<PermissionsPage />);
+    await waitFor(() => expect(calls("permissions_get")).toHaveLength(1));
+
+    const [microphone] = screen.getAllByRole("button", { name: "Разрешить" });
+    fireEvent.click(microphone as HTMLElement);
+    expect(screen.getByText("Ждём ответа")).toBeTruthy();
+    expect(calls("permission_request")[0]?.args).toEqual({
+      kind: "microphone",
+    });
+
+    act(() => settle(status("granted")));
+    expect(await screen.findByText("Разрешено")).toBeTruthy();
+  });
+
+  it("stops the microphone level when the user leaves the step", async () => {
+    setPermissions("granted", "granted");
+    const { unmount } = render(<PermissionsPage />);
+
+    await waitFor(() =>
+      expect(calls("audio_level_start")[0]?.args).toEqual({
+        source: "microphone",
+      })
+    );
+    await emit("audio-level", {
+      level: 0.6,
+      playing: null,
+      source: "microphone",
+    });
+    expect(screen.getByRole("img", { name: "Уровень микрофона" })).toBeTruthy();
+
+    unmount();
+    await waitFor(() =>
+      expect(calls("audio_level_stop")[0]?.args).toEqual({
+        source: "microphone",
+      })
+    );
+  });
+
+  it("shows why the microphone meter can't run", async () => {
+    setPermissions("granted", "granted");
+    fail("audio_level_start", {
+      kind: "External",
+      message: "No input device",
+      reason: "noDevice",
+    });
+    render(<PermissionsPage />);
+
+    expect(await screen.findByText("Нет микрофона")).toBeTruthy();
+    expect(
+      screen.getByText("Подключите микрофон или наушники с микрофоном")
+    ).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "Уровень микрофона" })).toBeNull();
+  });
+
+  it("subscribes again on focus after Rust stopped the level", async () => {
+    setPermissions("granted", "granted");
+    render(<PermissionsPage />);
+    await waitFor(() => expect(calls("audio_level_start")).toHaveLength(1));
+    await waitFor(() =>
+      expect(fake.handlers.get("audio-level-stopped")?.size).toBe(1)
+    );
+
+    // The window was hidden: the subscription is gone, no error
+    await emit("audio-level-stopped", { source: "microphone" });
+    focusWindow();
+
+    await waitFor(() => expect(calls("audio_level_start")).toHaveLength(2));
+  });
+
+  it("shows the reason when the capture stopped with an error", async () => {
+    setPermissions("granted", "granted");
+    render(<PermissionsPage />);
+    await waitFor(() =>
+      expect(fake.handlers.get("audio-level-stopped")?.size).toBe(1)
+    );
+
+    await emit("audio-level-stopped", {
+      message: "Device is busy",
+      reason: "busy",
+      source: "microphone",
+    });
+
+    expect(await screen.findByText("Микрофон занят")).toBeTruthy();
+  });
+
+  it("hints at the settings when the system sound stays silent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      setPermissions("granted", "unknown");
+      render(<PermissionsPage />);
+      await waitFor(() =>
+        expect(calls("audio_level_start")[0]?.args).toEqual({
+          source: "system",
+        })
+      );
+      await waitFor(() =>
+        expect(fake.handlers.get("audio-level")?.size).toBe(1)
+      );
+      expect(screen.getByText("Проверим звук")).toBeTruthy();
+      // Unknown access: "Разрешить" stays, and the step can go on
+      expect(screen.getByRole("button", { name: "Разрешить" })).toBeTruthy();
+
+      const silentWhilePlaying = {
+        level: 0,
+        playing: true,
+        source: "system",
+      };
+      await emit("audio-level", silentWhilePlaying);
+      vi.setSystemTime(Date.now() + 2000);
+      await emit("audio-level", silentWhilePlaying);
+      expect(screen.queryByText("Не слышим звук других приложений")).toBeNull();
+
+      vi.setSystemTime(Date.now() + 2500);
+      await emit("audio-level", silentWhilePlaying);
+      expect(screen.getByText("Не слышим звук других приложений")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("AgentPage in Tauri", () => {
+  it("shows the status from the CLI", async () => {
+    answer("agent_status", READY);
+    render(<AgentPage />);
+
+    expect(await screen.findByText("Подписка активна")).toBeTruthy();
+    expect(screen.getByText("версия 2.1.316")).toBeTruthy();
+    expect(screen.getByText("Claude Pro")).toBeTruthy();
+  });
+
+  it("re-reads the status on focus, but not over a running login", async () => {
+    answer("agent_status", NEEDS_LOGIN);
+    answer("agent_login_start", LOGIN_URL);
+    render(<AgentPage />);
+    await screen.findByText("Вход не выполнен");
+
+    fireEvent.click(screen.getByRole("button", { name: "Войти" }));
+    await screen.findByLabelText("Код из браузера");
+    focusWindow();
+    expect(calls("agent_status")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+    await waitFor(() => expect(calls("agent_login_cancel")).toHaveLength(1));
+    // Logged in in a terminal meanwhile
+    answer("agent_status", READY);
+    focusWindow();
+    expect(await screen.findByText("Подписка активна")).toBeTruthy();
+  });
+
+  it("installs with progress and cancels the installer", async () => {
+    answer("agent_status", { status: "notInstalled" } satisfies AgentState);
+    running("agent_install");
+    render(<AgentPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Установить" }));
+    await waitFor(() =>
+      expect(fake.handlers.get("agent-install-progress")?.size).toBe(1)
+    );
+    await emit("agent-install-progress", {
+      progress: 0.5,
+      stage: "installing",
+    });
+    expect(screen.getByText("50%")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+    await waitFor(() => expect(calls("agent_install_cancel")).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Установить" })).toBeTruthy();
+  });
+
+  it("shows a failed install and copies its log for support", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    answer("agent_status", { status: "notInstalled" } satisfies AgentState);
+    fail("agent_install", {
+      kind: "External",
+      message:
+        "Установщик завершился с ошибкой\n\ncurl: (6) Could not resolve host: claude.ai\nexit status 6",
+    });
+    render(<AgentPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Установить" }));
+    expect(
+      await screen.findByText("Не получилось установить Claude Code")
+    ).toBeTruthy();
+    expect(screen.getByText("Установщик завершился с ошибкой")).toBeTruthy();
+    expect(screen.getByText(INSTALL_LOG_LINE)).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Скопировать для поддержки" })
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0]).toEqual([
+      expect.stringContaining("curl: (6) Could not resolve host: claude.ai"),
+    ]);
+  });
+
+  it("logs in with the code, a refused code shows under the field", async () => {
+    answer("agent_status", NEEDS_LOGIN);
+    answer("agent_login_start", LOGIN_URL);
+    fail("agent_login_submit", { kind: "Invalid", message: "Код не подошёл" });
+    render(<AgentPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Войти" }));
+    fireEvent.change(await screen.findByLabelText("Код из браузера"), {
+      target: { value: "wrong-code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      LOGIN_CODE_REJECTED
+    );
+    expect(calls("agent_login_submit")[0]?.args).toEqual({
+      code: "wrong-code",
+    });
+    // The session is over: no second submit into it
+    fireEvent.submit(screen.getByRole("form", { name: "Вход в Claude" }));
+    expect(calls("agent_login_submit")).toHaveLength(1);
+
+    fake.failures.delete("agent_login_submit");
+    answer("agent_login_submit", READY);
+    fireEvent.click(screen.getByRole("button", { name: "Войти ещё раз" }));
+    await waitFor(() => expect(calls("agent_login_start")).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    fireEvent.change(screen.getByLabelText("Код из браузера"), {
+      target: { value: "right-code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить" }));
+    expect(await screen.findByText("Подписка активна")).toBeTruthy();
+  });
+
+  it("asks to start over when the login session is gone", async () => {
+    answer("agent_status", NEEDS_LOGIN);
+    answer("agent_login_start", LOGIN_URL);
+    fail("agent_login_submit", {
+      kind: "NotFound",
+      message: "Вход не начат",
+    });
+    render(<AgentPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Войти" }));
+    fireEvent.change(await screen.findByLabelText("Код из браузера"), {
+      target: { value: "late-code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(LOGIN_EXPIRED);
+    expect(screen.getByText("Вход не выполнен")).toBeTruthy();
+    expect(screen.queryByLabelText("Код из браузера")).toBeNull();
+  });
+});

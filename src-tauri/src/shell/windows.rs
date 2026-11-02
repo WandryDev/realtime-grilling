@@ -25,10 +25,12 @@ pub fn show<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let _ = window.set_focus();
 }
 
+/// Hides a window; it stops listening to the level meters.
 pub fn hide<R: Runtime>(app: &AppHandle<R>, label: &str) {
     if let Some(window) = window(app, label) {
         let _ = window.hide();
     }
+    crate::audio::forget_window(app, label);
 }
 
 pub fn toggle<R: Runtime>(app: &AppHandle<R>, label: &str) {
@@ -36,7 +38,7 @@ pub fn toggle<R: Runtime>(app: &AppHandle<R>, label: &str) {
         return;
     };
     if window.is_visible().unwrap_or(false) {
-        let _ = window.hide();
+        hide(app, label);
     } else {
         show(app, label);
     }

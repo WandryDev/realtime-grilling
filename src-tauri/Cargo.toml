@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -29,11 +30,42 @@ specta = { version = "=2.0.0-rc.26", features = ["derive", "serde_json"] }
 specta-typescript = "=0.0.13"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 thiserror = "2"
+# Child processes of the agent CLI (timeouts, stdin), on Tauri's runtime.
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+# Microphone level (CoreAudio / WASAPI).
+cpal = "0.18"
+which = "8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }
+objc2-core-audio = "0.3.2"
+objc2-core-audio-types = "0.3.2"
+objc2-core-foundation = { version = "0.3", features = ["CFString", "CFDictionary"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSDictionary", "NSProcessInfo", "NSString", "NSValue"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_Security",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_JobObjects",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_System_Variant",
+] }
+windows-core = "0.62"
 
 [dev-dependencies]
 tempfile = "3"

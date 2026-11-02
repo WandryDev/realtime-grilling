@@ -1,5 +1,18 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
+
+/// Why a capture for the level meter could not open (`External.reason`)
+/// or broke after it started (`AudioLevelStopped.reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureFailure {
+    /// The OS denies the app the microphone or system audio.
+    NoAccess,
+    /// There is no input (or output) device.
+    NoDevice,
+    /// The device exists but could not be opened.
+    Busy,
+}
 
 /// Error of every command. The frontend narrows on `kind`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type, thiserror::Error)]
@@ -14,6 +27,15 @@ pub enum CommandError {
     /// The database could not be opened, migrated, read or written.
     #[error("{message}")]
     Storage { message: String },
+    /// An external process (the agent CLI, its installer) or an OS API
+    /// answered with an error. `reason` is set by `audio_level_start`.
+    #[error("{message}")]
+    External {
+        message: String,
+        #[specta(optional)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<CaptureFailure>,
+    },
 }
 
 impl CommandError {
@@ -32,6 +54,20 @@ impl CommandError {
     pub fn storage(message: impl Into<String>) -> Self {
         Self::Storage {
             message: message.into(),
+        }
+    }
+
+    pub fn external(message: impl Into<String>) -> Self {
+        Self::External {
+            message: message.into(),
+            reason: None,
+        }
+    }
+
+    pub fn capture(reason: CaptureFailure, message: impl Into<String>) -> Self {
+        Self::External {
+            message: message.into(),
+            reason: Some(reason),
         }
     }
 }

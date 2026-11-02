@@ -71,5 +71,11 @@
         "visible": false
       }
     ]
+  },
+  "bundle": {
+    "macOS": {
+      "entitlements": "./Entitlements.plist",
+      "minimumSystemVersion": "14.2"
+    }
   }
 }

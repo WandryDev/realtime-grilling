@@ -4,8 +4,12 @@ import { TestClock } from "effect/testing";
 import { afterEach, vi } from "vitest";
 
 import {
+  AgentLoginCodeError,
   ClipboardError,
   LEVEL_INTERVAL_MS,
+  MOCK_DELAY_MS,
+  MOCK_LOGIN_URL,
+  mockComputer,
   OnboardingBackend,
   WORD_INTERVAL_MS,
 } from "@/features/onboarding/backend";
@@ -19,6 +23,7 @@ const VALID_KEY = "ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  mockComputer.reset();
 });
 
 describe("OnboardingBackend.layerMock", () => {
@@ -46,7 +51,7 @@ describe("OnboardingBackend.layerMock", () => {
       yield* TestClock.adjust(LEVEL_INTERVAL_MS * 5);
       const levels = Array.from(yield* Fiber.join(fiber));
       assert.strictEqual(levels.length, 5);
-      for (const level of levels) {
+      for (const { level } of levels) {
         assert.isTrue(level > 0 && level <= 1);
       }
     }).pipe(Effect.provide(OnboardingBackend.layerMock))
@@ -68,6 +73,111 @@ describe("OnboardingBackend.layerMock", () => {
       const backend = yield* OnboardingBackend;
       const error = yield* Effect.flip(backend.copyText("лог"));
       assert.instanceOf(error, ClipboardError);
+    }).pipe(Effect.provide(OnboardingBackend.layerMock))
+  );
+});
+
+describe("OnboardingBackend.layerMock, the mock computer", () => {
+  it.effect("asks for an access and waits for the dialog's answer", () =>
+    Effect.gen(function* () {
+      const backend = yield* OnboardingBackend;
+      const fiber = yield* Effect.forkChild(
+        backend.requestPermission("microphone")
+      );
+      yield* TestClock.adjust(MOCK_DELAY_MS.permissionsCheck);
+      assert.isUndefined(fiber.pollUnsafe());
+      mockComputer.answer("microphone", false);
+      assert.deepStrictEqual(yield* Fiber.join(fiber), {
+        message: null,
+        state: "denied",
+      });
+
+      // Opening System Settings turns the refused access on
+      yield* backend.openPermissionSettings("microphone");
+      const read = yield* Effect.forkChild(backend.permissions);
+      yield* TestClock.adjust(MOCK_DELAY_MS.permissionsCheck);
+      assert.deepStrictEqual(yield* Fiber.join(read), {
+        microphone: { message: null, state: "granted" },
+        systemAudio: { message: null, state: "notDetermined" },
+      });
+    }).pipe(Effect.provide(OnboardingBackend.layerMock))
+  );
+
+  it.effect("installs the agent with progress, then asks for a login", () =>
+    Effect.gen(function* () {
+      mockComputer.setAgent("notInstalled");
+      const backend = yield* OnboardingBackend;
+      const fiber = yield* Effect.forkChild(
+        Stream.runCollect(backend.installAgent)
+      );
+      yield* TestClock.adjust(MOCK_DELAY_MS.installTick * 25);
+      const events = Array.from(yield* Fiber.join(fiber));
+      assert.deepStrictEqual(events[0], {
+        percent: 4,
+        stage: "downloading",
+        type: "progress",
+      });
+      assert.deepStrictEqual(events.at(-1), {
+        agent: { status: "needsLogin", version: "2.1.4" },
+        type: "installed",
+      });
+    }).pipe(Effect.provide(OnboardingBackend.layerMock))
+  );
+
+  it.effect("logs in with the code from the browser", () =>
+    Effect.gen(function* () {
+      const backend = yield* OnboardingBackend;
+      const start = yield* Effect.forkChild(backend.loginStart);
+      yield* TestClock.adjust(MOCK_DELAY_MS.loginStart);
+      assert.strictEqual(yield* Fiber.join(start), MOCK_LOGIN_URL);
+
+      const submit = yield* Effect.forkChild(backend.loginSubmit("aB3dE5gH"));
+      yield* TestClock.adjust(MOCK_DELAY_MS.loginSubmit);
+      assert.deepStrictEqual(yield* Fiber.join(submit), {
+        status: "ready",
+        subscription: "max",
+        version: "2.1.4",
+      });
+    }).pipe(Effect.provide(OnboardingBackend.layerMock))
+  );
+
+  it.effect("rejects a short code and closes the login", () =>
+    Effect.gen(function* () {
+      mockComputer.openLogin();
+      const backend = yield* OnboardingBackend;
+      const short = yield* Effect.forkChild(
+        Effect.flip(backend.loginSubmit("abc"))
+      );
+      yield* TestClock.adjust(MOCK_DELAY_MS.loginSubmit);
+      assert.instanceOf(yield* Fiber.join(short), AgentLoginCodeError);
+
+      // The session is over, even a right code needs a new login
+      const again = yield* Effect.forkChild(
+        Effect.flip(backend.loginSubmit("aB3dE5gH"))
+      );
+      yield* TestClock.adjust(MOCK_DELAY_MS.loginSubmit);
+      const expired = yield* Fiber.join(again);
+      assert.strictEqual(expired._tag, "BackendError");
+      assert.strictEqual(
+        expired._tag === "BackendError" ? expired.kind : null,
+        "NotFound"
+      );
+    }).pipe(Effect.provide(OnboardingBackend.layerMock))
+  );
+
+  it.effect("downloads the speech model from where it stopped", () =>
+    Effect.gen(function* () {
+      const backend = yield* OnboardingBackend;
+      const fiber = yield* Effect.forkChild(
+        Stream.runCollect(backend.downloadSpeechModel("ru", 95))
+      );
+      yield* TestClock.adjust(
+        MOCK_DELAY_MS.modelTick * 2 + MOCK_DELAY_MS.modelCheck
+      );
+      assert.deepStrictEqual(Array.from(yield* Fiber.join(fiber)), [
+        { percent: 97.5, type: "downloading" },
+        { type: "checking" },
+      ]);
     }).pipe(Effect.provide(OnboardingBackend.layerMock))
   );
 });

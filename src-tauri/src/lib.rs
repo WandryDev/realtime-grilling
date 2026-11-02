@@ -1,7 +1,10 @@
+mod agent;
+mod audio;
 mod bindings;
 mod commands;
 mod error;
 mod events;
+mod permissions;
 mod shell;
 mod storage;
 
@@ -37,6 +40,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        // `platform()` picks the Windows variant of the onboarding steps.
+        .plugin(tauri_plugin_os::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

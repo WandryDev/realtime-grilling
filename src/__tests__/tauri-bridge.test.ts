@@ -35,7 +35,7 @@ describe("call (generated wrappers)", () => {
     })
   );
 
-  it.effect.each(["NotFound", "Invalid", "Storage"] as const)(
+  it.effect.each(["NotFound", "Invalid", "Storage", "External"] as const)(
     "maps a %s command error to its kind",
     (kind) =>
       Effect.gen(function* () {
@@ -51,6 +51,26 @@ describe("call (generated wrappers)", () => {
         assert.strictEqual(error.kind, kind);
         assert.strictEqual(error.message, "нет проекта");
       })
+  );
+
+  it.effect("keeps the reason of an External capture error", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        call(() =>
+          Promise.resolve({
+            error: {
+              kind: "External",
+              message: "Нет ни одного микрофона",
+              reason: "noDevice",
+            },
+            status: "error" as const,
+          })
+        )
+      );
+      assert.strictEqual(error.kind, "External");
+      assert.strictEqual(error.reason, "noDevice");
+      assert.strictEqual(error.message, "Нет ни одного микрофона");
+    })
   );
 
   it.effect("maps a rejected wrapper to Transport", () =>
@@ -98,6 +118,19 @@ describe("call (raw invoke)", () => {
       tauri.invoke.mockRejectedValue({ kind: "NotFound", message: "нет" });
       const error = yield* Effect.flip(call("projects_get", { id: "x" }));
       assert.strictEqual(error.kind, "NotFound");
+      assert.isUndefined(error.reason);
+    })
+  );
+
+  it.effect("decodes a rejected External payload", () =>
+    Effect.gen(function* () {
+      tauri.invoke.mockRejectedValue({
+        kind: "External",
+        message: "Установка не удалась (код 1)",
+      });
+      const error = yield* Effect.flip(call("agent_install"));
+      assert.strictEqual(error.kind, "External");
+      assert.strictEqual(error.message, "Установка не удалась (код 1)");
     })
   );
 

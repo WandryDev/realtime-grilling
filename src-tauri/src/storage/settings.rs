@@ -25,6 +25,9 @@ pub const ONBOARDING_COMPLETED: &str = "onboardingCompleted";
 pub const LAUNCH_AT_LOGIN: &str = "launchAtLogin";
 pub const HIDE_ON_SHARE: &str = "hideOnShare";
 pub const SHORTCUTS: &str = "shortcuts";
+/// Where the agent CLI was found (`null`: not found). Optional, no default;
+/// written by the agent commands.
+pub const AGENT_PATH: &str = "agentPath";
 
 pub const SETTINGS_ID: &str = "settings";
 
@@ -72,6 +75,13 @@ pub fn validate(patch: &SettingsMap) -> CommandResult<()> {
         let valid = match key.as_str() {
             ONBOARDING_COMPLETED | LAUNCH_AT_LOGIN | HIDE_ON_SHARE => value.is_boolean(),
             SHORTCUTS => serde_json::from_value::<Shortcuts>(value.clone()).is_ok(),
+            // Only a path to the agent CLI: it is what the agent commands run.
+            AGENT_PATH => {
+                value.is_null()
+                    || value.as_str().is_some_and(|path| {
+                        crate::agent::discover::has_cli_name(std::path::Path::new(path))
+                    })
+            }
             _ => true,
         };
         if !valid {

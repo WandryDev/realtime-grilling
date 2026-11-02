@@ -143,3 +143,70 @@ describe("AgentScreen", () => {
     );
   });
 });
+
+describe("PermissionsScreen meters and hints", () => {
+  it("shows why the microphone meter can't run instead of its bars", () => {
+    render(
+      <PermissionsScreen
+        microphoneLevel={{ active: 0, levels: [], problem: "noDevice" }}
+        state="granted"
+      />
+    );
+
+    expect(screen.getByText("Нет микрофона")).toBeDefined();
+    expect(
+      screen.getByText("Подключите микрофон или наушники с микрофоном")
+    ).toBeDefined();
+    expect(screen.queryByRole("img", { name: "Уровень микрофона" })).toBeNull();
+  });
+
+  it("lets the step go on with an unknown system sound access", () => {
+    render(<PermissionsScreen state="unknown" />);
+
+    expect(screen.getByRole("button", { name: "Разрешить" })).toBeDefined();
+    expect(screen.getByRole("button", { name: NEXT_NAME })).toHaveProperty(
+      "disabled",
+      false
+    );
+  });
+
+  it("hints at the settings when the system sound stays silent", () => {
+    render(<PermissionsScreen silentSystemAudio state="unknown" />);
+
+    expect(screen.getByText("Не слышим звук других приложений")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Открыть настройки" })
+    ).toBeDefined();
+  });
+});
+
+describe("AgentScreen failures", () => {
+  it("shows what failed during the install and its log", () => {
+    render(
+      <AgentScreen
+        failure={{
+          log: ["exit status 6"],
+          summary: "Установщик завершился с ошибкой",
+          title: "Не получилось установить Claude Code",
+        }}
+        state="install-error"
+      />
+    );
+
+    expect(
+      screen.getByText("Не получилось установить Claude Code")
+    ).toBeDefined();
+    expect(screen.getByText("Установщик завершился с ошибкой")).toBeDefined();
+    expect(screen.getByText("exit status 6")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Повторить" })).toBeDefined();
+  });
+
+  it("offers a new check when Claude Code doesn't answer", () => {
+    render(<AgentScreen state="error" />);
+
+    expect(screen.getByText("Не отвечает")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Проверить снова" })
+    ).toBeDefined();
+  });
+});

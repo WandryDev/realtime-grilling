@@ -25,19 +25,33 @@ export const BackendErrorKind = Schema.Literals([
   "NotFound",
   "Invalid",
   "Storage",
+  "External",
   "Transport",
 ]);
 export type BackendErrorKind = typeof BackendErrorKind.Type;
 
+/**
+ * Why an `External` capture error happened (`CaptureFailure` in
+ * `src/bindings.ts`): `noAccess`, `noDevice` or `busy`.
+ */
+export const CaptureFailure = Schema.Literals(["noAccess", "noDevice", "busy"]);
+export type CaptureFailure = typeof CaptureFailure.Type;
+
 export class BackendError extends Schema.TaggedError<BackendError>()(
   "BackendError",
-  { kind: BackendErrorKind, message: Schema.String }
+  {
+    kind: BackendErrorKind,
+    message: Schema.String,
+    /** Set on `External` errors of `audio_level_start`. */
+    reason: Schema.optional(CaptureFailure),
+  }
 ) {}
 
 /** The `#[serde(tag = "kind")] CommandError` of the Rust side. */
 const CommandError = Schema.Struct({
-  kind: Schema.Literals(["NotFound", "Invalid", "Storage"]),
+  kind: Schema.Literals(["NotFound", "Invalid", "Storage", "External"]),
   message: Schema.String,
+  reason: Schema.optional(Schema.NullOr(CaptureFailure)),
 });
 const decodeCommandError = Schema.decodeUnknownOption(CommandError);
 
@@ -58,7 +72,8 @@ function toBackendError(cause: unknown) {
   return Option.match(decodeCommandError(cause), {
     onNone: () =>
       new BackendError({ kind: "Transport", message: transportMessage(cause) }),
-    onSome: ({ kind, message }) => new BackendError({ kind, message }),
+    onSome: ({ kind, message, reason }) =>
+      new BackendError(reason ? { kind, message, reason } : { kind, message }),
   });
 }
 

@@ -43,7 +43,8 @@ export async function completeOnboarding(page: Page) {
   await page.getByRole("button", { name: "Скачать" }).click();
   await page.getByRole("link", { name: "Продолжить" }).click();
 
-  // 04: Claude Code is found without a login.
+  // 04: Claude Code is found without a login; the code from the browser
+  // logs it in.
   await expect(
     page.getByRole("heading", {
       level: 1,
@@ -51,6 +52,8 @@ export async function completeOnboarding(page: Page) {
     })
   ).toBeVisible();
   await page.getByRole("button", { name: "Войти" }).click();
+  await page.getByLabel("Код из браузера").fill("aB3dE5gH");
+  await page.getByRole("button", { name: "Подтвердить" }).click();
   await page.getByRole("link", { name: "Продолжить" }).click();
 
   // 05: integrations are optional.

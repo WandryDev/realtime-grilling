@@ -7,6 +7,7 @@ import {
   AgentCardHeader,
   AgentCardSection,
   AgentCheck,
+  AgentCheckDetails,
   AgentCheckList,
   AgentCheckMarkIcon,
   AgentCheckMeta,
@@ -14,6 +15,7 @@ import {
   AgentStatusBadge,
   AgentStepNumber,
 } from "../components/agent-card";
+import { AgentLoginForm } from "../components/agent-login-form";
 import { ExternalArrowIcon, InfoIcon, SwapIcon } from "../components/icons";
 import {
   OnboardingContent,
@@ -30,27 +32,58 @@ import { type AgentInfo, CLAUDE_CODE } from "../mock";
  * - checking: looking for Claude Code, its login and subscription
  * - ready: found, logged in, subscription active
  * - needs-login: installed, "Войти" opens the browser
+ * - awaiting-code: the browser login runs, "Код из браузера" takes the code
+ *   the page shows; `loginError` when the CLI didn't take it
  * - not-installed: the install plan and "Установить"
  * - installing: steps 1–3 with progress
  * - install-error: what failed, the log, "Повторить"
+ * - error: the check or the login start failed, "Проверить снова"
  *
  * The app passes `handlers`; `loginPending` spins "Войти" while the browser
- * login is open.
+ * login starts, `loginSubmitting` spins "Подтвердить".
  */
 export type AgentState =
   | "checking"
   | "ready"
   | "needs-login"
+  | "awaiting-code"
   | "not-installed"
   | "installing"
-  | "install-error";
+  | "install-error"
+  | "error";
 
 export interface AgentHandlers {
+  /** "Отменить" under the install progress. */
+  onCancelInstall?: () => void;
+  /** "Отменить" in the login. */
+  onCancelLogin?: () => void;
   onCopyLog?: () => void;
   onInstall?: () => void;
+  /** "Войти", also "Войти ещё раз" after a rejected code. */
   onLogin?: () => void;
   onRecheck?: () => void;
+  /** "Открыть страницу ещё раз". */
+  onReopenLogin?: () => void;
   onRetry?: () => void;
+  /** "Подтвердить" with the code from the browser. */
+  onSubmitCode?: (code: string) => void;
+}
+
+/** What failed: a title, one line for people, the log for support. */
+export interface AgentFailure {
+  log?: readonly string[];
+  summary?: string;
+  title?: string;
+}
+
+/** Where the browser login is. */
+interface AgentLogin {
+  /** The CLI didn't take the code. */
+  error?: string;
+  /** "Войти" is starting the login. */
+  pending: boolean;
+  /** "Подтвердить" is passing the code. */
+  submitting: boolean;
 }
 
 function VersionMeta({ agent }: { agent: AgentInfo }) {
@@ -60,12 +93,12 @@ function VersionMeta({ agent }: { agent: AgentInfo }) {
 function AgentChecks({
   agent,
   handlers,
-  loginPending,
+  login,
   state,
 }: {
   agent: AgentInfo;
   handlers: AgentHandlers;
-  loginPending: boolean;
+  login: AgentLogin;
   state: "checking" | "ready" | "needs-login";
 }) {
   if (state === "checking") {
@@ -103,7 +136,7 @@ function AgentChecks({
           trailing={
             <Button
               className="gap-1.5"
-              loading={loginPending}
+              loading={login.pending}
               onClick={handlers.onLogin}
             >
               Войти
@@ -113,6 +146,14 @@ function AgentChecks({
         >
           Вход не выполнен
         </AgentCheck>
+        {login.error ? (
+          <li
+            className="text-destructive -mt-1.5 pb-1 pl-8 text-sm"
+            role="alert"
+          >
+            {login.error}
+          </li>
+        ) : null}
         <AgentCheck
           emphasis="muted"
           mark={<AgentCheckMarkIcon mark="pending" />}
@@ -142,6 +183,50 @@ function AgentChecks({
         trailing={<AgentCheckMeta>{agent.plan}</AgentCheckMeta>}
       >
         Подписка активна
+      </AgentCheck>
+    </AgentCheckList>
+  );
+}
+
+/** The login started: the code from the browser, between the checks. */
+function LoginChecks({
+  agent,
+  handlers,
+  login,
+}: {
+  agent: AgentInfo;
+  handlers: AgentHandlers;
+  login: AgentLogin;
+}) {
+  return (
+    <AgentCheckList>
+      <AgentCheck
+        mark={<AgentCheckMarkIcon mark="done" />}
+        trailing={<VersionMeta agent={agent} />}
+      >
+        Установлен на компьютере
+      </AgentCheck>
+      <AgentCheckDetails
+        label="Вход в аккаунт Claude"
+        mark={<AgentCheckMarkIcon mark="attention" />}
+      >
+        <AgentLoginForm
+          className="pb-2"
+          error={login.error}
+          onCancel={handlers.onCancelLogin}
+          onRelogin={handlers.onLogin}
+          onReopen={handlers.onReopenLogin}
+          onSubmit={handlers.onSubmitCode}
+          relogging={login.pending}
+          submitting={login.submitting}
+        />
+      </AgentCheckDetails>
+      <AgentCheck
+        emphasis="muted"
+        mark={<AgentCheckMarkIcon mark="pending" />}
+        trailing={<AgentCheckMeta>проверим после входа</AgentCheckMeta>}
+      >
+        Подписка
       </AgentCheck>
     </AgentCheckList>
   );
@@ -195,7 +280,13 @@ function InstallPlan({
   );
 }
 
-function InstallProgress({ agent }: { agent: AgentInfo }) {
+function InstallProgress({
+  agent,
+  handlers,
+}: {
+  agent: AgentInfo;
+  handlers: AgentHandlers;
+}) {
   return (
     <AgentCardSection className="gap-1 pt-3.5 pb-4">
       <AgentCheckList className="gap-1">
@@ -235,44 +326,55 @@ function InstallProgress({ agent }: { agent: AgentInfo }) {
           Вход в аккаунт Claude
         </AgentCheck>
       </AgentCheckList>
-      <p className="text-muted-foreground pt-2.5 text-sm">
-        Не закрывайте окно, осталось меньше минуты
-      </p>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <p className="text-muted-foreground text-sm">
+          Не закрывайте окно, осталось меньше минуты
+        </p>
+        <Button
+          className="-mr-2.5"
+          onClick={handlers.onCancelInstall}
+          size="sm"
+          variant="ghost"
+        >
+          Отменить
+        </Button>
+      </div>
     </AgentCardSection>
   );
 }
 
-function InstallError({
-  agent,
-  handlers,
+/** The Paper frame of a failed install: the site didn't answer. */
+const DOWNLOAD_FAILED = {
+  summary:
+    "Сайт Anthropic не ответил. Чаще всего мешает VPN или рабочий файрвол, попробуйте отключить VPN.",
+  title: "Не получилось скачать Claude Code",
+};
+
+/** What failed, the technical log, the next step and the support copy. */
+function AgentFailureSection({
+  action,
+  failure,
+  onCopyLog,
 }: {
-  agent: AgentInfo;
-  handlers: AgentHandlers;
+  action: ReactNode;
+  failure: Required<AgentFailure>;
+  onCopyLog?: () => void;
 }) {
   return (
     <AgentCardSection className="gap-3 py-4">
       <div className="flex items-start gap-3">
         <AgentCheckMarkIcon mark="failed" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <h3 className="text-base font-semibold">
-            Не получилось скачать Claude Code
-          </h3>
-          <p className="text-muted-foreground text-sm">
-            Сайт Anthropic не ответил. Чаще всего мешает VPN или рабочий
-            файрвол, попробуйте отключить VPN.
-          </p>
+          <h3 className="text-base font-semibold">{failure.title}</h3>
+          <p className="text-muted-foreground text-sm">{failure.summary}</p>
         </div>
       </div>
-      <AgentErrorLog className="ml-8" lines={agent.errorLog} />
+      {failure.log.length > 0 ? (
+        <AgentErrorLog className="ml-8" lines={failure.log} />
+      ) : null}
       <div className="flex gap-2 pl-8">
-        <Button className="h-9 px-4" onClick={handlers.onRetry}>
-          Повторить
-        </Button>
-        <Button
-          className="h-9 px-4"
-          onClick={handlers.onCopyLog}
-          variant="secondary"
-        >
+        {action}
+        <Button className="h-9 px-4" onClick={onCopyLog} variant="secondary">
           Скопировать для поддержки
         </Button>
       </div>
@@ -280,12 +382,67 @@ function InstallError({
   );
 }
 
+function InstallError({
+  agent,
+  failure,
+  handlers,
+}: {
+  agent: AgentInfo;
+  failure?: AgentFailure;
+  handlers: AgentHandlers;
+}) {
+  return (
+    <AgentFailureSection
+      action={
+        <Button className="h-9 px-4" onClick={handlers.onRetry}>
+          Повторить
+        </Button>
+      }
+      failure={{
+        log: failure?.log ?? agent.errorLog,
+        summary: failure?.summary ?? DOWNLOAD_FAILED.summary,
+        title: failure?.title ?? DOWNLOAD_FAILED.title,
+      }}
+      onCopyLog={handlers.onCopyLog}
+    />
+  );
+}
+
+/** The check or the login start failed: "Claude Code не отвечает". */
+function AgentError({
+  failure,
+  handlers,
+}: {
+  failure?: AgentFailure;
+  handlers: AgentHandlers;
+}) {
+  return (
+    <AgentFailureSection
+      action={
+        <Button className="h-9 px-4" onClick={handlers.onRecheck}>
+          Проверить снова
+        </Button>
+      }
+      failure={{
+        log: failure?.log ?? [],
+        summary: failure?.summary ?? "Claude Code не отвечает",
+        title: failure?.title ?? "Не получилось проверить Claude Code",
+      }}
+      onCopyLog={handlers.onCopyLog}
+    />
+  );
+}
+
 const STATUS: Record<AgentState, ReactNode> = {
+  "awaiting-code": (
+    <AgentStatusBadge tone="attention">Ждём код</AgentStatusBadge>
+  ),
   checking: (
     <AgentStatusBadge dot={false} tone="neutral">
       Проверяем
     </AgentStatusBadge>
   ),
+  error: <AgentStatusBadge tone="error">Не отвечает</AgentStatusBadge>,
   "install-error": (
     <AgentStatusBadge tone="error">Не установлен</AgentStatusBadge>
   ),
@@ -309,32 +466,68 @@ const STATUS: Record<AgentState, ReactNode> = {
 
 function AgentCardBody({
   agent,
+  failure,
   handlers,
-  loginPending,
+  login,
   state,
 }: {
   agent: AgentInfo;
+  failure?: AgentFailure;
   handlers: AgentHandlers;
-  loginPending: boolean;
+  login: AgentLogin;
   state: AgentState;
 }) {
   switch (state) {
+    case "awaiting-code":
+      return (
+        <AgentCardSection>
+          <LoginChecks agent={agent} handlers={handlers} login={login} />
+        </AgentCardSection>
+      );
     case "not-installed":
       return <InstallPlan agent={agent} handlers={handlers} />;
     case "installing":
-      return <InstallProgress agent={agent} />;
+      return <InstallProgress agent={agent} handlers={handlers} />;
     case "install-error":
-      return <InstallError agent={agent} handlers={handlers} />;
+      return (
+        <InstallError agent={agent} failure={failure} handlers={handlers} />
+      );
+    case "error":
+      return <AgentError failure={failure} handlers={handlers} />;
     default:
       return (
         <AgentCardSection>
           <AgentChecks
             agent={agent}
             handlers={handlers}
-            loginPending={loginPending}
+            login={login}
             state={state}
           />
         </AgentCardSection>
+      );
+  }
+}
+
+/** The line under the card. */
+function AgentNote({ state }: { state: AgentState }) {
+  switch (state) {
+    case "needs-login":
+      return (
+        <StepNote icon={<InfoIcon strokeWidth={1.3} />}>
+          Откроется браузер. Войдите в Claude и скопируйте код со страницы
+        </StepNote>
+      );
+    case "awaiting-code":
+      return (
+        <StepNote icon={<InfoIcon strokeWidth={1.3} />}>
+          Войдите в Claude в открывшемся браузере и скопируйте код со страницы
+        </StepNote>
+      );
+    default:
+      return (
+        <StepNote icon={<SwapIcon />} iconTone="subtle">
+          Агента можно поменять позже в настройках
+        </StepNote>
       );
   }
 }
@@ -345,17 +538,29 @@ export function AgentScreen({
   agent = CLAUDE_CODE,
   backHref,
   className,
+  failure,
   handlers = NO_HANDLERS,
+  loginError,
   loginPending = false,
+  loginSubmitting = false,
   nextHref,
   state = "checking",
 }: {
   agent?: AgentInfo;
   backHref?: string;
   className?: string;
+  /** install-error / error: what failed, instead of the Paper texts. */
+  failure?: AgentFailure;
   handlers?: AgentHandlers;
-  /** "Войти" opened the browser, waiting for the login. */
+  /**
+   * awaiting-code: under the code field (the CLI didn't take the code);
+   * needs-login: next to "Войти" (the login expired).
+   */
+  loginError?: string;
+  /** "Войти" is starting the browser login. */
   loginPending?: boolean;
+  /** "Подтвердить" is passing the code to the CLI. */
+  loginSubmitting?: boolean;
   nextHref?: string;
   state?: AgentState;
 }) {
@@ -376,20 +581,17 @@ export function AgentScreen({
           />
           <AgentCardBody
             agent={agent}
+            failure={failure}
             handlers={handlers}
-            loginPending={loginPending}
+            login={{
+              error: loginError,
+              pending: loginPending,
+              submitting: loginSubmitting,
+            }}
             state={state}
           />
         </AgentCard>
-        {state === "needs-login" ? (
-          <StepNote icon={<InfoIcon strokeWidth={1.3} />}>
-            Откроется браузер. Войдите в Claude и вернитесь, Grill заметит сам
-          </StepNote>
-        ) : (
-          <StepNote icon={<SwapIcon />} iconTone="subtle">
-            Агента можно поменять позже в настройках
-          </StepNote>
-        )}
+        <AgentNote state={state} />
       </OnboardingContent>
       <OnboardingFooter
         end={<StepNextButton disabled={state !== "ready"} href={nextHref} />}

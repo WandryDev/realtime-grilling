@@ -211,6 +211,32 @@ export function AgentCheck({
   );
 }
 
+/**
+ * A row that holds more than a label: the mark, the label and, under the
+ * label, the content (a form, a hint). The mark stays on the label's line.
+ */
+export function AgentCheckDetails({
+  children,
+  className,
+  label,
+  mark,
+}: {
+  children: ReactNode;
+  className?: string;
+  label: ReactNode;
+  mark: ReactNode;
+}) {
+  return (
+    <li className={cn("flex items-start gap-3 py-2", className)}>
+      <span className="flex h-6 items-center">{mark}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <span className="text-base">{label}</span>
+        {children}
+      </div>
+    </li>
+  );
+}
+
 /** Value on the right of a row: mono for versions and sizes. */
 export function AgentCheckMeta({
   children,

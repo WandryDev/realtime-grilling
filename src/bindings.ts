@@ -85,10 +85,72 @@ export const commands = {
 	 *  fails. On success its settings take effect as at a normal start.
 	 */
 	storageReopen: () => typedError<null, CommandError>(__TAURI_INVOKE("storage_reopen")),
+	/**  The microphone and system audio access, without any prompt. */
+	permissionsGet: () => typedError<Permissions, CommandError>(__TAURI_INVOKE("permissions_get")),
+	/**
+	 *  "Разрешить": shows the system prompt where the OS has one and returns
+	 *  the state after the user's answer. A `denied` access stays `denied`
+	 *  (Windows opens the privacy settings for the microphone).
+	 */
+	permissionRequest: (kind: PermissionKind) => typedError<PermissionStatus, CommandError>(__TAURI_INVOKE("permission_request", { kind })),
+	/**
+	 *  "Открыть настройки": the settings page of the access (the URL is
+	 *  chosen here, never by the frontend).
+	 */
+	permissionOpenSettings: (kind: PermissionKind) => typedError<null, CommandError>(__TAURI_INVOKE("permission_open_settings", { kind })),
+	/**
+	 *  Finds the CLI (saving `agentPath`), then its version and login. Never
+	 *  calls the model; a CLI that hangs is `error`.
+	 */
+	agentStatus: () => typedError<AgentState, CommandError>(__TAURI_INVOKE("agent_status")),
+	/**
+	 *  "Установить": runs the official installer with `AgentInstallProgress`
+	 *  to the calling window, then checks the status. A failed install is
+	 *  `External` whose message is a summary line, a blank line and the
+	 *  installer's output (for "Скопировать для поддержки"). After
+	 *  `agent_install_cancel` it resolves to the status.
+	 */
+	agentInstall: () => typedError<AgentState, CommandError>(__TAURI_INVOKE("agent_install")),
+	/**  Stops a running install (kills the installer); nothing when none runs. */
+	agentInstallCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("agent_install_cancel")),
+	/**
+	 *  "Войти": starts `claude auth login --claudeai` (it opens the browser
+	 *  itself) and returns the sign-in link for "Открыть страницу ещё раз".
+	 *  A login in progress is replaced. `NotFound` without the CLI (or when
+	 *  `agent_login_cancel` came while the CLI was starting; it is killed),
+	 *  `External` when the CLI shows no link within 15 s. Unfinished, it stops
+	 *  after 10 min.
+	 */
+	agentLoginStart: () => typedError<string, CommandError>(__TAURI_INVOKE("agent_login_start")),
+	/**
+	 *  "Подтвердить": passes the code from the browser to the CLI and returns
+	 *  the status. A code it refused is `Invalid` ("Код не подошёл"); the
+	 *  login is then over and "Войти" starts a new one. Without a login
+	 *  waiting for a code (never started, cancelled, expired, or after a wrong
+	 *  code) it is `NotFound` ("Вход не начат или истёк"). The code is not
+	 *  kept or logged.
+	 */
+	agentLoginSubmit: (code: string) => typedError<AgentState, CommandError>(__TAURI_INVOKE("agent_login_submit", { code })),
+	/**  "Отменить": stops the login in progress (or still starting), if any. */
+	agentLoginCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("agent_login_cancel")),
+	/**
+	 *  Subscribes the calling window to `AudioLevel` of a source, opening the
+	 *  device if no window listens to it yet. `External` with `reason`
+	 *  `noAccess` / `noDevice` / `busy` when it can't be opened.
+	 */
+	audioLevelStart: (source: AudioSource) => typedError<null, CommandError>(__TAURI_INVOKE("audio_level_start", { source })),
+	/**
+	 *  Ends the calling window's subscription; the last one releases the
+	 *  device. Hiding or closing a window ends its subscriptions too.
+	 */
+	audioLevelStop: (source: AudioSource) => typedError<null, CommandError>(__TAURI_INVOKE("audio_level_stop", { source })),
 };
 
 /** Events */
 export const events = {
+	agentInstallProgress: makeEvent<AgentInstallProgress, AgentInstallProgress>("agent-install-progress"),
+	audioLevel: makeEvent<AudioLevel, AudioLevel>("audio-level"),
+	audioLevelStopped: makeEvent<AudioLevelStopped, AudioLevelStopped>("audio-level-stopped"),
 	callSessionChanged: makeEvent<CallSessionChanged, CallSessionChanged>("call-session-changed"),
 	dataChanged: makeEvent<DataChanged, DataChanged>("data-changed"),
 	navigate: makeEvent<Navigate, Navigate>("navigate"),
@@ -96,6 +158,54 @@ export const events = {
 };
 
 /* Types */
+/**  Sent to the window that started `agent_install`. */
+export type AgentInstallProgress = {
+	stage: InstallStage,
+	/**  0–1, by stage. */
+	progress: number,
+};
+
+export type AgentState = { status: "notInstalled" } | { status: "needsLogin"; version: string } | { status: "ready"; version: string; 
+/**  `pro`, `max`, `team`…; `null` when the CLI doesn't say. */
+subscriptionType: string | null } | 
+/**  The text for "Скопировать для поддержки". */
+{ status: "error"; message: string };
+
+/**
+ *  The level of a source, ~10 times a second, to the windows that
+ *  subscribed with `audio_level_start`.
+ */
+export type AudioLevel = {
+	source: AudioSource,
+	/**  0–1; 0 is silence (or below −60 dBFS). */
+	level: number,
+	/**
+	 *  System audio on macOS: whether some app plays to the default output
+	 *  (`DeviceIsRunningSomewhere`). Silence while something plays and the
+	 *  access is `unknown` means the access is missing.
+	 */
+	playing?: boolean | null,
+};
+
+/**
+ *  Rust ended a window's subscription to a source, and the window's level
+ *  stream ends. Without `reason` the window was hidden or closed: it
+ *  subscribes again (`audio_level_start`) when it is shown. With `reason`
+ *  the capture broke after it started (device unplugged, stream lost):
+ *  `message` says why, for the screen.
+ */
+export type AudioLevelStopped = {
+	source: AudioSource,
+	reason?: CaptureFailure | null,
+	message?: string | null,
+};
+
+export type AudioSource = 
+/**  The default input device ("Я"). */
+"microphone" | 
+/**  What the other apps play ("Остальные"), without this app. */
+"system";
+
 export type Call = {
 	id: string,
 	projectId: string,
@@ -173,6 +283,18 @@ export type CallUpdate = {
 	summary?: Value | null,
 };
 
+/**
+ *  Why a capture for the level meter could not open (`External.reason`)
+ *  or broke after it started (`AudioLevelStopped.reason`).
+ */
+export type CaptureFailure = 
+/**  The OS denies the app the microphone or system audio. */
+"noAccess" | 
+/**  There is no input (or output) device. */
+"noDevice" | 
+/**  The device exists but could not be opened. */
+"busy";
+
 export type Change = "created" | "updated" | "deleted";
 
 /**  Error of every command. The frontend narrows on `kind`. */
@@ -182,7 +304,12 @@ export type CommandError =
 /**  The input breaks a rule: empty name, a participant from another project… */
 { kind: "Invalid"; message: string } | 
 /**  The database could not be opened, migrated, read or written. */
-{ kind: "Storage"; message: string };
+{ kind: "Storage"; message: string } | 
+/**
+ *  An external process (the agent CLI, its installer) or an OS API
+ *  answered with an error. `reason` is set by `audio_level_start`.
+ */
+{ kind: "External"; message: string; reason?: CaptureFailure | null };
 
 /**
  *  Sent to every window after a write is committed, never on failure.
@@ -206,9 +333,41 @@ export type Entity = "project" | "person" |
 /**  `id` is `"settings"`. */
 "settings";
 
+export type InstallStage = "downloading" | "installing" | 
+/**  The installer finished; the app checks the CLI. */
+"verifying";
+
 /**  Tells the main window to open a route, e.g. "Настройки" in the tray menu. */
 export type Navigate = {
 	route: string,
+};
+
+export type PermissionKind = 
+/**  The user's own voice ("Я"). */
+"microphone" | 
+/**  Sound of the other apps, i.e. the call ("Остальные"). */
+"systemAudio";
+
+export type PermissionState = 
+/**  Not asked yet: "Разрешить" shows the system prompt. */
+"notDetermined" | "granted" | 
+/**  Refused, restricted by a policy or turned off in the settings. */
+"denied" | 
+/**  The OS doesn't tell without trying to record. */
+"unknown";
+
+export type PermissionStatus = {
+	state: PermissionState,
+	/**
+	 *  Why the access can't be given here, e.g. the macOS version is too
+	 *  old for system audio. Shown as is.
+	 */
+	message?: string | null,
+};
+
+export type Permissions = {
+	microphone: PermissionStatus,
+	systemAudio: PermissionStatus,
 };
 
 /**  A person of the client. Stored once per project; calls refer to it. */

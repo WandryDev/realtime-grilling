@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window and onboarding: all data commands, settings, window controls and the storage retry.",
+  "description": "Main window and onboarding: all data commands, settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters and the OS name (the Windows variant of onboarding).",
   "windows": ["main", "onboarding"],
   "permissions": [
     "core:default",
@@ -15,6 +15,7 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "opener:default",
+    "os:default",
     "allow-projects-list",
     "allow-projects-get",
     "allow-projects-create",
@@ -55,6 +56,17 @@
     "allow-settings-update",
     "allow-onboarding-complete",
     "allow-windows-show",
-    "allow-storage-reopen"
+    "allow-storage-reopen",
+    "allow-permissions-get",
+    "allow-permission-request",
+    "allow-permission-open-settings",
+    "allow-agent-status",
+    "allow-agent-install",
+    "allow-agent-install-cancel",
+    "allow-agent-login-start",
+    "allow-agent-login-submit",
+    "allow-agent-login-cancel",
+    "allow-audio-level-start",
+    "allow-audio-level-stop"
   ]
 }

@@ -40,6 +40,34 @@ cargo test
 - Никогда не запускайте `add` с `-o` / `--overwrite` и `--all`.
 - Если файл всё-таки затёрт, верните его через git: `git restore src/components/ui/<file>`.
 
+## Микрофон, системный звук и подпись для разработки (macOS)
+
+macOS (TCC) запоминает доступ к микрофону и к записи системного звука по подписи приложения. Ad-hoc подпись (`signingIdentity: "-"`) меняется с каждой сборкой, поэтому после пересборки macOS спрашивает доступ заново. В `bun run tauri dev` бинарь запускается без бандла, и доступ достаётся терминалу или IDE, а не Grill. Проверять шаг «Разрешения» нужно на бандле со стабильной подписью.
+
+Один раз создайте самоподписанный сертификат «Grill Dev»:
+
+1. «Связка ключей» → меню «Связка ключей» → «Ассистент сертификации» → «Создать сертификат…».
+2. Имя — `Grill Dev`, тип идентификации — «Самоподписанный корневой», тип сертификата — «Подпись кода». «Создать».
+3. Проверка: `security find-identity -p codesigning` показывает `"Grill Dev"`.
+
+Сборка и запуск с этой подписью:
+
+```bash
+bun run tauri build --debug --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Grill Dev"}}}'
+open src-tauri/target/debug/bundle/macos/realtime-grilling.app
+```
+
+Подпись одна и та же между сборками, и выданный доступ сохраняется. Начать с чистого листа (снова увидеть системные запросы):
+
+```bash
+tccutil reset Microphone com.dev-wandry.realtime-grilling
+tccutil reset AudioCapture com.dev-wandry.realtime-grilling
+```
+
+Тексты запросов лежат в `src-tauri/Info.plist`, entitlement микрофона — в `src-tauri/Entitlements.plist`. Запись системного звука требует macOS 14.2 или новее (`minimumSystemVersion` в `tauri.macos.conf.json`).
+
+Windows: доступ к микрофону читается из параметров конфиденциальности, системный звук разрешения не требует. Этот путь пока только компилируется и не проверен на реальной машине.
+
 ## OpenSpec
 
 Изменения поведения сначала описываются в OpenSpec, потом реализуются:

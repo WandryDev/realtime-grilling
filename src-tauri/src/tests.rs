@@ -846,6 +846,42 @@ fn settings_merge_over_defaults_and_validate_types() {
 }
 
 #[test]
+fn agent_path_is_only_a_path_to_the_cli() {
+    let good = if cfg!(windows) {
+        [
+            json!(null),
+            json!(r"C:\Users\me\.local\bin\claude.exe"),
+            json!(r"C:\Users\me\AppData\Roaming\npm\claude.cmd"),
+        ]
+    } else {
+        [
+            json!(null),
+            json!("/Users/me/.local/bin/claude"),
+            json!("/Users/me/.nvm/versions/node/v20.11.1/bin/claude"),
+        ]
+    };
+    for good in good {
+        let patch = SettingsMap::from([(settings::AGENT_PATH.to_owned(), good.clone())]);
+        assert!(settings::validate(&patch).is_ok(), "{good}");
+    }
+    for bad in [
+        json!(""),
+        json!("/bin/sh"),
+        json!("/tmp/claude-evil"),
+        json!(42),
+    ] {
+        let patch = SettingsMap::from([(settings::AGENT_PATH.to_owned(), bad.clone())]);
+        assert!(
+            matches!(
+                settings::validate(&patch),
+                Err(CommandError::Invalid { .. })
+            ),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn storage_failure_answers_storage_errors() {
     let storage = Storage::unavailable("База от более новой версии");
     let sink = RecordingSink::default();
@@ -878,6 +914,18 @@ fn command_errors_serialize_with_a_kind() {
     assert_eq!(
         serde_json::to_value(CommandError::storage("x")).unwrap(),
         json!({ "kind": "Storage", "message": "x" })
+    );
+    assert_eq!(
+        serde_json::to_value(CommandError::external("x")).unwrap(),
+        json!({ "kind": "External", "message": "x" })
+    );
+    assert_eq!(
+        serde_json::to_value(CommandError::capture(
+            crate::error::CaptureFailure::NoDevice,
+            "Нет микрофона"
+        ))
+        .unwrap(),
+        json!({ "kind": "External", "message": "Нет микрофона", "reason": "noDevice" })
     );
 }
 
@@ -945,6 +993,24 @@ mod acl {
         }
     }
 
+    /// OS permissions, the agent CLI and the meters are for the main and
+    /// onboarding windows only.
+    #[test]
+    fn floating_windows_cannot_touch_permissions_agent_or_audio() {
+        for label in ["overlay", "widget"] {
+            for command in [
+                "permissions_get",
+                "permission_request",
+                "agent_install",
+                "agent_login_submit",
+                "audio_level_start",
+            ] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+        }
+    }
+
     #[test]
     fn allowed_commands_pass_the_acl() {
         // The mock app has no command handlers: an allowed command gets past
@@ -954,6 +1020,10 @@ mod acl {
             ("onboarding", "settings_update"),
             ("overlay", "projects_list"),
             ("widget", "calls_create"),
+            ("onboarding", "permissions_get"),
+            ("onboarding", "agent_login_start"),
+            ("onboarding", "audio_level_start"),
+            ("main", "agent_status"),
         ] {
             let result = invoke(label, command);
             assert!(!denied(&result), "{label} → {command}: {result:?}");
@@ -1007,6 +1077,17 @@ fn capabilities_match_the_command_list() {
         "calls_delete",
         "settings_update",
         "onboarding_complete",
+        "permissions_get",
+        "permission_request",
+        "permission_open_settings",
+        "agent_status",
+        "agent_install",
+        "agent_install_cancel",
+        "agent_login_start",
+        "agent_login_submit",
+        "agent_login_cancel",
+        "audio_level_start",
+        "audio_level_stop",
     ] {
         assert!(
             !floating.iter().any(|command| command == forbidden),

@@ -9,6 +9,8 @@ use specta_typescript::Typescript;
 use tauri_specta::{Builder, collect_commands, collect_events};
 
 use crate::{
+    agent::install::AgentInstallProgress,
+    audio::{AudioLevel, AudioLevelStopped},
     commands,
     events::{CallSessionChanged, DataChanged, Navigate, ShortcutPressed},
 };
@@ -64,8 +66,22 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::onboarding_complete,
             commands::windows_show,
             commands::storage_reopen,
+            commands::permissions_get,
+            commands::permission_request,
+            commands::permission_open_settings,
+            commands::agent_status,
+            commands::agent_install,
+            commands::agent_install_cancel,
+            commands::agent_login_start,
+            commands::agent_login_submit,
+            commands::agent_login_cancel,
+            commands::audio_level_start,
+            commands::audio_level_stop,
         ])
         .events(collect_events![
+            AgentInstallProgress,
+            AudioLevel,
+            AudioLevelStopped,
             CallSessionChanged,
             DataChanged,
             Navigate,

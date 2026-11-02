@@ -71,6 +71,8 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(QuitRequested::default());
     app.manage(shortcuts::Registered::default());
     app.manage(SettingsLock::default());
+    app.manage(crate::audio::levels_for_app(app.handle()));
+    app.manage(crate::agent::AgentSessions::default());
     app.manage(Entry {
         onboarding_completed: AtomicBool::new(settings::flag(
             &settings,
@@ -126,7 +128,8 @@ pub fn storage_opened<R: Runtime>(app: &AppHandle<R>, settings: &SettingsMap) {
 }
 
 /// Windows are declared once in the config, so closing one only hides it.
-/// The app keeps running in the tray.
+/// The app keeps running in the tray. A hidden window stops listening to
+/// the level meters.
 fn hide_on_close<R: Runtime>(app: &AppHandle<R>) {
     for label in [
         windows::MAIN,
@@ -138,11 +141,16 @@ fn hide_on_close<R: Runtime>(app: &AppHandle<R>) {
             continue;
         };
         let target = window.clone();
-        window.on_window_event(move |event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        window.on_window_event(move |event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = target.hide();
+                crate::audio::forget_window(target.app_handle(), target.label());
             }
+            WindowEvent::Destroyed => {
+                crate::audio::forget_window(target.app_handle(), target.label());
+            }
+            _ => {}
         });
     }
 }

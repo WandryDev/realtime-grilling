@@ -5,15 +5,25 @@
 //! Adding a command: register it in `bindings::builder` and in
 //! `command_names.rs`, and allow it in `capabilities/*.json`.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_specta::Event;
 
 use crate::{
+    agent::{
+        self, AgentSessions, AgentState,
+        discover::SearchEnv,
+        install::{self, AgentInstallProgress},
+        login,
+    },
+    audio::{AudioLevels, AudioSource},
     error::{CommandError, CommandResult},
     events::Navigate,
+    permissions::{self, PermissionKind, PermissionStatus, Permissions},
     shell::{self, SettingsLock, shortcuts::ShortcutError, windows},
     storage::{
         Storage,
@@ -589,4 +599,205 @@ pub async fn storage_reopen(
     tauri::async_runtime::spawn_blocking(move || shell::storage_opened(&handle, &settings))
         .await
         .map_err(|error| CommandError::storage(error.to_string()))
+}
+
+/* OS permissions */
+
+/// The microphone and system audio access, without any prompt.
+#[tauri::command]
+#[specta::specta]
+pub async fn permissions_get() -> CommandResult<Permissions> {
+    permissions::blocking(permissions::all).await
+}
+
+/// "Разрешить": shows the system prompt where the OS has one and returns
+/// the state after the user's answer. A `denied` access stays `denied`
+/// (Windows opens the privacy settings for the microphone).
+#[tauri::command]
+#[specta::specta]
+pub async fn permission_request(
+    app: AppHandle,
+    kind: PermissionKind,
+) -> CommandResult<PermissionStatus> {
+    permissions::request(&app, kind).await
+}
+
+/// "Открыть настройки": the settings page of the access (the URL is
+/// chosen here, never by the frontend).
+#[tauri::command]
+#[specta::specta]
+pub fn permission_open_settings(app: AppHandle, kind: PermissionKind) -> CommandResult<()> {
+    permissions::open_settings(&app, kind)
+}
+
+/* Agent CLI */
+
+/// Where the agent CLI runs: the app's data folder, never a project.
+fn agent_workdir(app: &AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        eprintln!("grill: failed to create {}: {error}", dir.display());
+    }
+    dir
+}
+
+async fn agent_cli(app: &AppHandle, storage: &Storage) -> CommandResult<PathBuf> {
+    agent::locate(storage, app, &SearchEnv::from_process())
+        .await
+        .ok_or_else(|| CommandError::not_found("Claude Code не установлен"))
+}
+
+/// Finds the CLI (saving `agentPath`), then its version and login. Never
+/// calls the model; a CLI that hangs is `error`.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_status(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+) -> CommandResult<AgentState> {
+    let cwd = agent_workdir(&app);
+    Ok(agent::locate_and_check(&storage, &app, &SearchEnv::from_process(), &cwd).await)
+}
+
+/// "Установить": runs the official installer with `AgentInstallProgress`
+/// to the calling window, then checks the status. A failed install is
+/// `External` whose message is a summary line, a blank line and the
+/// installer's output (for "Скопировать для поддержки"). After
+/// `agent_install_cancel` it resolves to the status.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_install(
+    app: AppHandle,
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    sessions: State<'_, AgentSessions>,
+) -> CommandResult<AgentState> {
+    let cancelled = sessions.begin_install()?;
+    let cwd = agent_workdir(&app);
+    let label = window.label().to_owned();
+    let handle = app.clone();
+    let outcome = install::run(
+        &install::Installer::official(),
+        &cwd,
+        install::INSTALL_TIMEOUT,
+        cancelled,
+        move |stage| {
+            if let Err(error) = AgentInstallProgress::from(stage).emit_to(&handle, label.as_str()) {
+                eprintln!("grill: failed to emit install progress: {error}");
+            }
+        },
+    )
+    .await;
+    match outcome {
+        install::Outcome::Cancelled => {
+            Ok(agent::locate_and_check(&storage, &app, &SearchEnv::from_process(), &cwd).await)
+        }
+        install::Outcome::Failed { message } => Err(CommandError::external(message)),
+        install::Outcome::Installed { log } => {
+            let state =
+                agent::locate_and_check(&storage, &app, &SearchEnv::from_process(), &cwd).await;
+            if state == AgentState::NotInstalled {
+                return Err(CommandError::external(format!(
+                    "Установщик завершился, но Claude Code не найден\n\n{log}"
+                )));
+            }
+            Ok(state)
+        }
+    }
+}
+
+/// Stops a running install (kills the installer); nothing when none runs.
+#[tauri::command]
+#[specta::specta]
+pub fn agent_install_cancel(sessions: State<'_, AgentSessions>) -> CommandResult<()> {
+    sessions.cancel_install();
+    Ok(())
+}
+
+/// "Войти": starts `claude auth login --claudeai` (it opens the browser
+/// itself) and returns the sign-in link for "Открыть страницу ещё раз".
+/// A login in progress is replaced. `NotFound` without the CLI (or when
+/// `agent_login_cancel` came while the CLI was starting; it is killed),
+/// `External` when the CLI shows no link within 15 s. Unfinished, it stops
+/// after 10 min.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_login_start(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    sessions: State<'_, AgentSessions>,
+) -> CommandResult<String> {
+    let id = sessions.begin_login();
+    drop(sessions.login.lock().await.take());
+    let cli = agent_cli(&app, &storage).await?;
+    let session = login::start(&cli, &agent_workdir(&app), id, login::URL_TIMEOUT).await?;
+    let url = session.url().to_owned();
+    sessions.keep_login(session).await?;
+    login::expire_later(&sessions.login, id, login::SESSION_TIMEOUT);
+    Ok(url)
+}
+
+/// "Подтвердить": passes the code from the browser to the CLI and returns
+/// the status. A code it refused is `Invalid` ("Код не подошёл"); the
+/// login is then over and "Войти" starts a new one. Without a login
+/// waiting for a code (never started, cancelled, expired, or after a wrong
+/// code) it is `NotFound` ("Вход не начат или истёк"). The code is not
+/// kept or logged.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_login_submit(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    sessions: State<'_, AgentSessions>,
+    code: String,
+) -> CommandResult<AgentState> {
+    let code = code.trim();
+    if code.is_empty() || code.contains(['\n', '\r']) {
+        return Err(CommandError::invalid("Вставьте код из браузера"));
+    }
+    let session = sessions.take_login().await?;
+    let cli = agent_cli(&app, &storage).await?;
+    agent::finish_login(session, code, &cli, &agent_workdir(&app)).await
+}
+
+/// "Отменить": stops the login in progress (or still starting), if any.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_login_cancel(sessions: State<'_, AgentSessions>) -> CommandResult<()> {
+    sessions.cancel_login().await;
+    Ok(())
+}
+
+/* Level meters */
+
+/// Subscribes the calling window to `AudioLevel` of a source, opening the
+/// device if no window listens to it yet. `External` with `reason`
+/// `noAccess` / `noDevice` / `busy` when it can't be opened.
+#[tauri::command]
+#[specta::specta]
+pub async fn audio_level_start(
+    window: WebviewWindow,
+    levels: State<'_, AudioLevels>,
+    source: AudioSource,
+) -> CommandResult<()> {
+    let label = window.label().to_owned();
+    let levels = levels.inner().clone();
+    permissions::blocking(move || levels.start(&label, source)).await?
+}
+
+/// Ends the calling window's subscription; the last one releases the
+/// device. Hiding or closing a window ends its subscriptions too.
+#[tauri::command]
+#[specta::specta]
+pub async fn audio_level_stop(
+    window: WebviewWindow,
+    levels: State<'_, AudioLevels>,
+    source: AudioSource,
+) -> CommandResult<()> {
+    let label = window.label().to_owned();
+    let levels = levels.inner().clone();
+    permissions::blocking(move || levels.stop(&label, source)).await
 }

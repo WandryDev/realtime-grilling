@@ -7,44 +7,52 @@ import {
   answerMicrophone,
   answerScreenAudio,
   forcePermissions,
+  loadPermissions,
   openPrivacySettings,
+  type PermissionsSetup,
   recheckPermissions,
   requestMicrophone,
   requestScreenAudio,
   usePermissionsSetup,
 } from "@/data/onboarding-setup";
+import { inTauri } from "@/effect/runtime";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
+import { useRunsOnWindows } from "../platform";
 import {
-  type AccessState,
   type PermissionsHandlers,
   PermissionsScreen,
   type PermissionsState,
 } from "../screens/permissions-screen";
-import { useAudioLevelBars } from "../use-live-audio";
+import { useAudioLevelCheck, useWindowFocus } from "../use-live-audio";
 
 const DEMO_STATES = [
   "idle",
   "prompt",
   "granted",
   "denied",
+  "unknown",
   "windows",
 ] as const satisfies readonly PermissionsState[];
 
 const DEMO_ACCESS: Record<
   PermissionsState,
-  { microphone: AccessState; screenAudio: AccessState }
+  Pick<PermissionsSetup, "microphone" | "screenAudio">
 > = {
   denied: { microphone: "granted", screenAudio: "denied" },
   granted: { microphone: "granted", screenAudio: "granted" },
   idle: { microphone: "idle", screenAudio: "idle" },
   prompt: { microphone: "asking", screenAudio: "idle" },
+  unknown: { microphone: "granted", screenAudio: "unknown" },
   windows: { microphone: "granted", screenAudio: "idle" },
 };
 
 function openSettings() {
   openPrivacySettings();
-  // MOCK: the real app opens System Settings on the right pane
+  if (inTauri) {
+    return;
+  }
+  // MOCK: the app opens System Settings on the right pane itself
   toast.add({
     description:
       "«Конфиденциальность и безопасность» открылись. Включите Grill и нажмите «Проверить».",
@@ -77,33 +85,47 @@ const HANDLERS: PermissionsHandlers = {
 export function PermissionsPage() {
   const demo = useDemoState(DEMO_STATES);
   const permissions = usePermissionsSetup();
-  const windows = demo === "windows";
+  const onWindows = useRunsOnWindows();
+  const windows = demo ? demo === "windows" : onWindows;
+  const unknownSystemAudio = !windows && permissions.screenAudio === "unknown";
 
   useEffect(() => {
     if (demo) {
       forcePermissions(DEMO_ACCESS[demo]);
+    } else {
+      loadPermissions();
     }
   }, [demo]);
+  // Back from System Settings: the toggle may be on now
+  useWindowFocus(loadPermissions);
 
-  const microphoneLevel = useAudioLevelBars(
+  const microphone = useAudioLevelCheck(
     "microphone",
-    !windows && permissions.microphone === "granted"
+    !(windows || unknownSystemAudio) && permissions.microphone === "granted"
   );
-  const systemLevel = useAudioLevelBars("system", windows);
+  const system = useAudioLevelCheck("system", windows || unknownSystemAudio);
 
   return (
     <PermissionsScreen
       backHref={routes.onboarding()}
       checking={permissions.checking}
       className="h-svh"
+      drawSystemPrompt={!inTauri}
       handlers={HANDLERS}
+      messages={{
+        microphone: permissions.microphoneMessage,
+        screenAudio: permissions.screenAudioMessage,
+      }}
       microphone={permissions.microphone}
-      microphoneLevel={microphoneLevel}
+      microphoneLevel={{ ...microphone.bars, problem: microphone.problem }}
       nextHref={routes.onboarding("speech")}
       screenAudio={permissions.screenAudio}
-      soundActive={systemLevel.active}
-      soundLevels={systemLevel.levels}
+      silentSystemAudio={system.silentWhilePlaying}
+      soundActive={system.bars.active}
+      soundLevels={system.bars.levels}
+      soundProblem={system.problem}
       state={windows ? "windows" : undefined}
+      systemLevel={{ ...system.bars, problem: system.problem }}
     />
   );
 }
