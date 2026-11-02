@@ -132,3 +132,12 @@ Biome will catch most mechanical issues automatically. Focus your attention on:
 ---
 
 Most formatting and common issues are automatically fixed by Biome. Run `bunx ultracite fix` before committing to ensure compliance.
+
+# Effect
+
+Backend calls go through [Effect](https://effect.website/) 4 services. Before writing Effect code read `node_modules/effect/AGENTS.md` and the examples it links (the API differs from Effect 3, don't rely on memory).
+
+- Each area's backend contract is a `Context.Service` in `src/features/<area>/backend.ts` with a `layerMock` (fake timers today) and, later, a Tauri layer.
+- Layers are composed in `src/effect/runtime.ts` (`AppLayer`, `appRuntime`). React code runs effects with `runCancelable` / `appRuntime.runPromise`; screens don't import Effect.
+- Errors are `Schema.TaggedError`, handled with `Effect.catchTag` at the edge.
+- Test services with `@effect/vitest` (`it.effect`, `TestClock`).

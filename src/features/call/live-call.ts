@@ -1,0 +1,786 @@
+import type { CallFeedEvent } from "./api";
+import { SUMMARY_STAGES } from "./api";
+import { FINAL_CHECK_TOPIC_ID } from "./components/call-questions";
+import { CALL_SCREENS } from "./mock";
+import type {
+  CallScreenData,
+  ContextItem,
+  FinishingData,
+  FinishingStep,
+  HistoryEntry,
+  OpenQuestionData,
+  QuestionQuickAction,
+  QuestionsData,
+  TopicAnchorData,
+  TopicData,
+  TranscriptItem,
+} from "./types";
+
+/*
+ * State of the live call window and everything that changes it: feed events
+ * from ./api, your clicks, the clock. Pure, so the reducer is easy to test;
+ * `toScreenData` turns it into the props of <CallScreen>.
+ */
+
+export interface LiveCallState {
+  /** Seconds before the agent retries by itself ("Сам попробую через"). */
+  agentRetryIn: number | null;
+  /** What the screen draws, minus the ticking numbers. */
+  data: CallScreenData;
+  /** Call length in seconds. */
+  elapsed: number;
+  /** Seconds before the call ends by itself after the mic was released. */
+  micLeft: number | null;
+  /**
+   * Questions taken out of the list (pinned, asked, hidden), by pinned
+   * question id or history entry id, so "Вернуть" restores them whole.
+   */
+  stash: Record<string, OpenQuestionData>;
+}
+
+export type LiveCallAction =
+  | { event: CallFeedEvent; type: "feed" }
+  | { type: "tick" }
+  | {
+      action: QuestionQuickAction;
+      questionId: string;
+      topicId: string;
+      type: "question";
+    }
+  | { entryId: string; topicId: string; type: "restore" }
+  | { topicId: string; type: "unpin" }
+  | { type: "toggle-transcript" }
+  | { type: "leave-final-check" }
+  | { type: "mic-continue" }
+  | { project: string; type: "finish-start" }
+  | { stage: number; type: "finish-stage" }
+  | { type: "finish-cancel" }
+  | { type: "agent-retrying" }
+  | { type: "agent-recovered" }
+  | { itemId: string; type: "reconnect-start" }
+  | { item: ContextItem; type: "reconnect-done" }
+  | { type: "audio-restored" }
+  | { type: "transcript-caught-up" };
+
+/** Mic panel timeout: the bar is full at 10 minutes. */
+export const MIC_TIMEOUT = 600;
+
+const NEW_QUESTION_STATUS = "Новый, только что";
+
+/* Time */
+
+function pad(value: number) {
+  return value.toString().padStart(2, "0");
+}
+
+/** "24:18" for the title bar. */
+export function formatCallTime(seconds: number) {
+  return `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)}`;
+}
+
+/** "6:48" for countdowns. */
+export function formatCountdown(seconds: number) {
+  return `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`;
+}
+
+/** "24:18" or "6:48" back to seconds. */
+export function parseTime(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+  const [minutes = 0, seconds = 0] = value.split(":").map(Number);
+  return minutes * 60 + seconds;
+}
+
+/** Wall clock of the demo call: it started at 12:00. */
+const START_MINUTES = 12 * 60;
+
+export function clockAt(elapsed: number) {
+  const minutes = START_MINUTES + Math.floor(elapsed / 60);
+  return `${Math.floor(minutes / 60)}:${pad(minutes % 60)}`;
+}
+
+function plural(count: number, one: string, few: string, many: string) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return one;
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return few;
+  }
+  return many;
+}
+
+/* Initial state */
+
+export function createLiveCall(data: CallScreenData): LiveCallState {
+  const { banner } = data.questions;
+  return {
+    agentRetryIn: parseTime(banner?.hint?.time),
+    data,
+    elapsed: parseTime(data.call.time) ?? 0,
+    micLeft: data.micReleased ? parseTime(data.micReleased.countdown) : null,
+    stash: {},
+  };
+}
+
+/** The call as it starts: the agent listens, the brief is being read. */
+export function startingCall() {
+  return createLiveCall(CALL_SCREENS.starting);
+}
+
+/* Questions */
+
+function openCount(topic: TopicData) {
+  return topic.questions.length + (topic.main ? 1 : 0) + (topic.pinned ? 1 : 0);
+}
+
+/** Anchors follow the topics: final check, current, previous, "Без темы". */
+function withAnchors(questions: QuestionsData): QuestionsData {
+  const anchors: TopicAnchorData[] = [];
+  const { current, finalCheck, noTopic, previous } = questions;
+
+  if (finalCheck) {
+    anchors.push({
+      active: true,
+      count: finalCheck.questions.length + 1,
+      countTone: "open",
+      id: FINAL_CHECK_TOPIC_ID,
+      label: finalCheck.title,
+    });
+  }
+  for (const topic of [current, previous]) {
+    if (topic) {
+      const count = openCount(topic);
+      anchors.push({
+        active: topic === current && !finalCheck,
+        count,
+        countTone: count > 0 ? "open" : "neutral",
+        id: topic.id,
+        label: topic.title,
+      });
+    }
+  }
+  // The final check leaves no room for "Без темы", as in Paper
+  if (noTopic && !finalCheck) {
+    anchors.push({
+      count: openCount(noTopic),
+      countTone: "neutral",
+      id: noTopic.id,
+      label: noTopic.title,
+    });
+  }
+  return { ...questions, anchors };
+}
+
+type TopicSlot = "current" | "previous" | "noTopic";
+const TOPIC_SLOTS: TopicSlot[] = ["current", "previous", "noTopic"];
+
+function mapTopic(
+  questions: QuestionsData,
+  topicId: string,
+  update: (topic: TopicData) => TopicData
+): QuestionsData {
+  const next = { ...questions };
+  for (const slot of TOPIC_SLOTS) {
+    const topic = next[slot];
+    if (topic?.id === topicId) {
+      next[slot] = update(topic);
+    }
+  }
+  return next;
+}
+
+function findTopic(questions: QuestionsData, topicId: string) {
+  return TOPIC_SLOTS.map((slot) => questions[slot]).find(
+    (topic) => topic?.id === topicId
+  );
+}
+
+function withoutQuestion(topic: TopicData, questionId: string): TopicData {
+  return {
+    ...topic,
+    questions: topic.questions.filter((question) => question.id !== questionId),
+  };
+}
+
+function addHistory(topic: TopicData, entry: HistoryEntry): TopicData {
+  const history = topic.history ?? { items: [] };
+  const items = [...history.items, entry];
+  return {
+    ...topic,
+    history: {
+      count: history.count === undefined ? undefined : items.length,
+      items,
+    },
+  };
+}
+
+function removeHistory(topic: TopicData, entryId: string): TopicData {
+  if (!topic.history) {
+    return topic;
+  }
+  const items = topic.history.items.filter((entry) => entry.id !== entryId);
+  return {
+    ...topic,
+    history: {
+      count: topic.history.count === undefined ? undefined : items.length,
+      items,
+    },
+  };
+}
+
+/** The main question as a plain row, when a newer one takes its place. */
+function demoteMain(topic: TopicData): TopicData {
+  if (!topic.main) {
+    return topic;
+  }
+  const { description, id, title } = topic.main;
+  return {
+    ...topic,
+    main: undefined,
+    questions: [
+      { description, id: id ?? `${topic.id}-main`, title },
+      ...topic.questions,
+    ],
+  };
+}
+
+const HISTORY_NOTES: Record<
+  "asked" | "hide",
+  Pick<HistoryEntry, "note" | "status">
+> = {
+  asked: { note: "Вы отметили, что спросили", status: "unanswered" },
+  hide: { note: "Вы скрыли", status: "hidden" },
+};
+
+function questionAction(
+  state: LiveCallState,
+  topicId: string,
+  questionId: string,
+  action: QuestionQuickAction
+): LiveCallState {
+  const { questions } = state.data;
+
+  if (topicId === FINAL_CHECK_TOPIC_ID) {
+    const { finalCheck } = questions;
+    if (!finalCheck || action === "pin") {
+      return state;
+    }
+    return withQuestions(state, {
+      ...questions,
+      finalCheck: {
+        ...finalCheck,
+        questions: finalCheck.questions.filter(
+          (item) => item.id !== questionId
+        ),
+      },
+    });
+  }
+
+  const topic = findTopic(questions, topicId);
+  const question = topic?.questions.find((item) => item.id === questionId);
+  if (!(topic && question)) {
+    return state;
+  }
+
+  if (action === "pin") {
+    let next = withoutQuestion(topic, questionId);
+    if (next.pinned) {
+      next = unpinTopic(next, state.stash);
+    }
+    next = {
+      ...next,
+      pinned: {
+        description: question.description,
+        id: question.id,
+        label: `Закреплён вами в ${clockAt(state.elapsed)}`,
+        title: question.title,
+      },
+    };
+    return {
+      ...withQuestions(
+        state,
+        mapTopic(questions, topicId, () => next)
+      ),
+      stash: { ...state.stash, [question.id]: question },
+    };
+  }
+
+  const entryId = `${action}-${question.id}`;
+  const entry: HistoryEntry = {
+    id: entryId,
+    question: question.title,
+    ...HISTORY_NOTES[action],
+  };
+  return {
+    ...withQuestions(
+      state,
+      mapTopic(questions, topicId, (current) =>
+        addHistory(withoutQuestion(current, questionId), entry)
+      )
+    ),
+    stash: { ...state.stash, [entryId]: question },
+  };
+}
+
+function unpinTopic(
+  topic: TopicData,
+  stash: LiveCallState["stash"]
+): TopicData {
+  if (!topic.pinned) {
+    return topic;
+  }
+  const { description, id, title } = topic.pinned;
+  const question = stash[id] ?? { description, id, title };
+  return {
+    ...topic,
+    pinned: undefined,
+    questions: [question, ...topic.questions],
+  };
+}
+
+function restoreQuestion(
+  state: LiveCallState,
+  topicId: string,
+  entryId: string
+): LiveCallState {
+  const { questions } = state.data;
+  const entry = findTopic(questions, topicId)?.history?.items.find(
+    (item) => item.id === entryId
+  );
+  if (!entry) {
+    return state;
+  }
+  const question: OpenQuestionData = state.stash[entryId] ?? {
+    description: entry.note ?? "",
+    id: entry.id,
+    title: entry.question,
+  };
+  return withQuestions(
+    state,
+    mapTopic(questions, topicId, (topic) => {
+      const next = removeHistory(topic, entryId);
+      return { ...next, questions: [question, ...next.questions] };
+    })
+  );
+}
+
+function withQuestions(
+  state: LiveCallState,
+  questions: QuestionsData
+): LiveCallState {
+  return {
+    ...state,
+    data: { ...state.data, questions: withAnchors(questions) },
+  };
+}
+
+/* Feed */
+
+function upsertTranscript(items: TranscriptItem[], item: TranscriptItem) {
+  const index = items.findIndex((existing) => existing.id === item.id);
+  if (index === -1) {
+    return [...items, item];
+  }
+  return items.map((existing) => (existing.id === item.id ? item : existing));
+}
+
+function upsertContext(items: ContextItem[], item: ContextItem) {
+  if (items.some((existing) => existing.id === item.id)) {
+    return items.map((existing) => (existing.id === item.id ? item : existing));
+  }
+  if (item.kind === "searching") {
+    return [item, ...items];
+  }
+  // Fresh findings go first, under what is still being searched
+  const firstFound = items.findIndex(
+    (existing) => existing.kind !== "searching"
+  );
+  const at = firstFound === -1 ? items.length : firstFound;
+  return [...items.slice(0, at), item, ...items.slice(at)];
+}
+
+/** Drops a question from every topic, before it shows up elsewhere. */
+function withoutQuestionAnywhere(
+  questions: QuestionsData,
+  questionId: string
+): QuestionsData {
+  const next = { ...questions };
+  for (const slot of TOPIC_SLOTS) {
+    const topic = next[slot];
+    if (topic) {
+      next[slot] = withoutQuestion(topic, questionId);
+    }
+  }
+  return next;
+}
+
+function applyFeed(state: LiveCallState, event: CallFeedEvent): LiveCallState {
+  const { data } = state;
+  const { questions } = data;
+
+  switch (event.type) {
+    case "transcript":
+      return {
+        ...state,
+        data: {
+          ...data,
+          transcript: {
+            ...data.transcript,
+            items: upsertTranscript(data.transcript.items, event.item),
+          },
+        },
+      };
+    case "context": {
+      const removed = new Set(event.remove);
+      let items = data.context.items.filter((item) => !removed.has(item.id));
+      if (event.item) {
+        items = upsertContext(items, event.item);
+      }
+      return {
+        ...state,
+        data: {
+          ...data,
+          context: {
+            description: event.description ?? data.context.description,
+            items,
+          },
+        },
+      };
+    }
+    case "topic": {
+      let { previous } = questions;
+      if (questions.current && questions.current.id !== event.topic.id) {
+        const demoted = demoteMain(unpinTopic(questions.current, state.stash));
+        const left = demoted.questions.length;
+        previous = {
+          ...demoted,
+          meta: event.previousRange
+            ? `${event.previousRange}, осталось ${left}`
+            : demoted.meta,
+        };
+      }
+      return withQuestions(state, {
+        ...questions,
+        current: event.topic,
+        empty: undefined,
+        previous,
+      });
+    }
+    case "question": {
+      const cleared = withoutQuestionAnywhere(questions, event.question.id);
+      return withQuestions(
+        state,
+        mapTopic(cleared, event.topicId, (topic) => ({
+          ...topic,
+          questions: [...topic.questions, event.question],
+        }))
+      );
+    }
+    case "main-question":
+      return withQuestions(
+        state,
+        mapTopic(questions, event.topicId, (topic) => ({
+          ...demoteMain(topic),
+          main: event.main,
+        }))
+      );
+    case "answered":
+      return withQuestions(
+        state,
+        mapTopic(questions, event.topicId, (topic) => {
+          const next = event.questionId
+            ? withoutQuestion(topic, event.questionId)
+            : topic;
+          return addHistory(next, event.entry);
+        })
+      );
+    case "final-check":
+      return withQuestions(state, {
+        ...questions,
+        current: questions.current
+          ? demoteMain(questions.current)
+          : questions.current,
+        finalCheck: event.finalCheck,
+      });
+    default:
+      return {
+        ...state,
+        data: {
+          ...data,
+          call: { ...data.call, endAction: "secondary" },
+          micReleased: CALL_SCREENS["mic-released"].micReleased,
+          questions: {
+            ...questions,
+            agent: { label: "тишина", state: "listening", tone: "muted" },
+          },
+        },
+        micLeft: parseTime(CALL_SCREENS["mic-released"].micReleased?.countdown),
+      };
+  }
+}
+
+/* Finishing */
+
+const SUMMARY_STEPS: Omit<FinishingStep, "state">[] = [
+  { id: "transcript", label: "Расшифровка дописана" },
+  { id: "summary", label: "Итоги и короткое резюме по темам" },
+  { id: "open", label: "Незакрытые вопросы" },
+  { id: "brief", label: "Что обновить в брифе и профилях" },
+];
+
+/** The finishing card after `stage` finished stages. */
+function finishingAt(
+  stage: number,
+  base: Pick<FinishingData, "description">
+): FinishingData {
+  return {
+    description: base.description,
+    progress: Math.round((stage / SUMMARY_STAGES) * 100),
+    steps: SUMMARY_STEPS.map((step, index) => {
+      let stepState: FinishingStep["state"] = "pending";
+      if (index < stage) {
+        stepState = "done";
+      } else if (index === stage) {
+        stepState = "active";
+      }
+      return { ...step, state: stepState };
+    }),
+    title: "Собираю итоги…",
+  };
+}
+
+function finishDescription(state: LiveCallState, project: string) {
+  const minutes = Math.max(1, Math.round(state.elapsed / 60));
+  const { current, previous } = state.data.questions;
+  const topics = [current, previous].filter(Boolean).length;
+  const parts = [
+    project,
+    `${minutes} ${plural(minutes, "минута", "минуты", "минут")}`,
+  ];
+  if (topics > 0) {
+    parts.push(`${topics} ${plural(topics, "тема", "темы", "тем")}`);
+  }
+  return `${parts.join(", ")}. Обычно это до минуты, окно можно закрыть.`;
+}
+
+/* Reducer */
+
+const LIVE_AGENT = { state: "listening" } as const;
+
+export function liveCallReducer(
+  state: LiveCallState,
+  action: LiveCallAction
+): LiveCallState {
+  const { data } = state;
+  const { questions } = data;
+
+  switch (action.type) {
+    case "feed":
+      return applyFeed(state, action.event);
+    case "tick":
+      return {
+        ...state,
+        agentRetryIn:
+          state.agentRetryIn === null
+            ? null
+            : Math.max(0, state.agentRetryIn - 1),
+        elapsed: data.finishing ? state.elapsed : state.elapsed + 1,
+        micLeft: state.micLeft === null ? null : Math.max(0, state.micLeft - 1),
+      };
+    case "question":
+      return questionAction(
+        state,
+        action.topicId,
+        action.questionId,
+        action.action
+      );
+    case "restore":
+      return restoreQuestion(state, action.topicId, action.entryId);
+    case "unpin":
+      return withQuestions(
+        state,
+        mapTopic(questions, action.topicId, (topic) =>
+          unpinTopic(topic, state.stash)
+        )
+      );
+    case "toggle-transcript":
+      return {
+        ...state,
+        data: {
+          ...data,
+          transcript: {
+            ...data.transcript,
+            collapsed: !data.transcript.collapsed,
+          },
+        },
+      };
+    case "leave-final-check":
+      return withQuestions(state, { ...questions, finalCheck: undefined });
+    case "mic-continue":
+      return {
+        ...state,
+        data: {
+          ...data,
+          call: { ...data.call, endAction: "primary" },
+          micReleased: undefined,
+          questions: { ...questions, agent: LIVE_AGENT },
+        },
+        micLeft: null,
+      };
+    case "finish-start":
+      return {
+        ...state,
+        data: {
+          ...data,
+          call: { ...data.call, endAction: "hidden", recording: "stopped" },
+          finishing: finishingAt(1, {
+            description: finishDescription(state, action.project),
+          }),
+          micReleased: undefined,
+        },
+        micLeft: null,
+      };
+    case "finish-stage":
+      return data.finishing
+        ? {
+            ...state,
+            data: {
+              ...data,
+              finishing: {
+                ...finishingAt(action.stage, data.finishing),
+                cancelDisabled: action.stage >= SUMMARY_STAGES,
+              },
+            },
+          }
+        : state;
+    case "finish-cancel":
+      return {
+        ...state,
+        data: {
+          ...data,
+          call: { ...data.call, endAction: "primary", recording: "live" },
+          finishing: undefined,
+          questions: { ...questions, agent: LIVE_AGENT },
+        },
+      };
+    case "agent-retrying":
+      return {
+        ...state,
+        agentRetryIn: null,
+        data: {
+          ...data,
+          questions: {
+            ...questions,
+            agent: { label: "переподключаюсь", state: "thinking" },
+          },
+        },
+      };
+    case "agent-recovered":
+      return withQuestions(state, {
+        ...questions,
+        agent: LIVE_AGENT,
+        banner: undefined,
+        current: questions.current?.main
+          ? {
+              ...questions.current,
+              main: { ...questions.current.main, status: NEW_QUESTION_STATUS },
+            }
+          : questions.current,
+        frozen: false,
+      });
+    case "reconnect-start":
+      return {
+        ...state,
+        data: {
+          ...data,
+          context: {
+            ...data.context,
+            items: data.context.items.map((item) =>
+              item.id === action.itemId && item.kind === "unavailable"
+                ? { ...item, pending: true }
+                : item
+            ),
+          },
+        },
+      };
+    case "reconnect-done":
+      return {
+        ...state,
+        data: {
+          ...data,
+          context: {
+            ...data.context,
+            items: data.context.items.map((item) =>
+              item.id === action.item.id ? action.item : item
+            ),
+          },
+        },
+      };
+    case "audio-restored":
+      return {
+        ...withQuestions(state, {
+          ...questions,
+          agent: LIVE_AGENT,
+          banner: undefined,
+          current: questions.current?.main
+            ? {
+                ...questions.current,
+                main: {
+                  ...questions.current.main,
+                  status: NEW_QUESTION_STATUS,
+                },
+              }
+            : questions.current,
+        }),
+      };
+    default:
+      return {
+        ...state,
+        data: {
+          ...data,
+          questions: { ...questions, agent: LIVE_AGENT },
+          transcript: {
+            ...data.transcript,
+            items: data.transcript.items.map((item) =>
+              item.kind === "client" && item.live === "transcribing"
+                ? { ...item, live: "speaking" }
+                : item
+            ),
+            notice: undefined,
+          },
+        },
+      };
+  }
+}
+
+/** Props of <CallScreen>: the state plus the ticking numbers. */
+export function toScreenData(state: LiveCallState): CallScreenData {
+  const { agentRetryIn, data, elapsed, micLeft } = state;
+  const { banner } = data.questions;
+
+  return {
+    ...data,
+    call: { ...data.call, time: formatCallTime(elapsed) },
+    micReleased:
+      data.micReleased && micLeft !== null
+        ? {
+            ...data.micReleased,
+            countdown: formatCountdown(micLeft),
+            progress: Math.round((micLeft / MIC_TIMEOUT) * 100),
+          }
+        : data.micReleased,
+    questions:
+      banner?.hint?.time && agentRetryIn !== null
+        ? {
+            ...data.questions,
+            banner: {
+              ...banner,
+              hint: { ...banner.hint, time: formatCountdown(agentRetryIn) },
+            },
+          }
+        : data.questions,
+  };
+}

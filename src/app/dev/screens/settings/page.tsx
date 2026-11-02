@@ -1,0 +1,135 @@
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import type { ReactNode } from "react";
+
+import { AgentSettingsScreen } from "@/features/settings/screens/agent-settings";
+import { AudioSettingsScreen } from "@/features/settings/screens/audio-settings";
+import { GeneralSettingsScreen } from "@/features/settings/screens/general-settings";
+import { IntegrationsSettingsScreen } from "@/features/settings/screens/integrations-settings";
+import { PrivacySettingsScreen } from "@/features/settings/screens/privacy-settings";
+import { WidgetSettingsScreen } from "@/features/settings/screens/widget-settings";
+
+import { ScreenFlow, ScreenFrame } from "../_components/screen-frame";
+
+export const metadata: Metadata = {
+  title: "Grill, настройки",
+};
+
+// Paper artboards are 1440 wide main windows
+const WIDTH = 1440;
+const HEIGHT = 900;
+
+interface SettingsFrame {
+  /** Artboard height; "auto" for the expanded scroll. */
+  height: number | "auto";
+  id: string;
+  note: string;
+  render: (className: string) => ReactNode;
+  title: string;
+}
+
+const FRAMES: SettingsFrame[] = [
+  {
+    height: HEIGHT,
+    id: "general",
+    note: "Вход из пункта «Настройки» внизу боковой панели: она превращается в список разделов, «К проектам» возвращает на главную. Всё сохраняется сразу, кнопки «Сохранить» нет. «Изменить» открывает системный выбор папки, сохранённые звонки переносятся с прогрессом. «Тёмная» и «Как в системе» пока неактивны. Строка «Открывать при входе в систему» кликается целиком.",
+    render: (className) => <GeneralSettingsScreen className={className} />,
+    title: "16 Настройки — общие",
+  },
+  {
+    height: HEIGHT,
+    id: "audio",
+    note: "Полоски уровня живые, пока открыт раздел: оранжевая, когда сигнал есть, серая на тишине. «Проверить звук» записывает 10 секунд с обоих каналов и показывает расшифровку под строкой. Модель выбирается радио, «Обновить» и «Скачать» показывают прогресс прямо в строке. Во время звонка выбор устройств и модели неактивен.",
+    render: (className) => <AudioSettingsScreen className={className} />,
+    title: "17 Настройки — звук и распознавание",
+  },
+  {
+    height: HEIGHT,
+    id: "agent",
+    note: "Статус проверяется при открытии раздела и перед каждым звонком, «Проверить снова» показывает спиннер в кнопке. Лимит подписки читается из CLI: когда остаётся меньше одного звонка, полоска и текст становятся красными. Изменения частоты и количества вопросов применяются к следующему звонку.",
+    render: (className) => <AgentSettingsScreen className={className} />,
+    title: "18 Настройки — агент",
+  },
+  {
+    height: "auto",
+    id: "widget",
+    note: "Состояние записи сочетания: клик по полю «Показать или скрыть оверлей» → поле в фокусе, нажатые модификаторы появляются сразу, курсор ждёт основную клавишу. Esc отменяет запись, Backspace на пустом поле удаляет сочетание. «Сбросить все» возвращает сочетания по умолчанию сразу, с тостом «Вернуть». Высота по контенту, это развёрнутый скролл.",
+    render: (className) => (
+      <WidgetSettingsScreen className={className} recording="toggle-overlay" />
+    ),
+    title: "19 Настройки — виджет и клавиши, запись сочетания",
+  },
+  {
+    height: HEIGHT,
+    id: "privacy",
+    note: "Блок «Что уходит с компьютера» без действий: он объясняет, а не настраивает. Аудио: 7, 30, 90 дней или «Не удалять»; расшифровки: через 3 или 6 месяцев, через год или «Не удалять». «Экспортировать» открывает выбор папки и галочку «Включить аудио». «Очистить всё» ведёт в диалог с подтверждением вводом слова «удалить».",
+    render: (className) => <PrivacySettingsScreen className={className} />,
+    title: "20 Настройки — приватность и хранение",
+  },
+  {
+    height: HEIGHT,
+    id: "audio-mic-disabled",
+    note: "Выбранный микрофон пропал из системы вне звонка. Grill не переключается молча: ждёт возвращения наушников или явного выбора. Красная точка у раздела и красный статус внизу боковой панели видны из любого экрана. «Взять микрофон MacBook» → поле становится обычным, полоска уровня оживает, плашка и точки исчезают.",
+    render: (className) => (
+      <AudioSettingsScreen className={className} microphone="disabled" />
+    ),
+    title: "21 Настройки — звук, микрофон отключён",
+  },
+  {
+    height: HEIGHT,
+    id: "integrations",
+    note: "Все состояния сразу: GitHub подключён, Outline сломан, ClickUp работает только на чтение. Красная точка у «Интеграции» появляется, когда хоть один сервис не работает. «Обновить ключ» открывает экран ключа с заполненным адресом, «Изменить доступ» у GitHub ведёт на github.com. Claude Code здесь только для справки: сервисы передаются ему через MCP.",
+    render: (className) => <IntegrationsSettingsScreen className={className} />,
+    title: "07 Настройки, Интеграции — разные состояния",
+  },
+  {
+    height: HEIGHT,
+    id: "integrations-disconnect",
+    note: "«Отключить» у любого сервиса → диалог подтверждения с последствиями для проектов.",
+    render: (className) => (
+      <IntegrationsSettingsScreen
+        className={className}
+        state="confirm-disconnect"
+      />
+    ),
+    title: "07 Настройки, Интеграции — отключить GitHub",
+  },
+  {
+    height: HEIGHT,
+    id: "integrations-github-off",
+    note: "После отключения тост «Вернуть» живёт 8 секунд: токен ещё не удалён и подключение восстанавливается без нового входа. Не подключённый сервис: серый статус и пилюля «Подключить», ведёт на тот же подэкран, что в онбординге.",
+    render: (className) => (
+      <IntegrationsSettingsScreen
+        className={className}
+        state="github-disconnected"
+      />
+    ),
+    title: "07 Настройки, Интеграции — GitHub не подключён",
+  },
+];
+
+const SCREENS = FRAMES.map(({ id, title }) => ({ id, title }));
+
+// Screen catalog for development. Not shipped in the production build.
+export default function SettingsScreensPage() {
+  if (process.env.NODE_ENV === "production") {
+    notFound();
+  }
+
+  return (
+    <ScreenFlow screens={SCREENS} title="Настройки">
+      {FRAMES.map((frame) => (
+        <ScreenFrame
+          height={frame.height}
+          id={frame.id}
+          key={frame.id}
+          note={frame.note}
+          title={frame.title}
+          width={WIDTH}
+        >
+          {frame.render(frame.height === "auto" ? "w-full" : "size-full")}
+        </ScreenFrame>
+      ))}
+    </ScreenFlow>
+  );
+}

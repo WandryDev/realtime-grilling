@@ -94,7 +94,18 @@ function RecordingIndicator({
 /*
  * Agent status next to the transcript: three fading orange dots for
  * "слушаю", a spinner for "думаю над вопросами". Muted 13px text.
+ * `tone` recolors the dots when the agent can't work as usual (Paper
+ * "Звонок", 05 and 07): `muted` gray for "тишина" or "вопросы на паузе",
+ * `destructive` red for "слышу только вас".
  */
+const AGENT_STATUS_DOT_TONES = {
+  accent: "*:bg-accent",
+  muted: "*:bg-subtle",
+  destructive: "*:bg-contradiction",
+} as const
+
+type AgentStatusTone = keyof typeof AGENT_STATUS_DOT_TONES
+
 const AGENT_STATUS_LABELS = {
   listening: "слушаю",
   thinking: "думаю над вопросами",
@@ -105,13 +116,19 @@ type AgentState = keyof typeof AGENT_STATUS_LABELS
 function AgentStatus({
   className,
   state,
+  tone = "accent",
   children,
   ...props
-}: React.ComponentProps<"div"> & { state: AgentState }) {
+}: React.ComponentProps<"div"> & {
+  state: AgentState
+  /** Dot color of the listening state. */
+  tone?: AgentStatusTone
+}) {
   return (
     <div
       data-slot="agent-status"
       data-state={state}
+      data-tone={tone}
       role="status"
       className={cn(
         "inline-flex w-fit shrink-0 items-center gap-2 text-sm whitespace-nowrap text-muted-foreground",
@@ -123,7 +140,10 @@ function AgentStatus({
         <span
           aria-hidden
           data-slot="agent-status-dots"
-          className="flex gap-[3px] *:size-1 *:rounded-full *:bg-accent"
+          className={cn(
+            "flex gap-[3px] *:size-1 *:rounded-full",
+            AGENT_STATUS_DOT_TONES[tone]
+          )}
         >
           <span />
           <span className="opacity-50" />
@@ -143,4 +163,4 @@ function AgentStatus({
 }
 
 export { AgentStatus, RecordingIndicator, recordingIndicatorVariants }
-export type { AgentState, RecordingIndicatorProps }
+export type { AgentState, AgentStatusTone, RecordingIndicatorProps }

@@ -1,19 +1,17 @@
-import { Button } from "@/components/ui/button";
+import type { Metadata } from "next";
+import { Suspense } from "react";
 
+import { HomePage } from "@/features/projects/pages/home-page";
+
+export const metadata: Metadata = {
+  title: "Grill",
+};
+
+/** Home: the projects, or onboarding until it is done. */
 export default function Page() {
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
-        <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <Button className="mt-2">Button</Button>
-        </div>
-        <div className="text-muted-foreground font-mono text-xs">
-          (Press <kbd>d</kbd> to toggle dark mode)
-        </div>
-      </div>
-    </div>
+    <Suspense>
+      <HomePage />
+    </Suspense>
   );
 }
