@@ -35,6 +35,16 @@ tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync
 # Microphone level (CoreAudio / WASAPI).
 cpal = "0.18"
 which = "8"
+# Call recording (specs/call-recording, design.md decisions 7–12): ring buffer
+# between the capture callback and the recorder, resampling to 16 kHz, AEC3,
+# Ogg Opus files.
+rtrb = "0.4"
+rubato = "0.16"
+sonora = "0.2"
+opus = "0.4"
+ogg = "0.9"
+# Silero VAD through whisper.cpp (specs/speech-segmentation, decision 16); CPU only.
+whisper-rs = "0.16"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
