@@ -9,7 +9,13 @@ import {
   type SegmentationStatus,
 } from "@/bindings";
 import { uuidv7 } from "@/data/services/mock-database";
-import { BackendError, call, listen } from "@/effect/tauri";
+import {
+  BackendError,
+  call,
+  currentThenChanges,
+  listen,
+  listenFromCurrent,
+} from "@/effect/tauri";
 
 /*
  * The recorder and the microphone watch (audio-capture design.md, 19):
@@ -83,19 +89,31 @@ function sineLevels(tick: number): RecordingLevels {
 
 type Listener<T> = (value: T) => void;
 
+/** Adds `listener` to `listeners` until the scope closes. */
+function mockSubscription<T>(
+  listeners: Set<Listener<T>>,
+  listener: Listener<T>
+) {
+  return Effect.acquireRelease(
+    Effect.sync(() => listeners.add(listener)),
+    () => Effect.sync(() => listeners.delete(listener))
+  );
+}
+
 /** Emits every value given to `listeners` while the stream runs. */
 function mockStream<T>(listeners: Set<Listener<T>>) {
   return Stream.callback<T, BackendError>((queue) =>
-    Effect.acquireRelease(
-      Effect.sync(() => {
-        const listener: Listener<T> = (value) => {
-          Queue.offerUnsafe(queue, value);
-        };
-        listeners.add(listener);
-        return listener;
-      }),
-      (listener) => Effect.sync(() => listeners.delete(listener))
-    )
+    mockSubscription(listeners, (value) => {
+      Queue.offerUnsafe(queue, value);
+    })
+  );
+}
+
+/** `current()` now, then every value given to `listeners`. */
+function mockWatch<T>(listeners: Set<Listener<T>>, current: () => T) {
+  return currentThenChanges<T, BackendError>(
+    (emit) => mockSubscription(listeners, emit),
+    Effect.sync(current)
   );
 }
 
@@ -147,12 +165,19 @@ export class RecordingBackend extends Context.Service<
     readonly status: Effect.Effect<RecordingStatus, BackendError>;
     /** Every change of the status: start, stop, a channel's state. */
     readonly changes: Stream.Stream<RecordingStatus, BackendError>;
-    /** ~10 Hz while recording and the window is visible. */
+    /**
+     * The status now, then its changes; a change while the status is read
+     * is not lost and is not overridden by an older read.
+     */
+    readonly watchStatus: Stream.Stream<RecordingStatus, BackendError>;
+    /** ~10 Hz while recording. */
     readonly levels: Stream.Stream<RecordingLevels, BackendError>;
     /** Every change of who holds the microphone. */
     readonly micActivity: Stream.Stream<MicActivity, BackendError>;
     /** Who holds the microphone now. */
     readonly micActivityNow: Effect.Effect<MicActivity, BackendError>;
+    /** Who holds the microphone now, then every change (as `watchStatus`). */
+    readonly watchMicActivity: Stream.Stream<MicActivity, BackendError>;
   }
 >()("grill/features/recording/RecordingBackend") {
   static readonly layerTauri = Layer.succeed(RecordingBackend, {
@@ -170,6 +195,18 @@ export class RecordingBackend extends Context.Service<
       Effect.map(fromBindings)
     ),
     stop: (id: string) => Effect.asVoid(call(() => commands.recordingStop(id))),
+    watchMicActivity: listenFromCurrent(
+      events.micActivityChanged,
+      call(() => commands.micActivityGet()).pipe(
+        Effect.map(fromBindingsActivity)
+      ),
+      fromBindingsActivity
+    ),
+    watchStatus: listenFromCurrent(
+      events.recordingChanged,
+      call(() => commands.recordingStatus()).pipe(Effect.map(fromBindings)),
+      fromBindings
+    ),
   });
 
   static readonly layerMock = Layer.succeed(RecordingBackend, {
@@ -211,6 +248,8 @@ export class RecordingBackend extends Context.Service<
         }
         return Effect.void;
       }),
+    watchMicActivity: mockWatch(mock.activityListeners, () => mock.activity),
+    watchStatus: mockWatch(mock.statusListeners, () => mock.status()),
   });
 }
 

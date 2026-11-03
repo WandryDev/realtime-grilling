@@ -105,6 +105,11 @@ export function useCallSession() {
   return callSessionStore.use();
 }
 
+/** The session as this window has it now (outside React). */
+export function currentCallSession(): CallSession {
+  return callSessionStore.get();
+}
+
 export function startCall(input: {
   participants: string[];
   projectId: string | null;
@@ -136,17 +141,15 @@ export function finishCall(): CallSession {
 /**
  * "Отменить завершение": back to the live call. Its recording was stopped
  * by "Завершить": returns the session as it was, so the caller can start a
- * new one (`attachRecording`).
+ * new one (`attachRecording`). The stopped id stays until then: it marks
+ * the call as a recorded one for another "Отменить завершение", and
+ * stopping it again does nothing.
  */
 export function resumeCall(): CallSession {
   const before = callSessionStore.get();
-  setSession((session) => {
-    if (session.status !== "finishing") {
-      return session;
-    }
-    const { recordingId: _stopped, ...rest } = session;
-    return { ...rest, status: "live" };
-  });
+  setSession((session) =>
+    session.status === "finishing" ? { ...session, status: "live" } : session
+  );
   return before;
 }
 

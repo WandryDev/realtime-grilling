@@ -9,6 +9,7 @@ import { useProject } from "@/data/projects";
 import { autoEndSeconds, useSettings } from "@/data/settings";
 import { inTauri } from "@/effect/runtime";
 import {
+  adoptRunningRecording,
   finishRecordedCall,
   releaseMicDemo,
   resumeRecordedCall,
@@ -162,7 +163,9 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const finishing = Boolean(state.data.finishing);
   const projectName = project?.name ?? state.data.call.project;
 
-  // Opened without a call in progress: start the demo call
+  // Opened without a call in progress: start the demo call. Either way the
+  // recording running now is the call's, also one this window never heard
+  // of (it opened before the widget's session reached it, or reloaded).
   const sessionChecked = useRef<boolean>(false);
   useEffect(() => {
     if (sessionChecked.current) {
@@ -172,6 +175,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     if (session.status !== "live") {
       startCall({ participants: [], projectId: DEMO_PROJECT_ID });
     }
+    adoptRunningRecording();
   }, [session.status]);
 
   // The clock: call time and countdowns

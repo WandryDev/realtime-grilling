@@ -3,7 +3,13 @@
 import { Effect, Stream } from "effect";
 import { useSyncExternalStore } from "react";
 
-import { attachRecording, finishCall, resumeCall } from "@/data/call-session";
+import { toast } from "@/components/ui/toast";
+import {
+  attachRecording,
+  currentCallSession,
+  finishCall,
+  resumeCall,
+} from "@/data/call-session";
 import { appRuntime, runCancelable } from "@/effect/runtime";
 import type { BackendError } from "@/effect/tauri";
 
@@ -56,11 +62,34 @@ export function beginRecording(): Promise<RecordingStart> {
   );
 }
 
-/** Stops the recording `id`; one already gone is fine. */
+/**
+ * Stops the recording `id`; one already gone (`NotFound`) is fine. Any
+ * other failure leaves it recording: a toast says so.
+ */
 export function stopRecording(id: string): Promise<void> {
   return appRuntime.runPromise(
     RecordingBackend.use((recorder) => recorder.stop(id)).pipe(
-      Effect.catch(() => Effect.void)
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          if (error.kind !== "NotFound") {
+            toast.add({
+              description: error.message,
+              title: "Запись не остановилась",
+              type: "error",
+            });
+          }
+        })
+      )
+    )
+  );
+}
+
+/** The id of the recording running now, null when none (or unknown). */
+function runningRecordingId(): Promise<string | null> {
+  return appRuntime.runPromise(
+    RecordingBackend.use((recorder) => recorder.status).pipe(
+      Effect.map((status) => status.id),
+      Effect.catch(() => Effect.succeed(null))
     )
   );
 }
@@ -133,17 +162,12 @@ function useSharedFeed<T>(feed: SharedFeed<T>): T {
 const micAppFeed = sharedFeed<string | null>(null, (set) =>
   runCancelable(
     RecordingBackend.use((recorder) =>
-      Stream.runForEach(
-        Stream.concat(
-          Stream.fromEffect(recorder.micActivityNow),
-          recorder.micActivity
-        ),
-        (activity) =>
-          Effect.sync(() => {
-            if (activity.app) {
-              set(activity.app);
-            }
-          })
+      Stream.runForEach(recorder.watchMicActivity, (activity) =>
+        Effect.sync(() => {
+          if (activity.app) {
+            set(activity.app);
+          }
+        })
       )
     ).pipe(Effect.catch(() => Effect.void))
   )
@@ -205,10 +229,7 @@ const signalFeed = sharedFeed<RecordingSignal>(NO_SIGNAL, (set) => {
   };
   return runCancelable(
     RecordingBackend.use((recorder) => {
-      const statuses = Stream.concat(
-        Stream.fromEffect(recorder.status),
-        recorder.changes
-      ).pipe(
+      const statuses = recorder.watchStatus.pipe(
         Stream.map((status) => () => {
           recording = status.id !== null;
           update({
@@ -242,25 +263,108 @@ export function useRecordingSignal(): RecordingSignal {
 
 /* ------------------------------------------------------- Call session */
 
-/** "Завершить": the call goes to its summary and its recording stops. */
-export function finishRecordedCall() {
-  const { recordingId } = finishCall();
-  if (recordingId !== undefined) {
-    stopRecording(recordingId);
+/*
+ * The call and its recording. The session changes at once (the screens
+ * follow it); the recorder follows on a queue, one operation at a time,
+ * each looking at the session as it is when it runs. So "Завершить" while
+ * "Отменить завершение" is still starting the recording stops what that
+ * start gives, and a resume after that starts a new one.
+ */
+
+let recorderQueue: Promise<void> = Promise.resolve();
+
+function serially(operation: () => Promise<void>): Promise<void> {
+  const next = recorderQueue.then(operation);
+  recorderQueue = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * A restart that failed, said the way the start widget says it; the call
+ * goes on without a recording.
+ */
+function showRestartFailure(failure: Extract<RecordingStart, { ok: false }>) {
+  if (failure.reason === "noAccess") {
+    toast.add({
+      description:
+        "Звонок идёт без записи. Разрешите Grill доступ к микрофону в системных настройках.",
+      title: "Нет доступа к микрофону",
+      type: "error",
+    });
+    return;
   }
+  toast.add({
+    description: failure.message,
+    title: "Запись не возобновилась",
+    type: "error",
+  });
+}
+
+/**
+ * "Завершить": the call goes to its summary and its recording stops. The
+ * recording the session doesn't know of (a window that opened the call
+ * before it heard of the recording) stops too: one call, one recording.
+ */
+export function finishRecordedCall(): Promise<void> {
+  const { recordingId } = finishCall();
+  return serially(async () => {
+    if (currentCallSession().status === "live") {
+      // Resumed again meanwhile: the recording goes on.
+      return;
+    }
+    if (recordingId !== undefined) {
+      await stopRecording(recordingId);
+    }
+    const running = await runningRecordingId();
+    if (running !== null && running !== recordingId) {
+      await stopRecording(running);
+    }
+  });
 }
 
 /**
  * "Отменить завершение": the call is live again; a recorded one records on
- * into a new recording (the stopped one stays as it is).
+ * into a new recording (the stopped one stays as it is). A failed start
+ * leaves the call live without a recording and says why.
  */
-export async function resumeRecordedCall() {
+export function resumeRecordedCall(): Promise<void> {
   const { recordingId, status } = resumeCall();
   if (status !== "finishing" || recordingId === undefined) {
-    return;
+    return Promise.resolve();
   }
-  const started = await beginRecording();
-  if (started.ok) {
-    attachRecording(started.id);
-  }
+  return serially(async () => {
+    if (currentCallSession().status !== "live") {
+      return;
+    }
+    const started = await beginRecording();
+    if (!started.ok) {
+      showRestartFailure(started);
+      return;
+    }
+    if (currentCallSession().status === "live") {
+      attachRecording(started.id);
+    } else {
+      // "Завершить" came while it started.
+      await stopRecording(started.id);
+    }
+  });
+}
+
+/**
+ * A window that opens a live call: the recording running now is the
+ * call's, also when this window never heard of it (opened before the
+ * widget's session reached it, or reloaded).
+ */
+export function adoptRunningRecording(): Promise<void> {
+  return serially(async () => {
+    const running = await runningRecordingId();
+    const session = currentCallSession();
+    if (
+      running !== null &&
+      session.status === "live" &&
+      session.recordingId !== running
+    ) {
+      attachRecording(running);
+    }
+  });
 }

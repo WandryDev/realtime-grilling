@@ -5,15 +5,17 @@ import {
   listen as tauriListen,
   type UnlistenFn,
 } from "@tauri-apps/api/event";
-import { Effect, Option, Queue, Schema, Stream } from "effect";
+import { Effect, Option, Queue, Schema, type Scope, Stream } from "effect";
 
 /*
  * Bridge from the Tauri IPC to Effect. Every `layerTauri` goes through
- * these two functions:
+ * these functions:
  *
  * - `call` turns a command into an `Effect` that fails with `BackendError`;
  * - `listen` turns an event into a `Stream` that drops the listener when
- *   the stream stops (completion, failure or interruption).
+ *   the stream stops (completion, failure or interruption);
+ * - `listenFromCurrent` is a state and its change event as one stream: the
+ *   state now, then every change, none lost in between.
  *
  * Both accept the wrappers tauri-specta generates in `src/bindings.ts`
  * (`commands.projectsList()`, `events.dataChanged`) as well as plain
@@ -113,6 +115,24 @@ export interface EventSource<T> {
   listen: (handler: EventCallback<T>) => Promise<UnlistenFn>;
 }
 
+/** Registers `emit` for `event` until the scope closes. */
+function subscribe<T>(
+  event: EventName | EventSource<T>,
+  emit: (payload: T) => void
+): Effect.Effect<UnlistenFn, BackendError, Scope.Scope> {
+  const handler: EventCallback<T> = (message) => emit(message.payload);
+  return Effect.acquireRelease(
+    Effect.tryPromise({
+      catch: toBackendError,
+      try: () =>
+        typeof event === "string"
+          ? tauriListen<T>(event, handler)
+          : event.listen(handler),
+    }),
+    (unlisten) => Effect.sync(unlisten)
+  );
+}
+
 /**
  * Subscribes to an event; the stream emits its payloads. The listener is
  * registered when the stream starts and removed in its finalizer, so an
@@ -121,21 +141,49 @@ export interface EventSource<T> {
 export function listen<T>(
   event: EventName | EventSource<T>
 ): Stream.Stream<T, BackendError> {
-  const register = (handler: EventCallback<T>) =>
-    typeof event === "string"
-      ? tauriListen<T>(event, handler)
-      : event.listen(handler);
-
   return Stream.callback<T, BackendError>((queue) =>
-    Effect.acquireRelease(
-      Effect.tryPromise({
-        catch: toBackendError,
-        try: () =>
-          register((message) => {
-            Queue.offerUnsafe(queue, message.payload);
-          }),
-      }),
-      (unlisten) => Effect.sync(unlisten)
-    )
+    subscribe(event, (payload) => {
+      Queue.offerUnsafe(queue, payload);
+    })
+  );
+}
+
+/**
+ * A state and its changes as one stream. `subscribe` starts listening
+ * first, then `current` is read and emitted, so a change between the two
+ * is never lost. A change that arrives while `current` is read is at least
+ * as new as the read and goes out instead of it: a stale read never
+ * overrides an event.
+ */
+export function currentThenChanges<T, E>(
+  subscribeTo: (
+    emit: (value: T) => void
+  ) => Effect.Effect<unknown, E, Scope.Scope>,
+  current: Effect.Effect<T, E>
+): Stream.Stream<T, E> {
+  return Stream.callback<T, E>((queue) =>
+    Effect.gen(function* () {
+      let changed = false;
+      yield* subscribeTo((value) => {
+        changed = true;
+        Queue.offerUnsafe(queue, value);
+      });
+      const now = yield* current;
+      if (!changed) {
+        Queue.offerUnsafe(queue, now);
+      }
+    })
+  );
+}
+
+/** `currentThenChanges` over an event: the state now, then the event. */
+export function listenFromCurrent<T, A = T>(
+  event: EventName | EventSource<A>,
+  current: Effect.Effect<T, BackendError>,
+  fromEvent: (payload: A) => T
+): Stream.Stream<T, BackendError> {
+  return currentThenChanges<T, BackendError>(
+    (emit) => subscribe<A>(event, (payload) => emit(fromEvent(payload))),
+    current
   );
 }
