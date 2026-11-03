@@ -10,6 +10,11 @@ pub mod json;
 pub mod people;
 pub mod projects;
 pub mod questions;
+#[allow(
+    dead_code,
+    reason = "create / finish / delete are for the RecordingManager (audio-capture task 4.5)"
+)]
+pub mod recordings;
 pub mod settings;
 pub mod task_cards;
 pub mod topics;
@@ -28,6 +33,7 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 use crate::{
     error::{CommandError, CommandResult},
     events::{DataChanged, EventSink},
+    recording::store::LocalStore,
 };
 
 pub const DATABASE_FILE: &str = "grill.db";
@@ -35,7 +41,10 @@ pub const DATABASE_FILE: &str = "grill.db";
 /// How many `grill.db.bak-v<N>` copies to keep.
 const BACKUPS_TO_KEEP: usize = 2;
 
-const MIGRATION_LIST: &[M<'static>] = &[M::up(include_str!("../../migrations/0001_init.sql"))];
+const MIGRATION_LIST: &[M<'static>] = &[
+    M::up(include_str!("../../migrations/0001_init.sql")),
+    M::up(include_str!("../../migrations/0002_recordings.sql")),
+];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
 
@@ -53,14 +62,21 @@ pub struct Storage {
     db: RwLock<Result<Db, String>>,
     /// Where `grill.db` lives; `None` when the app has no data folder.
     dir: Option<PathBuf>,
+    /// The recordings' files next to the database; `None` without a data folder.
+    recordings: Option<Arc<LocalStore>>,
 }
 
 impl Storage {
     /// Opens `<dir>/grill.db`, migrating it to [`SCHEMA_VERSION`].
+    ///
+    /// Then tidies the recordings: rows a crash left `recording` become
+    /// `interrupted`, folders without a row are removed.
     pub fn open_in(dir: &Path) -> Self {
+        let recordings = Arc::new(LocalStore::new(dir));
         Self {
-            db: RwLock::new(open_dir(dir)),
+            db: RwLock::new(open_dir(dir, &recordings)),
             dir: Some(dir.to_owned()),
+            recordings: Some(recordings),
         }
     }
 
@@ -68,6 +84,7 @@ impl Storage {
         Self {
             db: RwLock::new(Err(message.into())),
             dir: None,
+            recordings: None,
         }
     }
 
@@ -76,6 +93,7 @@ impl Storage {
         Self {
             db: RwLock::new(result.map(|connection| Arc::new(Mutex::new(connection)))),
             dir: None,
+            recordings: None,
         }
     }
 
@@ -105,10 +123,10 @@ impl Storage {
         if self.db().is_ok() {
             return Ok(());
         }
-        let Some(dir) = self.dir.clone() else {
+        let (Some(dir), Some(recordings)) = (self.dir.clone(), self.recordings.clone()) else {
             return self.db().map(|_| ());
         };
-        let opened = tauri::async_runtime::spawn_blocking(move || open_dir(&dir))
+        let opened = tauri::async_runtime::spawn_blocking(move || open_dir(&dir, &recordings))
             .await
             .map_err(|error| CommandError::storage(error.to_string()))?;
         let mut state = self
@@ -157,6 +175,35 @@ impl Storage {
         Ok(value)
     }
 
+    /// The store of the recordings' files, shared with the recorder so a
+    /// sweep never removes a recording being written. `None` without a data
+    /// folder.
+    #[allow(
+        dead_code,
+        reason = "for the RecordingManager (audio-capture task 4.5)"
+    )]
+    pub fn recording_store(&self) -> Option<Arc<LocalStore>> {
+        self.recordings.clone()
+    }
+
+    /// Removes the files of recordings that no longer have a row: call it
+    /// after deleting a call or a project. A failure is only logged: the
+    /// next start sweeps again.
+    pub async fn sweep_recordings(&self) {
+        let (Ok(db), Some(store)) = (self.db(), self.recordings.clone()) else {
+            return;
+        };
+        let swept = tauri::async_runtime::spawn_blocking(move || {
+            recordings::sweep(&lock(&db), store.as_ref())
+        })
+        .await;
+        match swept {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => eprintln!("grill: recordings sweep failed: {error}"),
+            Err(error) => eprintln!("grill: recordings sweep failed: {error}"),
+        }
+    }
+
     /// Synchronous read for app setup, before the event loop runs.
     pub fn read_now<T>(
         &self,
@@ -167,12 +214,26 @@ impl Storage {
     }
 }
 
-/// Opens `<dir>/grill.db`, creating the folder first.
-fn open_dir(dir: &Path) -> Result<Db, String> {
-    fs::create_dir_all(dir)
+/// Opens `<dir>/grill.db`, creating the folder first, and tidies the
+/// recordings.
+fn open_dir(dir: &Path, recordings: &LocalStore) -> Result<Db, String> {
+    let connection = fs::create_dir_all(dir)
         .map_err(|error| format!("Не удалось создать папку данных {}: {error}", dir.display()))
-        .and_then(|()| open(&dir.join(DATABASE_FILE), &MIGRATIONS))
-        .map(|connection| Arc::new(Mutex::new(connection)))
+        .and_then(|()| open(&dir.join(DATABASE_FILE), &MIGRATIONS))?;
+    tidy_recordings(&connection, dir, recordings);
+    Ok(Arc::new(Mutex::new(connection)))
+}
+
+/// After a crash and at every start (`specs/local-storage`, "Модель
+/// данных"; audio-capture tasks 3.2–3.3). Failures are logged: the database
+/// works without it.
+fn tidy_recordings(connection: &Connection, dir: &Path, store: &LocalStore) {
+    if let Err(error) = recordings::recover_interrupted(connection, dir) {
+        eprintln!("grill: could not mark interrupted recordings: {error}");
+    }
+    if let Err(error) = recordings::sweep(connection, store) {
+        eprintln!("grill: recordings sweep failed: {error}");
+    }
 }
 
 /// A panic while holding the lock leaves the connection usable: every write
@@ -341,6 +402,38 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn opening_tidies_the_recordings() {
+        use crate::recording::store::RecordingStore;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (crashed, orphan) = {
+            let storage = Storage::open_in(dir.path());
+            let store = storage.recording_store().unwrap();
+            storage
+                .read_now(|connection| {
+                    let crashed =
+                        recordings::create(connection, None, 1_000, |id| store.files(id))?;
+                    drop(store.create(&crashed).unwrap());
+                    let orphan = "0190d1a0-0000-7000-8000-00000000000f";
+                    drop(store.create(orphan).unwrap());
+                    Ok((crashed, orphan.to_owned()))
+                })
+                .unwrap()
+        };
+        // The app died: the crashed recording is still `recording`, the
+        // orphan has no row.
+        let storage = Storage::open_in(dir.path());
+        let recording = storage
+            .read_now(|connection| recordings::get(connection, &crashed))
+            .unwrap();
+        assert_eq!(recording.status, recordings::RecordingState::Interrupted);
+        assert!(recording.ended_at.unwrap() > 1_000);
+        let root = dir.path().join(crate::recording::store::RECORDINGS_DIR);
+        assert!(root.join(&crashed).exists());
+        assert!(!root.join(orphan).exists());
     }
 
     #[test]
