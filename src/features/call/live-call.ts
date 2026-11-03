@@ -1,3 +1,5 @@
+import { routes } from "@/lib/routes";
+
 import { SUMMARY_STAGES } from "./backend";
 import { FINAL_CHECK_TOPIC_ID } from "./components/call-questions";
 import { CALL_SCREENS } from "./mock";
@@ -13,7 +15,10 @@ import type {
   QuestionsData,
   TopicAnchorData,
   TopicData,
+  TranscriptData,
   TranscriptItem,
+  TranscriptionState,
+  TranscriptUnavailableData,
 } from "./types";
 
 /*
@@ -410,6 +415,51 @@ function upsertTranscript(items: TranscriptItem[], item: TranscriptItem) {
   return items.map((existing) => (existing.id === item.id ? item : existing));
 }
 
+const LAG_DESCRIPTION =
+  "Компьютер нагружен, звук пишется полностью. Догоню, вопросы обновятся следом.";
+
+/** "Расшифровка отстаёт на 40 секунд". */
+export function lagNotice(seconds: number) {
+  const rounded = Math.round(seconds);
+  return {
+    description: LAG_DESCRIPTION,
+    title: `Расшифровка отстаёт на ${rounded} ${plural(rounded, "секунду", "секунды", "секунд")}`,
+  };
+}
+
+const UNAVAILABLE: Record<
+  Exclude<TranscriptionState, "ok">,
+  TranscriptUnavailableData
+> = {
+  modelFailed: {
+    description:
+      "Модель распознавания не запустилась. Звонок записывается, расшифровка появится, когда модель заработает. Скачайте её заново в настройках.",
+    settingsHref: routes.settings("audio"),
+    title: "Расшифровка не работает",
+  },
+  noModel: {
+    description:
+      "Звонок записывается, а расшифровки не будет, пока нет модели. Её можно скачать в настройках.",
+    settingsHref: routes.settings("audio"),
+    title: "Модель распознавания не установлена",
+  },
+  segmentationUnavailable: {
+    description:
+      "Не получается разделить звук на фразы. Звонок записывается целиком, расшифровка появится после звонка.",
+    title: "Расшифровка недоступна",
+  },
+};
+
+function withTranscript(
+  state: LiveCallState,
+  update: (transcript: TranscriptData) => TranscriptData
+): LiveCallState {
+  return {
+    ...state,
+    data: { ...state.data, transcript: update(state.data.transcript) },
+  };
+}
+
 function upsertContext(items: ContextItem[], item: ContextItem) {
   if (items.some((existing) => existing.id === item.id)) {
     return items.map((existing) => (existing.id === item.id ? item : existing));
@@ -446,16 +496,33 @@ function applyFeed(state: LiveCallState, event: CallFeedEvent): LiveCallState {
 
   switch (event.type) {
     case "transcript":
-      return {
-        ...state,
-        data: {
-          ...data,
-          transcript: {
-            ...data.transcript,
-            items: upsertTranscript(data.transcript.items, event.item),
-          },
-        },
-      };
+      return withTranscript(state, (transcript) => ({
+        ...transcript,
+        items: upsertTranscript(transcript.items, event.item),
+      }));
+    case "transcript-pending":
+      return data.transcript.items.some((item) => item.id === event.item.id)
+        ? state
+        : withTranscript(state, (transcript) => ({
+            ...transcript,
+            items: [...transcript.items, event.item],
+          }));
+    case "transcript-remove":
+      return withTranscript(state, (transcript) => ({
+        ...transcript,
+        items: transcript.items.filter((item) => item.id !== event.id),
+      }));
+    case "transcript-lag":
+      return withTranscript(state, (transcript) => ({
+        ...transcript,
+        notice: event.seconds > 0 ? lagNotice(event.seconds) : undefined,
+      }));
+    case "transcription":
+      return withTranscript(state, (transcript) => ({
+        ...transcript,
+        unavailable:
+          event.state === "ok" ? undefined : UNAVAILABLE[event.state],
+      }));
     case "context": {
       const removed = new Set(event.remove);
       let items = data.context.items.filter((item) => !removed.has(item.id));

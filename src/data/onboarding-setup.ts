@@ -2,6 +2,7 @@
 
 import { Effect, Stream } from "effect";
 
+import type { ErrorReason } from "@/bindings";
 import { type AppServices, runCancelable } from "@/effect/runtime";
 import {
   type AgentState as BackendAgentState,
@@ -11,11 +12,19 @@ import {
   type PermissionState,
   type PermissionStatus,
   type Permissions,
-  type SpeechModelEvent,
 } from "@/features/onboarding/backend";
+import {
+  type BenchmarkResult,
+  type ModelId,
+  type ModelState,
+  mockSpeechModels,
+  SpeechBackend,
+  type SpeechModel,
+} from "@/features/speech/backend";
 import { routes } from "@/lib/routes";
 
 import { rememberOnboardingResume } from "./onboarding";
+import { getSettings, updateSetting } from "./settings";
 import { createStore } from "./store";
 
 /*
@@ -24,7 +33,8 @@ import { createStore } from "./store";
  * model keeps downloading while the user moves on) and read later by the
  * "Готово" step and the settings.
  *
- * The work runs in `OnboardingBackend` (`src/features/onboarding/backend.ts`):
+ * The work runs in `OnboardingBackend` (`src/features/onboarding/backend.ts`)
+ * and, for the speech model, `SpeechBackend` (`src/features/speech`):
  * timers in the mock, Rust in the app. The actions below set what the user
  * sees right away, start the service and write its answers back through the
  * adapter section at the end of the file. The `force*` dev helpers and the
@@ -40,6 +50,10 @@ export type ScreenAudioAccess =
   | "denied"
   | "unknown";
 
+/**
+ * The model's file: `checking` is its sum after the download; `error` a
+ * download or a load that failed (`SpeechSetup.error` says why).
+ */
 export type SpeechModelStatus =
   | "idle"
   | "downloading"
@@ -47,7 +61,24 @@ export type SpeechModelStatus =
   | "checking"
   | "ready"
   | "no-space"
-  | "no-network";
+  | "no-network"
+  | "error";
+
+/** The hardware check of the ready model ("проверяем" on the step). */
+export type SpeechCheck =
+  | { status: "idle" }
+  | { status: "running" }
+  | { result: BenchmarkResult; status: "done" }
+  /** It could not run (a recording started meanwhile): nothing is known. */
+  | { status: "skipped" };
+
+/** The mic check of the ready model. */
+export type MicCheckState =
+  | { status: "idle" }
+  | { status: "listening" }
+  /** `text` is empty when nothing was said. */
+  | { status: "heard"; text: string }
+  | { message: string; status: "failed" };
 
 export type AgentStatus =
   | "unknown"
@@ -86,10 +117,24 @@ export interface PermissionsSetup {
 }
 
 export interface SpeechSetup {
-  /** Id of the call language, e.g. "ru". */
+  /** Download speed, bytes per second, while downloading. */
+  bytesPerSec: number;
+  check: SpeechCheck;
+  /** Why the model is in `error`. */
+  error: { message: string; reason: ErrorReason } | null;
+  /** Id of the call language, `ru` or `uk` (the `callLanguage` setting). */
   language: string;
+  micCheck: MicCheckState;
+  /** The model the step downloads: turbo, or small once offered. */
+  model: ModelId;
   /** Download progress, 0–100. */
   percent: number;
+  /** `no-network`: the app tries again `inSec` after `at` (ms). */
+  retry: { at: number; inSec: number } | null;
+  /** Download size of `model`, bytes; 0 until the backend said. */
+  sizeBytes: number;
+  /** `no-space`: what the download needs and what the disk has, bytes. */
+  space: { freeBytes: number; needBytes: number } | null;
   status: SpeechModelStatus;
 }
 
@@ -146,7 +191,19 @@ const INITIAL: OnboardingSetup = {
     screenAudioMessage: null,
     screenAudioRestart: false,
   },
-  speech: { language: "ru", percent: 0, status: "idle" },
+  speech: {
+    bytesPerSec: 0,
+    check: { status: "idle" },
+    error: null,
+    language: "ru",
+    micCheck: { status: "idle" },
+    model: "turbo",
+    percent: 0,
+    retry: null,
+    sizeBytes: 0,
+    space: null,
+    status: "idle",
+  },
 };
 
 /** What the forced "error" state shows. */
@@ -207,7 +264,15 @@ function setAgent(next: Partial<AgentSetup>) {
 /* Running jobs. One slot per job, a new run in a slot replaces the old one */
 /* ---------------------------------------------------------------------- */
 
-type Job = "agent" | "microphone" | "permissions" | "screenAudio" | "speech";
+type Job =
+  | "agent"
+  | "microphone"
+  | "micCheck"
+  | "permissions"
+  | "screenAudio"
+  | "speech"
+  | "speechCheck"
+  | "speechModels";
 
 interface Run {
   cancel: () => void;
@@ -442,45 +507,130 @@ export function forcePermissions(
 
 /* ---------------------------- Speech model ---------------------------- */
 
-function applySpeechEvent(event: SpeechModelEvent) {
-  if (event.type === "checking") {
-    setSpeech({ percent: 100, status: "checking" });
-  } else {
-    setSpeech({ percent: event.percent });
+/*
+ * The step follows the models as the backend reports them
+ * (`followSpeechModels`): the buttons send commands, the states come back
+ * as changes. Once the model is ready the hardware check runs
+ * ("проверяем"); a slow turbo offers the small model, which is selected
+ * and checked in its turn.
+ */
+
+/** Whether the step has picked the model to follow from the first read. */
+let modelChosen = false;
+
+const CALL_LANGUAGES = ["ru", "uk"];
+
+/**
+ * Entering the step: follows both models (once per window, it keeps going
+ * on the next steps) and takes the call language from the settings.
+ */
+export function followSpeechModels() {
+  if (runs.has("speechModels")) {
+    return;
+  }
+  const { callLanguage } = getSettings();
+  if (CALL_LANGUAGES.includes(callLanguage)) {
+    setSpeech({ language: callLanguage });
+  }
+  start("speechModels", (write) =>
+    SpeechBackend.use((speech) =>
+      Stream.runForEach(speech.watchModels, (models) =>
+        write(() => applyModels(models))
+      )
+    ).pipe(Effect.ignore)
+  );
+}
+
+/** The followed model's last state, so a change of the other one is no news. */
+let lastModel: SpeechModel | null = null;
+
+function applyModels(models: readonly SpeechModel[]) {
+  if (!modelChosen) {
+    modelChosen = true;
+    const selected = models.find((model) => model.selected);
+    if (selected) {
+      setSpeech({ model: selected.id });
+    }
+  }
+  const followed = models.find(
+    (model) => model.id === setupStore.get().speech.model
+  );
+  if (!followed || isSameModel(followed, lastModel)) {
+    return;
+  }
+  lastModel = followed;
+  setSpeech(fromModelState(followed));
+  const { check } = setupStore.get().speech;
+  if (followed.state.status === "ready") {
+    onModelReady(followed);
+  } else if (check.status === "done" || check.status === "skipped") {
+    // Removed or downloaded again: the old result is about another file.
+    setSpeech({ check: { status: "idle" } });
   }
 }
 
-/** Downloads from the current percent, checks and marks the model ready. */
-function followModel() {
-  const { language, percent } = setupStore.get().speech;
-  start("speech", (write) =>
-    OnboardingBackend.use((backend) =>
-      Stream.runForEach(
-        backend.downloadSpeechModel(language, percent),
-        (event) => write(() => applySpeechEvent(event))
-      )
+function isSameModel(model: SpeechModel, last: SpeechModel | null) {
+  return (
+    last !== null &&
+    last.id === model.id &&
+    last.selected === model.selected &&
+    JSON.stringify(last.state) === JSON.stringify(model.state)
+  );
+}
+
+/** A ready model: selected (the small one after the offer), then checked. */
+function onModelReady(model: SpeechModel) {
+  const { check } = setupStore.get().speech;
+  if (check.status !== "idle" || runs.has("speechCheck")) {
+    return;
+  }
+  const stored = getSettings().speechBenchmark[model.id];
+  if (stored) {
+    setSpeech({ check: { result: stored, status: "done" } });
+    return;
+  }
+  runSpeechCheck(model);
+}
+
+function runSpeechCheck(model: Pick<SpeechModel, "id" | "selected">) {
+  setSpeech({ check: { status: "running" } });
+  start("speechCheck", (write) =>
+    SpeechBackend.use((speech) =>
+      (model.selected
+        ? Effect.void
+        : Effect.asVoid(speech.select(model.id))
+      ).pipe(Effect.andThen(speech.benchmark(model.id)))
     ).pipe(
-      Effect.flatMap(() => write(() => setSpeech({ status: "ready" }))),
-      Effect.catchTag("SpeechModelError", (error) =>
-        write(() =>
-          setSpeech({
-            status: error.reason === "noSpace" ? "no-space" : "no-network",
-          })
-        )
+      Effect.flatMap((result) =>
+        write(() => setSpeech({ check: { result, status: "done" } }))
       ),
-      Effect.catch(() => write(() => setSpeech({ status: "no-network" })))
+      Effect.catch(() =>
+        write(() => setSpeech({ check: { status: "skipped" } }))
+      )
     )
   );
 }
 
-function verifyModel() {
-  setSpeech({ percent: 100, status: "checking" });
-  followModel();
-}
-
-function runDownload() {
-  setSpeech({ status: "downloading" });
-  followModel();
+/** Sends a model command; its answer is a change like any other. */
+function command(
+  run: (
+    speech: SpeechBackend["Service"],
+    id: ModelId
+  ) => Effect.Effect<SpeechModel, unknown>
+) {
+  const { model: id } = setupStore.get().speech;
+  start("speech", (write) =>
+    SpeechBackend.use((backend) => run(backend, id)).pipe(
+      Effect.flatMap((reply) =>
+        write(() => {
+          if (reply.id === setupStore.get().speech.model) {
+            applyModels([reply]);
+          }
+        })
+      ),
+      Effect.ignore
+    )
+  );
 }
 
 const BUSY_MODEL: readonly SpeechModelStatus[] = [
@@ -489,66 +639,125 @@ const BUSY_MODEL: readonly SpeechModelStatus[] = [
   "checking",
 ];
 
-/**
- * Picks the call language. A model for another language has to be
- * downloaded again, so a started download is dropped.
- */
+/** Picks the call language: stored in `callLanguage` at once. */
 export function setSpeechLanguage(language: string) {
-  const { speech } = setupStore.get();
-  if (speech.language === language) {
+  if (setupStore.get().speech.language === language) {
     return;
   }
-  stop("speech");
-  setSpeech({ language, percent: 0, status: "idle" });
+  setSpeech({ language });
+  updateSetting("callLanguage", language);
 }
 
-/** "Скачать": checks the free space (enough in the mock) and starts. */
+/** "Скачать": checks the free space and starts. */
 export function downloadSpeechModel() {
-  setSpeech({ percent: 0 });
-  runDownload();
+  setSpeech({ check: { status: "idle" }, status: "downloading" });
+  command((speech, id) => speech.download(id));
 }
 
 export function pauseSpeechModel() {
-  stop("speech");
   setSpeech({ status: "paused" });
+  command((speech, id) => speech.pause(id));
 }
 
 export function resumeSpeechModel() {
-  runDownload();
+  setSpeech({ status: "downloading" });
+  command((speech, id) => speech.download(id));
 }
 
 /** "Отменить": deletes the partial file, back to the language choice. */
 export function cancelSpeechModel() {
-  stop("speech");
   setSpeech({ percent: 0, status: "idle" });
+  command((speech, id) => speech.cancel(id));
 }
 
 /*
- * "Повторить": after "no space" the disk is checked again (freed in the
- * mock) and the download starts over; after "no network" it continues from
- * where it stopped.
+ * "Повторить": after "no space" the disk is checked again; after "no
+ * network" the download goes on from where it stopped, without waiting
+ * for the automatic retry.
  */
 export function retrySpeechModel() {
-  const { speech } = setupStore.get();
-  if (speech.status === "no-space") {
-    setSpeech({ percent: 0 });
-  }
-  runDownload();
+  setSpeech({ status: "downloading" });
+  command((speech, id) => speech.download(id));
+}
+
+/**
+ * "Скачать заново": a model that failed (a broken file, or one whisper.cpp
+ * did not load) is deleted and downloaded again.
+ */
+export function redownloadSpeechModel() {
+  stop("speechCheck");
+  setSpeech({ check: { status: "idle" }, percent: 0, status: "downloading" });
+  command((speech, id) =>
+    speech.remove(id).pipe(Effect.andThen(speech.download(id)))
+  );
+}
+
+/**
+ * "Скачать запасную модель": turbo is too slow here. The step follows the
+ * small model from now on; once ready it is selected and checked.
+ */
+export function downloadFallbackModel() {
+  stop("speechCheck");
+  stop("micCheck");
+  setSpeech({
+    check: { status: "idle" },
+    micCheck: { status: "idle" },
+    model: "small",
+    percent: 0,
+    status: "downloading",
+  });
+  command((speech, id) => speech.download(id));
+}
+
+/** "Проверить снова": the hardware check of the ready model again. */
+export function recheckSpeechModel() {
+  const { model } = setupStore.get().speech;
+  runSpeechCheck({ id: model, selected: true });
+}
+
+/**
+ * The mic check: up to 8 s from the microphone, then what the model heard,
+ * at once. Runs again on "Проверить ещё раз".
+ */
+export function startMicCheck() {
+  setSpeech({ micCheck: { status: "listening" } });
+  start("micCheck", (write) =>
+    SpeechBackend.use((speech) => speech.micCheck).pipe(
+      Effect.flatMap((text) =>
+        write(() => setSpeech({ micCheck: { status: "heard", text } }))
+      ),
+      Effect.catch((error) =>
+        write(() =>
+          setSpeech({
+            micCheck: { message: error.message, status: "failed" },
+          })
+        )
+      )
+    )
+  );
+}
+
+/** Leaving the step: the answer of a running mic check is not shown. */
+export function stopMicCheck() {
+  stop("micCheck");
+  setSpeech({ micCheck: { status: "idle" } });
 }
 
 export function isSpeechModelBusy(status: SpeechModelStatus) {
   return BUSY_MODEL.includes(status);
 }
 
-/** Dev only: open the step in the given state, timers included. */
-export function forceSpeechModel(status: SpeechModelStatus, percent: number) {
-  stop("speech");
-  setSpeech({ percent, status });
-  if (status === "downloading") {
-    runDownload();
-  } else if (status === "checking") {
-    verifyModel();
+/** Dev only: open the step with the mock model in `state`, timers included. */
+export function forceSpeechModel(state: ModelState, check?: BenchmarkResult) {
+  for (const job of ["speech", "speechCheck", "micCheck"] as const) {
+    stop(job);
   }
+  setSpeech({
+    check: check ? { result: check, status: "done" } : { status: "idle" },
+    micCheck: { status: "idle" },
+    model: "turbo",
+  });
+  mockSpeechModels.force("turbo", state);
 }
 
 /* -------------------------------- Agent ------------------------------- */
@@ -764,12 +973,59 @@ export function resetOnboardingSetup() {
     stop(job);
   }
   mockComputer.reset();
+  mockSpeechModels.reset();
+  modelChosen = false;
+  lastModel = null;
   setupStore.set(INITIAL);
 }
 
 /* ---------------------------------------------------------------------- */
 /* Adapter: backend states → the screens' states                          */
 /* ---------------------------------------------------------------------- */
+
+/** A model as the step shows it. */
+function fromModelState({
+  sizeBytes,
+  state,
+}: Pick<SpeechModel, "sizeBytes" | "state">): Partial<SpeechSetup> {
+  const base = { error: null, retry: null, sizeBytes, space: null };
+  switch (state.status) {
+    case "notDownloaded":
+      return { ...base, bytesPerSec: 0, percent: 0, status: "idle" };
+    case "downloading":
+      return {
+        ...base,
+        bytesPerSec: state.bytesPerSec,
+        percent: state.percent,
+        status: "downloading",
+      };
+    case "paused":
+      return { ...base, percent: state.percent, status: "paused" };
+    case "checking":
+      return { ...base, percent: 100, status: "checking" };
+    case "ready":
+      return { ...base, percent: 100, status: "ready" };
+    case "noSpace":
+      return {
+        ...base,
+        space: { freeBytes: state.freeBytes, needBytes: state.needBytes },
+        status: "no-space",
+      };
+    case "noNetwork":
+      return {
+        ...base,
+        percent: state.percent,
+        retry: { at: Date.now(), inSec: state.retryInSec },
+        status: "no-network",
+      };
+    default:
+      return {
+        ...base,
+        error: { message: state.message, reason: state.reason },
+        status: "error",
+      };
+  }
+}
 
 /** Not asked yet keeps a pending ask; `unknown` stays for the meter. */
 function toScreenAudioAccess(

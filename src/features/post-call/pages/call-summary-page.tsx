@@ -65,7 +65,11 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
     session.status === "finishing" && session.callId === call.id;
   const wantsBuild = justFinished || (demo === "processing" && !replayed);
 
-  const { participants: sessionPeople, projectId: sessionProject } = session;
+  const {
+    participants: sessionPeople,
+    projectId: sessionProject,
+    recordingId: sessionRecording,
+  } = session;
   useEffect(() => {
     if (!wantsBuild || call.summary !== "ready") {
       return;
@@ -92,6 +96,7 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
               knownProject && sessionProject ? sessionProject : call.projectId,
           }
         : undefined,
+      recordingId: justFinished ? sessionRecording : undefined,
     });
   }, [
     call.id,
@@ -102,14 +107,16 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
     router.push,
     sessionPeople,
     sessionProject,
+    sessionRecording,
     wantsBuild,
   ]);
 
   const processing = call.summary === "processing" || wantsBuild;
   const progress = call.summaryProgress ?? { progress: 0, step: 0 };
   const steps = useMemo(
-    () => processingSteps(progress.step, progress.progress),
-    [progress.step, progress.progress]
+    () =>
+      processingSteps(progress.step, progress.progress, progress.transcript),
+    [progress.step, progress.progress, progress.transcript]
   );
   const targets = useMemo(() => knowledgeTargets(call), [call]);
 

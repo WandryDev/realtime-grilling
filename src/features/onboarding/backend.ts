@@ -22,11 +22,13 @@ import { BackendError, call, listen } from "@/effect/tauri";
 /*
  * Backend contract of the onboarding steps 02–04:
  * - the system accesses: read both, ask for one, open its System Settings;
- * - the speech model download and its check;
  * - the agent (Claude Code): its status, the install, the browser login
  *   with a code pasted back into the step;
- * - the live input level, what the speech model hears during the mic check,
- *   the clipboard, the browser, and the focus of this window.
+ * - the live input level, the clipboard, the browser, and the focus of
+ *   this window.
+ *
+ * The speech model, its checks and the mic check are `SpeechBackend`
+ * (`src/features/speech/backend.ts`).
  *
  * The types here are the frontend's own; the Tauri layer maps the Rust ones
  * (`src/bindings.ts`) onto them. The store `src/data/onboarding-setup.ts`
@@ -34,8 +36,7 @@ import { BackendError, call, listen } from "@/effect/tauri";
  *
  * `layerMock` plays a computer (`mockComputer` below) with timers: Claude
  * Code is installed without a login, the accesses are not asked yet.
- * `layerTauri` runs the Rust commands; the speech model download and the
- * mic check stay on the mock until the speech-to-text task.
+ * `layerTauri` runs the Rust commands.
  */
 
 export type AudioSource = "microphone" | "system";
@@ -100,11 +101,6 @@ export type AgentInstallEvent =
     }
   | { readonly type: "installed"; readonly agent: AgentState };
 
-/** The download reports its progress, then the checksum check. */
-export type SpeechModelEvent =
-  | { readonly type: "downloading"; readonly percent: number }
-  | { readonly type: "checking" };
-
 export class ClipboardError extends Schema.TaggedError<ClipboardError>()(
   "ClipboardError",
   { message: Schema.String }
@@ -119,17 +115,7 @@ export class AgentLoginCodeError extends Schema.TaggedError<AgentLoginCodeError>
   { message: Schema.String }
 ) {}
 
-/** The speech model download stopped. */
-export class SpeechModelError extends Schema.TaggedError<SpeechModelError>()(
-  "SpeechModelError",
-  {
-    message: Schema.String,
-    reason: Schema.Literals(["noSpace", "noNetwork"]),
-  }
-) {}
-
 export const LEVEL_INTERVAL_MS = 120;
-export const WORD_INTERVAL_MS = 280;
 const START_LEVEL = 0.4;
 const MIN_LEVEL = 0.05;
 /** How far the fake level can move between two frames, 0–1. */
@@ -153,18 +139,6 @@ export class OnboardingBackend extends Context.Service<
     readonly openPermissionSettings: (
       kind: PermissionKind
     ) => Effect.Effect<void, BackendError>;
-
-    /* Speech model --------------------------------------------------- */
-
-    /**
-     * Downloads the model of `language` from `fromPercent` (0 for a fresh
-     * download), then checks it. Ends when the model is ready. Interrupting
-     * pauses the download, the next call continues it.
-     */
-    readonly downloadSpeechModel: (
-      language: string,
-      fromPercent: number
-    ) => Stream.Stream<SpeechModelEvent, SpeechModelError | BackendError>;
 
     /* Agent ---------------------------------------------------------- */
 
@@ -205,11 +179,6 @@ export class OnboardingBackend extends Context.Service<
     readonly audioLevel: (
       source: AudioSource
     ) => Stream.Stream<AudioLevelFrame, BackendError>;
-    /**
-     * What the speech model hears during the mic check, growing word by
-     * word. The mock "hears" `phrase` and ends with it.
-     */
-    readonly micCheck: (phrase: string) => Stream.Stream<string>;
     /** Copies text for the support chat. */
     readonly copyText: (text: string) => Effect.Effect<void, ClipboardError>;
     /** Emits when this window gets the focus back. */
@@ -223,7 +192,6 @@ export class OnboardingBackend extends Context.Service<
       ),
       audioLevel: tauriAudioLevel,
       copyText,
-      downloadSpeechModel: mockSpeechDownload,
       // The progress events until `agent_install` answers with the status
       installAgent: listen(events.agentInstallProgress).pipe(
         Stream.map(
@@ -261,7 +229,6 @@ export class OnboardingBackend extends Context.Service<
               : error
           )
         ),
-      micCheck: mockMicCheck,
       openLoginPage: (url: string) =>
         Effect.tryPromise({ catch: transportError, try: () => openUrl(url) }),
       openPermissionSettings: (kind: PermissionKind) =>
@@ -311,7 +278,6 @@ export class OnboardingBackend extends Context.Service<
           })
         ),
       copyText,
-      downloadSpeechModel: mockSpeechDownload,
       installAgent: mockDownload(
         0,
         MOCK_DELAY_MS.installTick,
@@ -343,7 +309,6 @@ export class OnboardingBackend extends Context.Service<
         Effect.sleep(MOCK_DELAY_MS.loginSubmit).pipe(
           Effect.flatMap(() => mockComputer.submitLogin(code))
         ),
-      micCheck: mockMicCheck,
       openLoginPage: (_url: string) => Effect.void,
       openPermissionSettings: (_kind: PermissionKind) =>
         Effect.sync(() => mockComputer.openSettings()),
@@ -459,32 +424,6 @@ function copyText(text: string) {
   });
 }
 
-/** MOCK until speech-to-text: "hears" `phrase` word by word. */
-function mockMicCheck(phrase: string) {
-  const words = phrase.split(" ");
-  return Stream.range(1, words.length).pipe(
-    Stream.mapEffect((count) =>
-      Effect.as(Effect.sleep(WORD_INTERVAL_MS), words.slice(0, count).join(" "))
-    )
-  );
-}
-
-/** MOCK until speech-to-text: ~4 s of download, then the check. */
-function mockSpeechDownload(_language: string, fromPercent: number) {
-  return mockDownload(fromPercent, MOCK_DELAY_MS.modelTick, MODEL_STEP).pipe(
-    Stream.filter((percent) => percent < FULL),
-    Stream.map(
-      (percent): SpeechModelEvent => ({ percent, type: "downloading" })
-    ),
-    Stream.concat(Stream.succeed<SpeechModelEvent>({ type: "checking" })),
-    Stream.concat(
-      Stream.fromEffect(Effect.sleep(MOCK_DELAY_MS.modelCheck)).pipe(
-        Stream.drain
-      )
-    )
-  );
-}
-
 /* ---------------------------------------------------------------------- */
 /* The mock computer                                                       */
 /* ---------------------------------------------------------------------- */
@@ -495,14 +434,10 @@ export const MOCK_DELAY_MS = {
   installTick: 100,
   loginStart: 800,
   loginSubmit: 1000,
-  modelCheck: 1200,
-  modelTick: 100,
   permissionsCheck: 900,
 } as const;
 
 const FULL = 100;
-/** Progress per tick: the model takes ~4 s, the agent install ~2.5 s. */
-const MODEL_STEP = 2.5;
 const INSTALL_STEP = 4;
 const INSTALLING_FROM = 35;
 const VERIFYING_FROM = 70;

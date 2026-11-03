@@ -118,19 +118,6 @@ export function runSoundCheck(signal?: AbortSignal): Promise<SoundCheckResult> {
   );
 }
 
-/** Downloads or updates a speech model, with progress. */
-export function downloadSpeechModel(
-  modelId: string,
-  onProgress?: Progress,
-  signal?: AbortSignal
-) {
-  return runWithProgress(
-    (backend) => backend.downloadSpeechModel(modelId),
-    onProgress,
-    signal
-  );
-}
-
 /* ---------------------------------------------------------------- Агент */
 
 /** Looks for the CLI at `path` and checks that it is signed in. */

@@ -56,6 +56,11 @@ export interface TaskCardReview {
 export interface SummaryProgress {
   progress: number;
   step: number;
+  /**
+   * The second pass didn't refine the transcript for the summary: it
+   * `failed` (the live one stays), or it goes on `later` in the background.
+   */
+  transcript?: "failed" | "later";
 }
 
 export interface CallRecord {

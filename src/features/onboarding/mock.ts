@@ -35,20 +35,37 @@ export const SPEECH_LANGUAGES: SpeechLanguage[] = [
 
 /** Model download for the selected language, as the speech step shows it. */
 export interface SpeechModelInfo {
+  /** The hardware check failed: why, and what to do. */
+  checkFailure?: {
+    description: string;
+    /** "Скачать запасную модель": turbo is too slow here. */
+    fallback?: string;
+    /** The model has to be downloaded again (it does not load). */
+    redownload?: boolean;
+    title: string;
+  };
+  /** "Проверяем модель": the sum of the file, or the hardware check. */
+  checking: { caption?: string; description: string; title: string };
   /** Not enough space. */
   disk: {
-    name: string;
-    used: string;
-    total: string;
-    usedPercent: number;
+    /** Under the bar: "Macintosh HD, занято 244,1 из 245 ГБ". */
+    caption: string;
     free: string;
     missing: string;
+    /** What the download needs. */
+    need: string;
+    /** The bar and what it measures. */
+    percent: number;
+    percentLabel: string;
   };
   /** Download in progress. */
   downloaded: string;
   /** "Скачиваем модель для русского языка" */
   downloadingTitle: string;
-  freeSpace: string;
+  /** The download or the file failed. */
+  error?: { description: string; title: string };
+  /** Free disk space, when known. */
+  freeSpace?: string;
   /** Connection lost. */
   interrupted: {
     downloaded: string;
@@ -57,7 +74,13 @@ export interface SpeechModelInfo {
   };
   /** "Русский язык" */
   languageName: string;
+  /** The mic check is listening (the red dot). */
+  micListening: boolean;
+  /** Instead of the text: nothing heard, or why the check failed. */
+  micNote?: string;
   percent: number;
+  /** "Готово, но…": the check could not tell or found it slow. */
+  readyNote?: string;
   size: string;
   speed: string;
   timeLeft: string;
@@ -68,27 +91,33 @@ export interface SpeechModelInfo {
 }
 
 export const SPEECH_MODEL: SpeechModelInfo = {
-  disk: {
-    free: "0,9 ГБ",
-    missing: "0,6 ГБ",
-    name: "Macintosh HD",
-    total: "245 ГБ",
-    used: "244,1",
-    usedPercent: 99,
+  checking: {
+    caption: "574 МБ из 574 МБ",
+    description: "Убеждаемся, что файл скачался целиком, это несколько секунд",
+    title: "Проверяем модель",
   },
-  downloaded: "720 МБ",
+  disk: {
+    caption: "Macintosh HD, занято 244,1 из 245 ГБ",
+    free: "0,3 ГБ",
+    missing: "0,3 ГБ",
+    need: "631 МБ",
+    percent: 99,
+    percentLabel: "Занято на диске",
+  },
+  downloaded: "276 МБ",
   downloadingTitle: "Скачиваем модель для русского языка",
   freeSpace: "84 ГБ",
   interrupted: {
-    downloaded: "945 МБ",
+    downloaded: "362 МБ",
     percent: 63,
     retryIn: "0:24",
   },
   languageName: "Русский язык",
+  micListening: true,
   percent: 48,
-  size: "1,5 ГБ",
+  size: "574 МБ",
   speed: "12,4 МБ/с",
-  timeLeft: "Осталось около минуты",
+  timeLeft: "Осталось меньше минуты",
   title: "Модель для русского языка",
   transcript: "Привет, это Дима, проверяю, как Grill меня слышит",
 };

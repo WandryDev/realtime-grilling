@@ -7,6 +7,7 @@ import {
   type MicActivityChanged,
   type RecordingChannels,
   type SegmentationStatus,
+  type TranscriptionStatus,
 } from "@/bindings";
 import { uuidv7 } from "@/data/services/mock-database";
 import {
@@ -30,7 +31,7 @@ import {
  * buttons ("Выйти из встречи", the call script's end) let go of.
  */
 
-export type { ChannelState } from "@/bindings";
+export type { ChannelState, TranscriptionStatus } from "@/bindings";
 
 /** The recording now; `id` is null when nothing is recorded. */
 export interface RecordingStatus {
@@ -39,6 +40,19 @@ export interface RecordingStatus {
   readonly segmentation: SegmentationStatus;
   /** Ms since the epoch, null when nothing is recorded. */
   readonly startedAt: number | null;
+  /** Whether the phrases are recognized (`noModel`: no text, still recorded). */
+  readonly transcription: TranscriptionStatus;
+}
+
+/**
+ * What a recording is about. Rust builds the speech model's glossary from
+ * the project and the people on the call (speech-recognition design.md,
+ * decision 9). People only with their project.
+ */
+export interface RecordingInput {
+  readonly callId?: string | null;
+  readonly participantIds?: readonly string[];
+  readonly projectId?: string | null;
 }
 
 /** Both channels' input levels, 0–1. */
@@ -64,6 +78,7 @@ export interface MicActivity {
 export const LEVELS_INTERVAL_MS = 100;
 
 const IDLE_CHANNELS: RecordingChannels = { me: "ok", others: "ok" };
+const TRANSCRIPTION_OK: TranscriptionStatus = { state: "ok" };
 
 /* ---------------------------------------------------------------------- */
 /* The mock recorder and meeting app                                       */
@@ -144,6 +159,7 @@ const mock = {
       id: mock.recording?.id ?? null,
       segmentation: "ok",
       startedAt: mock.recording?.startedAt ?? null,
+      transcription: TRANSCRIPTION_OK,
     };
   },
   statusListeners: new Set<Listener<RecordingStatus>>(),
@@ -155,10 +171,10 @@ export class RecordingBackend extends Context.Service<
     /**
      * Starts recording and resolves to its id; while a recording runs,
      * resolves to its id. No microphone access: an `External` error with
-     * `reason: "noAccess"`.
+     * `reason: "noAccess"`. An unknown project or person is `NotFound`.
      */
     readonly start: (
-      callId?: string | null
+      input?: RecordingInput
     ) => Effect.Effect<string, BackendError>;
     /** Stops the recording `id`; an unknown id is `NotFound`. */
     readonly stop: (id: string) => Effect.Effect<void, BackendError>;
@@ -189,8 +205,16 @@ export class RecordingBackend extends Context.Service<
     micActivityNow: call(() => commands.micActivityGet()).pipe(
       Effect.map(fromBindingsActivity)
     ),
-    start: (callId?: string | null) =>
-      call(() => commands.recordingStart({ callId: callId ?? null })),
+    start: (input: RecordingInput = {}) =>
+      call(() =>
+        commands.recordingStart({
+          callId: input.callId ?? null,
+          participantIds: input.projectId
+            ? [...(input.participantIds ?? [])]
+            : null,
+          projectId: input.projectId ?? null,
+        })
+      ),
     status: call(() => commands.recordingStatus()).pipe(
       Effect.map(fromBindings)
     ),
@@ -219,7 +243,7 @@ export class RecordingBackend extends Context.Service<
     ),
     micActivity: mockStream(mock.activityListeners),
     micActivityNow: Effect.sync(() => mock.activity),
-    start: (_callId?: string | null) =>
+    start: (_input?: RecordingInput) =>
       Effect.gen(function* () {
         if (mock.recording) {
           return mock.recording.id;
@@ -263,6 +287,7 @@ function fromBindings(status: BindingsRecordingStatus): RecordingStatus {
     id: status.id ?? null,
     segmentation: status.segmentation,
     startedAt: status.startedAt ?? null,
+    transcription: status.transcription,
   };
 }
 
@@ -309,3 +334,8 @@ export const mockMicActivity = {
     mock.known.clear();
   },
 };
+
+/** The mock recorder's recording now (the mock speech models lock on it). */
+export function mockRecordingId(): string | null {
+  return mock.recording?.id ?? null;
+}

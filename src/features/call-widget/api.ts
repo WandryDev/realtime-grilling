@@ -78,7 +78,10 @@ export async function startRecording(input: {
   participants: Participant[];
   projectId: string | null;
 }): Promise<RecordingStart> {
-  const started = await beginRecording();
+  const started = await beginRecording({
+    participantIds: input.participants.map((person) => person.id),
+    projectId: input.projectId,
+  });
   if (started.ok) {
     startCall({
       participants: input.participants.map((person) => person.name),

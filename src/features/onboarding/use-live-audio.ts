@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import {
   type CaptureProblem,
   listenToAudioLevel,
-  listenToMicCheck,
   listenToWindowFocus,
 } from "./api";
 import type { AudioLevelFrame, AudioSource } from "./backend";
@@ -145,25 +144,4 @@ export function useAudioLevelCheck(
 /** Calls `onFocus` when this window gets the focus back (Tauri only). */
 export function useWindowFocus(onFocus: () => void) {
   useEffect(() => listenToWindowFocus(onFocus), [onFocus]);
-}
-
-/** The mic-check transcript growing word by word while `enabled`. */
-export function useMicCheckTranscript(
-  phrase: string,
-  enabled: boolean
-): string {
-  const [text, setText] = useState("");
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const unsubscribe = listenToMicCheck(phrase, setText);
-    return () => {
-      unsubscribe();
-      setText("");
-    };
-  }, [enabled, phrase]);
-
-  return text;
 }

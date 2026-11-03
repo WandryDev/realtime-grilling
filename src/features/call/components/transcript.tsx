@@ -17,10 +17,15 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TopicDivider } from "@/components/ui/topic-divider";
+import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";
-import type { TranscriptItem, TranscriptNoticeData } from "../types";
+import type {
+  TranscriptItem,
+  TranscriptNoticeData,
+  TranscriptUnavailableData,
+} from "../types";
 
 const CLIENT_INITIAL = "К";
 
@@ -138,9 +143,15 @@ export function TranscriptEntry({
       return (
         <Message align="end" className={className}>
           <MessageContent>
-            <MessageHeader>Вы</MessageHeader>
+            <MessageHeader>
+              Вы
+              {item.live ? (
+                <MessageSpeaking>расшифровываю</MessageSpeaking>
+              ) : null}
+            </MessageHeader>
             {/* The call window lets your bubbles span the column, as in Paper */}
             <Bubble className="group-data-[align=end]/message:max-w-full">
+              {item.live ? <TranscribingLines /> : null}
               {item.text}
             </Bubble>
           </MessageContent>
@@ -191,12 +202,7 @@ function ClientMessage({
           ) : null}
         </MessageHeader>
         <Bubble variant="card">
-          {transcribing ? (
-            <span className="flex w-[200px] flex-col gap-2 py-1">
-              <Skeleton className="h-2.5 w-full" tone="surface" />
-              <Skeleton className="h-2.5 w-[70%]" tone="surface" />
-            </span>
-          ) : null}
+          {transcribing ? <TranscribingLines /> : null}
           <span>{text}</span>
           {live ? <MessageTyping /> : null}
         </Bubble>
@@ -213,6 +219,16 @@ function ClientMessage({
         ) : null}
       </MessageContent>
     </Message>
+  );
+}
+
+/** Two gray lines where the text of a phrase being transcribed will be. */
+function TranscribingLines() {
+  return (
+    <span className="flex w-[200px] flex-col gap-2 py-1">
+      <Skeleton className="h-2.5 w-full" tone="surface" />
+      <Skeleton className="h-2.5 w-[70%]" tone="surface" />
+    </span>
   );
 }
 
@@ -270,6 +286,42 @@ export function TranscriptNotice({
         <p className="font-semibold">{notice.title}</p>
         <p className="text-muted-foreground">{notice.description}</p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Recognition doesn't work this call: what is wrong and, for a missing or
+ * broken model, the way to Settings. Takes the place of the feed.
+ */
+export function TranscriptUnavailable({
+  className,
+  unavailable,
+}: {
+  className?: string;
+  unavailable: TranscriptUnavailableData;
+}) {
+  return (
+    <div
+      className={cn(
+        "bg-background shadow-touch flex flex-col items-start gap-3 rounded-sm px-3.5 py-3",
+        className
+      )}
+      role="status"
+    >
+      <div className="flex min-w-0 flex-col gap-0.5 text-sm">
+        <p className="font-semibold">{unavailable.title}</p>
+        <p className="text-muted-foreground">{unavailable.description}</p>
+      </div>
+      {unavailable.settingsHref ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          {...linkButtonProps(unavailable.settingsHref)}
+        >
+          Открыть настройки
+        </Button>
+      ) : null}
     </div>
   );
 }

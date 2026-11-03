@@ -31,7 +31,9 @@ export function subscribeToCallFeed(
           for (const event of events) {
             onEvent(event);
           }
-          onStep?.(next);
+          if (next !== undefined) {
+            onStep?.(next);
+          }
         })
       )
     )

@@ -144,6 +144,13 @@ export function createFakeTauri(): FakeTauri {
         );
       case "settings_get":
         return db.settings;
+      case "settings_update":
+        Object.assign(db.settings, args.patch);
+        return {
+          launchAtLoginError: null,
+          settings: db.settings,
+          shortcutErrors: [],
+        };
       case "calls_patch_summary": {
         const call = db.calls.find((item) => item.id === args.id);
         if (!call) {

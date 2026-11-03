@@ -1,3 +1,6 @@
+import type { ModelId, SpeechModel } from "@/bindings";
+import type { StoredBenchmark } from "@/data/settings";
+
 /*
  * Demo data of the settings screens, text verbatim from the Paper file.
  */
@@ -120,32 +123,37 @@ export const SYSTEM_AUDIO_SOURCES: SelectOption[] = [
   { label: "Только Zoom", value: "zoom" },
 ];
 
-export interface SpeechModel {
-  description: string;
-  id: string;
-  installed: boolean;
-  name: string;
-  size: string;
-  update?: boolean;
-}
-
+/** The speech models of the preview: turbo ready and selected. */
 export const SPEECH_MODELS: SpeechModel[] = [
   {
-    description: "Русский и украинский, лучше на смешанной речи",
-    id: "whisper",
-    installed: true,
+    id: "turbo",
     name: "Whisper large-v3-turbo",
-    size: "1,6 ГБ",
-    update: true,
+    selected: true,
+    sizeBytes: 574_041_195,
+    state: { status: "ready" },
   },
   {
-    description: "Только русский, быстрее на слабых ноутбуках",
-    id: "gigaam",
-    installed: false,
-    name: "GigaAM v2",
-    size: "0,9 ГБ",
+    id: "small",
+    name: "Whisper small",
+    selected: false,
+    sizeBytes: 487_601_967,
+    state: { status: "notDownloaded" },
   },
 ];
+
+/** What each model is for, under its name. */
+export const SPEECH_MODEL_NOTES: Record<ModelId, string> = {
+  small: "Запасная: быстрее на слабых компьютерах, чуть менее точная",
+  turbo: "Основная: русский и украинский, точнее на смешанной речи",
+};
+
+/** The hardware check of the preview's selected model. */
+export const SPEECH_BENCHMARK: StoredBenchmark = {
+  p95Ms: 1473,
+  passed: true,
+  rtf: 0.18,
+  wer: 0.032,
+};
 
 /* ---------------------------------------------------------------- Агент */
 

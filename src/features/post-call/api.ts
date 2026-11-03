@@ -6,6 +6,7 @@ import { CURRENT_CALL_ID, resetCall } from "@/data/call-session";
 import {
   type CallRecord,
   resolveCallId,
+  type SummaryProgress,
   setSummaryProgress,
   type TaskSyncService,
   updateTaskCard,
@@ -49,6 +50,8 @@ export function collectSummary(
   options: {
     onDone?: () => void;
     patch?: Partial<Pick<CallRecord, "participants" | "projectId">>;
+    /** The call's recording: its second pass is the transcript step. */
+    recordingId?: string;
   } = {}
 ) {
   if (running.has(callId)) {
@@ -59,8 +62,9 @@ export function collectSummary(
 
   appRuntime.runFork(
     PostCallBackend.use((backend) =>
-      Stream.runForEach(backend.buildSummary(callId), (progress) =>
-        Effect.sync(() => setSummaryProgress(callId, progress))
+      Stream.runForEach(
+        backend.buildSummary(callId, options.recordingId),
+        (progress) => Effect.sync(() => setSummaryProgress(callId, progress))
       )
     ).pipe(
       Effect.ensuring(Effect.sync(() => running.delete(callId))),
@@ -79,16 +83,35 @@ export function isCollectingSummary(callId: string) {
   return running.has(callId);
 }
 
+/** The transcript step when the second pass didn't refine it in time. */
+const TRANSCRIPT_NOTES: Record<
+  NonNullable<SummaryProgress["transcript"]>,
+  Pick<ProcessingStepData, "description" | "title">
+> = {
+  failed: {
+    description: "Уточнить не получилось, итоги по живой расшифровке",
+    title: "Расшифровка готова",
+  },
+  later: {
+    description: "Уточню её в фоне, итоги пока по живой расшифровке",
+    title: "Расшифровка готова",
+  },
+};
+
 /** Processing steps as they look at `step` with `progress` percent. */
 export function processingSteps(
   step: number,
-  progress: number
+  progress: number,
+  transcript?: SummaryProgress["transcript"]
 ): ProcessingStepData[] {
   return PROCESSING_STEPS.map((item, index) => {
     if (index < step) {
+      const note =
+        index === 0 && transcript ? TRANSCRIPT_NOTES[transcript] : undefined;
       return {
         ...item,
-        meta: DONE_META[index],
+        ...note,
+        meta: note ? undefined : DONE_META[index],
         progress: undefined,
         status: "done",
       };

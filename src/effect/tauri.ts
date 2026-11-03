@@ -115,8 +115,12 @@ export interface EventSource<T> {
   listen: (handler: EventCallback<T>) => Promise<UnlistenFn>;
 }
 
-/** Registers `emit` for `event` until the scope closes. */
-function subscribe<T>(
+/**
+ * Registers `emit` for `event` until the scope closes. For a stream that
+ * needs several events in one order (one queue), subscribe to each inside
+ * one `Stream.callback`.
+ */
+export function subscribe<T>(
   event: EventName | EventSource<T>,
   emit: (payload: T) => void
 ): Effect.Effect<UnlistenFn, BackendError, Scope.Scope> {

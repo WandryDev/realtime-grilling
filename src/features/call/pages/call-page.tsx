@@ -50,8 +50,9 @@ import type {
 } from "../types";
 
 /*
- * /call: the live call window. The scripted feed from ../api streams the
- * transcript, topics, questions and context; clicks change the questions
+ * /call: the live call window. The feed from ../api streams the transcript,
+ * topics, questions and context (in Tauri the transcript is the
+ * recognizer's, the rest scripted); clicks change the questions
  * locally; "Завершить" stops the recording, collects the summary and
  * opens it.
  *
@@ -106,8 +107,25 @@ function feedStart(demo: CallDemoState | undefined) {
   }
 }
 
+/**
+ * The window as it opens. In Tauri the transcript is the recognizer's, so
+ * the starting call has none of the demo's phrases.
+ */
 function initialState(demo: CallDemoState | undefined): LiveCallState {
-  return demo ? createLiveCall(CALL_SCREENS[demo]) : startingCall();
+  if (demo) {
+    return createLiveCall(CALL_SCREENS[demo]);
+  }
+  const starting = startingCall();
+  if (!inTauri) {
+    return starting;
+  }
+  return {
+    ...starting,
+    data: {
+      ...starting.data,
+      transcript: { ...starting.data.transcript, items: [] },
+    },
+  };
 }
 
 export function CallPage() {
@@ -191,7 +209,9 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const feedPosition = useRef(feedStart(demo));
   const playFeedEvent = useMemo(() => feedHandler(dispatch), []);
   useEffect(() => {
-    if (finishing || feedPosition.current >= FEED_LENGTH) {
+    // In Tauri the feed carries the live transcript after the script ends.
+    const scriptOver = feedPosition.current >= FEED_LENGTH;
+    if (finishing || (scriptOver && !inTauri)) {
       return;
     }
     return subscribeToCallFeed(playFeedEvent, {

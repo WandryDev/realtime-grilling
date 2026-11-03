@@ -9,6 +9,7 @@ import {
   TranscriptColumn,
   TranscriptItems,
   TranscriptNotice,
+  TranscriptUnavailable,
 } from "../components/transcript";
 import { TranscriptRail } from "../components/transcript-rail";
 import { CALL_SCREENS } from "../mock";
@@ -76,6 +77,9 @@ export function CallScreen({
             <TranscriptRail speaker={railSpeaker(transcript.items)} />
           ) : (
             <TranscriptColumn scrollKey={transcript.items.length}>
+              {transcript.unavailable ? (
+                <TranscriptUnavailable unavailable={transcript.unavailable} />
+              ) : null}
               {transcript.notice ? (
                 <TranscriptNotice notice={transcript.notice} />
               ) : null}

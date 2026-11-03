@@ -10,6 +10,7 @@ import {
   finishCall,
   resumeCall,
 } from "@/data/call-session";
+import { getProjects } from "@/data/projects";
 import { appRuntime, runCancelable } from "@/effect/runtime";
 import type { BackendError } from "@/effect/tauri";
 
@@ -18,6 +19,7 @@ import {
   type MicActivity,
   mockMicActivity,
   RecordingBackend,
+  type RecordingInput,
   type RecordingLevels,
   type RecordingStatus,
 } from "./backend";
@@ -32,7 +34,7 @@ import {
  * - releaseMicDemo: the browser demo's meeting app lets the mic go.
  */
 
-export type { MicActivity, RecordingLevels } from "./backend";
+export type { MicActivity, RecordingInput, RecordingLevels } from "./backend";
 
 /* ------------------------------------------------------------- Recording */
 
@@ -50,12 +52,15 @@ function startFailure(error: BackendError): RecordingStart {
 }
 
 /**
- * Starts recording both channels. A recording without a call row: the
- * call is stored when it ends (`callId` would have to exist).
+ * Starts recording both channels, with the project and the people on the
+ * call for the speech model's glossary. A recording without a call row:
+ * the call is stored when it ends (`callId` would have to exist).
  */
-export function beginRecording(): Promise<RecordingStart> {
+export function beginRecording(
+  input: RecordingInput = {}
+): Promise<RecordingStart> {
   return appRuntime.runPromise(
-    RecordingBackend.use((recorder) => recorder.start(null)).pipe(
+    RecordingBackend.use((recorder) => recorder.start(input)).pipe(
       Effect.map((id): RecordingStart => ({ id, ok: true })),
       Effect.catch((error) => Effect.succeed(startFailure(error)))
     )
@@ -323,6 +328,17 @@ export function finishRecordedCall(): Promise<void> {
 }
 
 /**
+ * The project of the resumed call, when the stores know it (the demo call
+ * of the browser has a made-up one). The session keeps the people's names
+ * only, so the new recording's glossary has the project without them.
+ */
+function resumeInput(): RecordingInput {
+  const { projectId } = currentCallSession();
+  const known = getProjects().some((project) => project.id === projectId);
+  return known ? { projectId } : {};
+}
+
+/**
  * "Отменить завершение": the call is live again; a recorded one records on
  * into a new recording (the stopped one stays as it is). A failed start
  * leaves the call live without a recording and says why.
@@ -336,7 +352,7 @@ export function resumeRecordedCall(): Promise<void> {
     if (currentCallSession().status !== "live") {
       return;
     }
-    const started = await beginRecording();
+    const started = await beginRecording(resumeInput());
     if (!started.ok) {
       showRestartFailure(started);
       return;

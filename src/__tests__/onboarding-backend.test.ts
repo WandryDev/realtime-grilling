@@ -11,7 +11,6 @@ import {
   MOCK_LOGIN_URL,
   mockComputer,
   OnboardingBackend,
-  WORD_INTERVAL_MS,
 } from "@/features/onboarding/backend";
 import { IntegrationsBackend } from "@/features/onboarding/integrations/backend";
 import {
@@ -27,21 +26,6 @@ afterEach(() => {
 });
 
 describe("OnboardingBackend.layerMock", () => {
-  it.effect("hears the mic-check phrase word by word, then stops", () =>
-    Effect.gen(function* () {
-      const backend = yield* OnboardingBackend;
-      const fiber = yield* Effect.forkChild(
-        Stream.runCollect(backend.micCheck("Раз два три"))
-      );
-      yield* TestClock.adjust(WORD_INTERVAL_MS * 3);
-      assert.deepStrictEqual(Array.from(yield* Fiber.join(fiber)), [
-        "Раз",
-        "Раз два",
-        "Раз два три",
-      ]);
-    }).pipe(Effect.provide(OnboardingBackend.layerMock))
-  );
-
   it.effect("streams an input level between 0 and 1 every frame", () =>
     Effect.gen(function* () {
       const backend = yield* OnboardingBackend;
@@ -162,22 +146,6 @@ describe("OnboardingBackend.layerMock, the mock computer", () => {
         expired._tag === "BackendError" ? expired.kind : null,
         "NotFound"
       );
-    }).pipe(Effect.provide(OnboardingBackend.layerMock))
-  );
-
-  it.effect("downloads the speech model from where it stopped", () =>
-    Effect.gen(function* () {
-      const backend = yield* OnboardingBackend;
-      const fiber = yield* Effect.forkChild(
-        Stream.runCollect(backend.downloadSpeechModel("ru", 95))
-      );
-      yield* TestClock.adjust(
-        MOCK_DELAY_MS.modelTick * 2 + MOCK_DELAY_MS.modelCheck
-      );
-      assert.deepStrictEqual(Array.from(yield* Fiber.join(fiber)), [
-        { percent: 97.5, type: "downloading" },
-        { type: "checking" },
-      ]);
     }).pipe(Effect.provide(OnboardingBackend.layerMock))
   );
 });

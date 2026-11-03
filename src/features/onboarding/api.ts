@@ -12,8 +12,7 @@ import {
 
 /*
  * React-facing side of the onboarding backend (`./backend.ts`): the live
- * input level, the live mic-check transcript, the clipboard, the browser and
- * the window focus.
+ * input level, the clipboard, the browser and the window focus.
  *
  * Every listener returns its unsubscribe function, call it on unmount.
  */
@@ -66,20 +65,6 @@ export function openLoginPage(url: string) {
   runCancelable(
     OnboardingBackend.use((backend) => backend.openLoginPage(url)).pipe(
       Effect.ignore
-    )
-  );
-}
-
-/** Streams what the speech model hears during the mic check, word by word. */
-export function listenToMicCheck(
-  phrase: string,
-  onText: (text: string) => void
-): () => void {
-  return runCancelable(
-    OnboardingBackend.use((backend) =>
-      Stream.runForEach(backend.micCheck(phrase), (text) =>
-        Effect.sync(() => onText(text))
-      )
     )
   );
 }

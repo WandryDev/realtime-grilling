@@ -1,41 +1,43 @@
 "use client";
 
-import { type ReactNode, useCallback } from "react";
+import { useCallback } from "react";
 
+import type { ModelId, SpeechModel } from "@/bindings";
 import {
   Alert,
   AlertAction,
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { ClaudeIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { RadioGroup } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,
   type SettingsValues,
+  type StoredBenchmark,
 } from "@/data/settings";
 import { SidebarStatus, SidebarStatusItem } from "@/features/shell/app-sidebar";
 import { MicIcon } from "@/features/shell/icons";
 
 import {
   LevelMeter,
-  SettingsRadioGroup,
   SettingsRadioRow,
   SettingsRow,
   SettingsSection,
   SettingsSelect,
 } from "../components/settings-rows";
 import { SettingsScreen } from "../components/settings-screen";
-import { DownloadIcon, MicOffIcon, PlayIcon, RefreshIcon } from "../icons";
+import { DownloadIcon, MicOffIcon, PlayIcon } from "../icons";
 import {
   DISCONNECTED_MICROPHONE,
   MICROPHONES,
+  SPEECH_BENCHMARK,
+  SPEECH_MODEL_NOTES,
   SPEECH_MODELS,
-  type SpeechModel,
   SYSTEM_AUDIO_SOURCES,
 } from "../mock";
 
@@ -72,105 +74,194 @@ function MicrophoneDisconnectedBanner({
   );
 }
 
-/** "есть обновление": soft orange pill with a dot. */
-function UpdateBadge() {
-  return (
-    <Badge className="h-[22px] px-2 text-xs" variant="waiting">
-      <span aria-hidden="true" className="bg-accent size-1.5 rounded-full" />
-      есть обновление
-    </Badge>
-  );
-}
-
-/** Download or update in progress: a 120 wide bar with the percent. */
-function ModelProgress({ name, value }: { name: string; value: number }) {
+/** Download in progress: a 120 wide bar with the percent. */
+function ModelProgress({
+  name,
+  paused = false,
+  value,
+}: {
+  name: string;
+  paused?: boolean;
+  value: number;
+}) {
   return (
     <div className="flex w-30 shrink-0 items-center gap-2">
       <Progress
         aria-label={`Загрузка ${name}`}
         className="flex-1"
         size="sm"
-        tone="active"
+        tone={paused ? "paused" : "active"}
         value={value}
       />
       <span className="text-muted-foreground w-8 text-right font-mono text-xs">
-        {value}%
+        {Math.round(value)}%
       </span>
     </div>
   );
 }
 
-function SpeechModelRow({
+const BYTES_PER_MB = 1_000_000;
+const MB_PER_GB = 1000;
+
+/** "574 МБ", "1,2 ГБ": decimal units, as macOS counts disk space. */
+function formatBytes(bytes: number) {
+  const mb = bytes / BYTES_PER_MB;
+  if (mb < MB_PER_GB) {
+    return `${Math.round(mb)} МБ`;
+  }
+  return `${(mb / MB_PER_GB).toFixed(1).replace(".", ",")} ГБ`;
+}
+
+/** The line under a model's name: what it is for, or what went wrong. */
+function modelDescription(model: SpeechModel) {
+  const { state } = model;
+  switch (state.status) {
+    case "noSpace":
+      return `Не хватает места: нужно ${formatBytes(state.needBytes)}, свободно ${formatBytes(state.freeBytes)}`;
+    case "noNetwork":
+      return `Нет сети, загрузка прервалась на ${Math.round(state.percent)}%. Продолжим сами`;
+    case "error":
+      return state.reason === "checksum"
+        ? "Файл скачался с ошибкой и удалён, скачайте заново"
+        : state.message;
+    case "checking":
+      return "Проверяем файл после загрузки";
+    default:
+      return SPEECH_MODEL_NOTES[model.id];
+  }
+}
+
+export interface SpeechModelActions {
+  /** "Скачать", "Продолжить", "Повторить". */
+  onDownload?: (id: ModelId) => void;
+  /** "Скачать заново": a broken model goes and comes again. */
+  onRedownload?: (id: ModelId) => void;
+  onRemove?: (id: ModelId) => void;
+}
+
+function ModelAction({
+  actions,
   disabled,
   model,
-  onDownload,
-  progress,
 }: {
+  actions: SpeechModelActions;
+  disabled: boolean;
+  model: SpeechModel;
+}) {
+  const { id, name, state } = model;
+  const broken = state.status === "error";
+  const download = useCallback(() => {
+    if (broken) {
+      actions.onRedownload?.(id);
+    } else {
+      actions.onDownload?.(id);
+    }
+  }, [actions, broken, id]);
+  const remove = useCallback(() => actions.onRemove?.(id), [actions, id]);
+  switch (state.status) {
+    case "downloading":
+      return <ModelProgress name={name} value={state.percent} />;
+    case "checking":
+      return <ModelProgress name={name} value={100} />;
+    case "paused":
+    case "noNetwork":
+      return (
+        <Button
+          className="w-30"
+          disabled={disabled}
+          onClick={download}
+          variant="secondary"
+        >
+          {state.status === "paused" ? "Продолжить" : "Повторить"}
+        </Button>
+      );
+    case "ready":
+      return (
+        <Button
+          className="text-muted-foreground w-30"
+          disabled={disabled && model.selected}
+          onClick={remove}
+          variant="ghost"
+        >
+          Удалить
+        </Button>
+      );
+    default:
+      return (
+        <Button
+          className="text-muted-foreground w-30"
+          disabled={disabled}
+          onClick={download}
+          variant="ghost"
+        >
+          <DownloadIcon className="size-3.5" />
+          {broken ? "Скачать заново" : "Скачать"}
+        </Button>
+      );
+  }
+}
+
+function SpeechModelRow({
+  actions,
+  disabled = false,
+  model,
+}: {
+  actions: SpeechModelActions;
   disabled?: boolean;
   model: SpeechModel;
-  /** Download (not installed) or update (installed, update available). */
-  onDownload?: (id: string) => void;
-  /** Percent of the running download or update. */
-  progress?: number;
 }) {
-  const handleDownload = useCallback(() => {
-    onDownload?.(model.id);
-  }, [model.id, onDownload]);
-
-  let action: ReactNode = (
-    <Button
-      className="text-muted-foreground w-30"
-      disabled={disabled}
-      onClick={handleDownload}
-      variant="ghost"
-    >
-      <DownloadIcon className="size-3.5" />
-      Скачать
-    </Button>
-  );
-  if (progress !== undefined) {
-    action = <ModelProgress name={model.name} value={progress} />;
-  } else if (model.installed && model.update) {
-    action = (
-      <Button
-        className="w-30"
-        disabled={disabled}
-        onClick={handleDownload}
-        variant="secondary"
-      >
-        <RefreshIcon className="size-3.5" />
-        Обновить
-      </Button>
-    );
-  } else if (model.installed) {
-    action = (
-      <span className="text-muted-foreground w-30 shrink-0 text-center text-sm">
-        Последняя версия
-      </span>
-    );
-  }
-
   return (
     <SettingsRadioRow
       align="center"
-      badge={
-        model.update && progress === undefined ? <UpdateBadge /> : undefined
-      }
       className="py-4.5"
-      description={model.description}
-      disabled={disabled || !model.installed}
+      description={modelDescription(model)}
+      disabled={disabled || model.state.status !== "ready"}
       title={model.name}
       trailing={
         <>
           <span className="text-muted-foreground w-16 shrink-0 text-right font-mono text-xs">
-            {model.size}
+            {formatBytes(model.sizeBytes)}
           </span>
-          {action}
+          <ModelAction actions={actions} disabled={disabled} model={model} />
         </>
       }
       value={model.id}
     />
   );
+}
+
+const PERCENT = 100;
+
+function formatSeconds(ms: number) {
+  return (ms / 1000).toFixed(1).replace(".", ",");
+}
+
+/** The hardware check of the selected model in one line. */
+export function benchmarkSummary(result: StoredBenchmark | undefined) {
+  if (!result) {
+    return "Ещё не проверяли на этом компьютере";
+  }
+  const errors = `ошибок ${Math.round(result.wer * PERCENT)}%`;
+  if (result.passed) {
+    return `Успевает: фраза расшифровывается за ${formatSeconds(result.p95Ms)} с, ${errors}`;
+  }
+  switch (result.reason) {
+    case "inaccurate":
+      return `Распознаёт неправильно: ${errors}. Скачайте модель заново`;
+    case "modelFailed":
+      return "Модель не запустилась, скачайте её заново";
+    case "noModel":
+      return "Модель не скачана";
+    default:
+      return `Не успевает: фраза за ${formatSeconds(result.p95Ms)} с, нужно до 3 с. Живая расшифровка будет отставать, полная появится после звонка`;
+  }
+}
+
+export interface BenchmarkState {
+  /** The last result of the selected model, if any. */
+  result?: StoredBenchmark;
+  /** The check runs now. */
+  running: boolean;
 }
 
 /** What the sound check heard, under its row. */
@@ -194,45 +285,64 @@ function SoundCheckResult({ client, you }: { client: string; you: string }) {
 
 const SILENCE_LEVEL = 5;
 
+const NO_MODEL_ACTIONS: SpeechModelActions = {};
+
 /**
  * "Звук и распознавание": both audio channels, sound check, speech model.
  * During a call (`inCall`) devices and the model can't change.
  */
 export function AudioSettings({
+  benchmark = { result: SPEECH_BENCHMARK, running: false },
   inCall = false,
   levels = { microphone: 58, system: 4 },
   microphone = "ok",
-  modelProgress = {},
+  modelActions = NO_MODEL_ACTIONS,
+  models = SPEECH_MODELS,
   onChange,
-  onDownloadModel,
   onPickMicrophone,
+  onRecheck,
+  onSelectModel,
   onSoundCheck,
   onUseBuiltInMic,
   soundCheck = { status: "idle" },
   values = DEFAULT_SETTINGS,
 }: {
+  /** The hardware check of the selected model. */
+  benchmark?: BenchmarkState;
   inCall?: boolean;
   /** Live input levels, 0–100. */
   levels?: { microphone: number; system: number };
   microphone?: MicrophoneState;
-  /** Running downloads and updates, percent by model id. */
-  modelProgress?: Record<string, number>;
+  /** "Скачать", "Продолжить", "Удалить" of a model. */
+  modelActions?: SpeechModelActions;
+  /** Both speech models, as the backend reports them. */
+  models?: readonly SpeechModel[];
   onChange?: SettingChange;
-  onDownloadModel?: (id: string) => void;
   /** A device picked while the chosen microphone is missing. */
   onPickMicrophone?: (value: string) => void;
+  /** "Проверить снова": the hardware check of the selected model. */
+  onRecheck?: () => void;
+  /** A ready model picked to recognize with. */
+  onSelectModel?: (id: ModelId) => void;
   onSoundCheck?: () => void;
   onUseBuiltInMic?: () => void;
   soundCheck?: SoundCheckState;
   values?: SettingsValues;
 }) {
   const micDisabled = microphone === "disabled";
-  const models = SPEECH_MODELS.map((model) => ({
-    ...model,
-    installed: values.installedModels.includes(model.id),
-    update: values.modelUpdates.includes(model.id),
-  }));
   const checking = soundCheck.status === "running";
+  const selected = models.find((model) => model.selected);
+  const canRecheck =
+    !(inCall || benchmark.running) && selected?.state.status === "ready";
+  const pickModel = useCallback(
+    (value: unknown) => {
+      const picked = models.find((model) => model.id === value);
+      if (picked) {
+        onSelectModel?.(picked.id);
+      }
+    },
+    [models, onSelectModel]
+  );
 
   return (
     <>
@@ -348,22 +458,41 @@ export function AudioSettings({
         </SettingsRow>
       </SettingsSection>
       <SettingsSection className="pt-8" title="Модель распознавания">
-        <SettingsRadioGroup
+        <RadioGroup
           aria-label="Модель распознавания"
-          defaultValue={values.speechModel}
-          onSettingChange={onChange}
-          setting="speechModel"
+          className="gap-0"
+          onValueChange={pickModel}
+          value={selected?.id ?? ""}
         >
           {models.map((model) => (
             <SpeechModelRow
+              actions={modelActions}
               disabled={inCall}
               key={model.id}
               model={model}
-              onDownload={onDownloadModel}
-              progress={modelProgress[model.id]}
             />
           ))}
-        </SettingsRadioGroup>
+        </RadioGroup>
+        <SettingsRow
+          control={
+            <Button
+              disabled={!canRecheck}
+              onClick={onRecheck}
+              variant="secondary"
+            >
+              {benchmark.running ? (
+                <Spinner aria-hidden="true" className="size-3.5" />
+              ) : null}
+              {benchmark.running ? "Проверяю…" : "Проверить снова"}
+            </Button>
+          }
+          description={
+            benchmark.running
+              ? "Расшифровываю проверочные фразы, это до двух минут"
+              : benchmarkSummary(benchmark.result)
+          }
+          title="Успевает ли компьютер"
+        />
       </SettingsSection>
     </>
   );

@@ -29,8 +29,8 @@ describe("RecordingBackend.layerMock", () => {
       );
       yield* Effect.yieldNow;
 
-      const id = yield* recorder.start("call-1");
-      assert.strictEqual(yield* recorder.start(null), id);
+      const id = yield* recorder.start({ callId: "call-1" });
+      assert.strictEqual(yield* recorder.start(), id);
       const status = yield* recorder.status;
       assert.strictEqual(status.id, id);
       assert.isNotNull(status.startedAt);

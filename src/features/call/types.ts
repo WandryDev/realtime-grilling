@@ -42,7 +42,13 @@ export type TranscriptItem =
       live?: "speaking" | "transcribing";
       text: string;
     }
-  | { id: string; kind: "me"; text: string }
+  | {
+      id: string;
+      kind: "me";
+      /** Your phrase is still being transcribed. */
+      live?: "transcribing";
+      text: string;
+    }
   /** Client speech without audio: a dashed placeholder with its length. */
   | { duration: string; id: string; kind: "missing"; label: string };
 
@@ -51,11 +57,23 @@ export interface TranscriptNoticeData {
   title: string;
 }
 
+/**
+ * Recognition doesn't work this call (no model, it failed to load, no
+ * phrases come out of the recording): said instead of the feed.
+ */
+export interface TranscriptUnavailableData {
+  description: string;
+  /** "Скачать в настройках": the model is missing or broken. */
+  settingsHref?: string;
+  title: string;
+}
+
 export interface TranscriptData {
   /** Collapsed to the 52px rail. */
   collapsed?: boolean;
   items: TranscriptItem[];
   notice?: TranscriptNoticeData;
+  unavailable?: TranscriptUnavailableData;
 }
 
 /* Questions */
@@ -328,6 +346,14 @@ export interface CallScreenActions {
 export type CallFeedEvent =
   /** Adds a phrase or replaces the one with the same id (speech finished). */
   | { item: TranscriptItem; type: "transcript" }
+  /** Adds a phrase being transcribed, unless its text is already there. */
+  | { item: TranscriptItem; type: "transcript-pending" }
+  /** The phrase had no text after all: it goes away. */
+  | { id: string; type: "transcript-remove" }
+  /** The recognizer lags `seconds` behind; 0: it caught up. */
+  | { seconds: number; type: "transcript-lag" }
+  /** Whether recognition works this call. */
+  | { state: TranscriptionState; type: "transcription" }
   /**
    * A new topic under discussion. The current one moves down as the
    * previous topic, `previousRange` becomes its time range.
@@ -358,3 +384,10 @@ export type CallFeedEvent =
   | { type: "mic-released" };
 
 export type FeedCheckpoint = "reference" | "final-check";
+
+/** Recognition of the recording: `ok`, or why there is no text. */
+export type TranscriptionState =
+  | "ok"
+  | "noModel"
+  | "modelFailed"
+  | "segmentationUnavailable";

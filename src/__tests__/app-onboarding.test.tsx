@@ -6,6 +6,7 @@ import {
   LOGIN_EXPIRED,
   resetOnboardingSetup,
 } from "@/data/onboarding-setup";
+import { getSettings, resetSettings } from "@/data/settings";
 import { MOCK_DELAY_MS, mockComputer } from "@/features/onboarding/backend";
 import { AgentPage } from "@/features/onboarding/pages/agent-page";
 import { PermissionsPage } from "@/features/onboarding/pages/permissions-page";
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   navigation.params = new URLSearchParams();
   resetOnboardingSetup();
+  resetSettings();
 });
 
 afterEach(() => {
@@ -208,17 +210,48 @@ describe("SpeechPage", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Українська" }));
     expect(screen.getByText("Модель для украинского языка")).toBeDefined();
+    // The call language is a setting
+    expect(getSettings().callLanguage).toBe("uk");
   });
 
   it("retries after the network dropped", () => {
     navigation.params = new URLSearchParams("demo=no-network");
     render(<SpeechPage />);
+    advance(0);
 
     expect(screen.getByText("Загрузка прервалась на 63%")).toBeDefined();
+    expect(screen.getByText("сами попробуем снова через 0:24")).toBeDefined();
+    advance(4000);
+    expect(screen.getByText("сами попробуем снова через 0:20")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Повторить сейчас" }));
+    advance(0);
     expect(
       screen.getByText("Скачиваем модель для русского языка")
     ).toBeDefined();
+  });
+
+  it("offers the small model when turbo is too slow", () => {
+    navigation.params = new URLSearchParams("demo=check-failed");
+    render(<SpeechPage />);
+    advance(0);
+
+    expect(
+      screen.getByText("Компьютер не успевает за разговором")
+    ).toBeDefined();
+    // A failed check doesn't forbid the model
+    expect(nextLink().getAttribute("href")).toBe("/onboarding/agent");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Скачать запасную модель" })
+    );
+    advance(0);
+    expect(
+      screen.getByText("Скачиваем модель для русского языка")
+    ).toBeDefined();
+    // 0 → 100% at 2,5% per 100 ms, the sum, then the check
+    advance(4000);
+    advance(1500);
+    expect(screen.getByText("Модель готова")).toBeDefined();
   });
 });
 

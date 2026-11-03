@@ -9,9 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AgentState,
+  BenchmarkResult,
   CommandError,
+  ModelState,
   PermissionStatus,
   Permissions,
+  SpeechModel,
 } from "@/bindings";
 
 /*
@@ -75,6 +78,7 @@ const { AgentPage } = await import("@/features/onboarding/pages/agent-page");
 const { WelcomePage } = await import(
   "@/features/onboarding/pages/welcome-page"
 );
+const { SpeechPage } = await import("@/features/onboarding/pages/speech-page");
 
 const LOGIN_URL = "https://claude.ai/oauth/authorize?code=true";
 const INSTALL_LOG_LINE = /Could not resolve host/u;
@@ -507,5 +511,238 @@ describe("AgentPage in Tauri", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(LOGIN_EXPIRED);
     expect(screen.getByText("Вход не выполнен")).toBeTruthy();
     expect(screen.queryByLabelText("Код из браузера")).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------- 03 Speech model */
+
+const TURBO_BYTES = 574_041_195;
+
+function model(
+  id: "turbo" | "small",
+  state: ModelState,
+  selected = id === "turbo"
+): SpeechModel {
+  return {
+    id,
+    name: id === "turbo" ? "Whisper large-v3-turbo" : "Whisper small",
+    selected,
+    sizeBytes: id === "turbo" ? TURBO_BYTES : 487_601_967,
+    state,
+  };
+}
+
+const NOT_DOWNLOADED: ModelState = { status: "notDownloaded" };
+const MODEL_READY: ModelState = { status: "ready" };
+
+const PASSED: BenchmarkResult = {
+  p95Ms: 1473,
+  passed: true,
+  rtf: 0.18,
+  wer: 0.03,
+};
+const SLOW: BenchmarkResult = {
+  p95Ms: 13_000,
+  passed: false,
+  reason: "slow",
+  rtf: 2.4,
+  wer: 0.04,
+};
+
+/** Rust reports a model's new state, as `SpeechModelChanged`. */
+function modelChanged(changed: SpeechModel) {
+  return emit("speech-model-changed", changed);
+}
+
+function showsModels(turbo: ModelState, small: ModelState = NOT_DOWNLOADED) {
+  answer("speech_models_list", [model("turbo", turbo), model("small", small)]);
+}
+
+describe("SpeechPage in Tauri", () => {
+  beforeEach(() => {
+    answer("speech_mic_check", "");
+  });
+
+  it("follows the download through its states to a checked, ready model", async () => {
+    showsModels(NOT_DOWNLOADED);
+    answer(
+      "speech_model_download",
+      model("turbo", { bytesPerSec: 0, percent: 0, status: "downloading" })
+    );
+    answer(
+      "speech_model_pause",
+      model("turbo", { percent: 40, status: "paused" })
+    );
+    const benchmark = running("speech_benchmark");
+    const micCheck = running("speech_mic_check");
+    render(<SpeechPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Скачать" }));
+    await modelChanged(
+      model("turbo", {
+        bytesPerSec: 20_000_000,
+        percent: 40,
+        status: "downloading",
+      })
+    );
+    expect(
+      screen.getByText("Скачиваем модель для русского языка")
+    ).toBeTruthy();
+    expect(screen.getByText("230 МБ из 574 МБ, 20,0 МБ/с")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Пауза" }));
+    await waitFor(() => expect(calls("speech_model_pause")).toHaveLength(1));
+    expect(screen.getByText("Модель для русского языка на паузе")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+    await waitFor(() =>
+      expect(calls("speech_model_download")).toEqual([
+        { args: { id: "turbo" }, command: "speech_model_download" },
+        { args: { id: "turbo" }, command: "speech_model_download" },
+      ])
+    );
+
+    await modelChanged(model("turbo", { status: "checking" }));
+    expect(screen.getByText("Проверяем модель")).toBeTruthy();
+
+    // Ready: "проверяем" is now the hardware check
+    await modelChanged(model("turbo", MODEL_READY));
+    expect(
+      screen.getByText("Проверяем, как компьютер справляется")
+    ).toBeTruthy();
+    expect(calls("speech_benchmark")).toEqual([
+      { args: { model: "turbo" }, command: "speech_benchmark" },
+    ]);
+
+    await act(async () => {
+      benchmark(PASSED);
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("Модель готова")).toBeTruthy();
+
+    // The mic check: what the model heard, at once
+    await waitFor(() => expect(calls("speech_mic_check")).toHaveLength(1));
+    await act(async () => {
+      micCheck("Привет, это проверка");
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("Привет, это проверка")).toBeTruthy();
+  });
+
+  it("says how much space is missing", async () => {
+    showsModels({
+      freeBytes: 300_000_000,
+      needBytes: 631_445_315,
+      status: "noSpace",
+    });
+    render(<SpeechPage />);
+
+    expect(await screen.findByText("Не хватает места на диске")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Для модели нужно 631 МБ, а свободно только 300 МБ. Очистите корзину или удалите старые загрузки, потом нажмите «Повторить»."
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("не хватает 331 МБ")).toBeTruthy();
+  });
+
+  it("counts down to the next try when the network drops", async () => {
+    showsModels({ percent: 60, retryInSec: 20, status: "noNetwork" });
+    answer(
+      "speech_model_download",
+      model("turbo", { bytesPerSec: 0, percent: 60, status: "downloading" })
+    );
+    render(<SpeechPage />);
+
+    expect(await screen.findByText("Загрузка прервалась на 60%")).toBeTruthy();
+    expect(screen.getByText("сами попробуем снова через 0:20")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Повторить сейчас" }));
+    await waitFor(() => expect(calls("speech_model_download")).toHaveLength(1));
+  });
+
+  it("offers the small model when turbo is too slow, then checks it", async () => {
+    showsModels(MODEL_READY);
+    answer("speech_benchmark", SLOW);
+    answer(
+      "speech_model_download",
+      model("small", { bytesPerSec: 0, percent: 0, status: "downloading" })
+    );
+    answer("speech_model_select", model("small", MODEL_READY, true));
+    render(<SpeechPage />);
+
+    expect(
+      await screen.findByText("Компьютер не успевает за разговором")
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Фраза расшифровывается за 13,0 с, а для живой ленты нужно до 3 с. Запасная модель быстрее, около 490 МБ, чуть менее точная."
+      )
+    ).toBeTruthy();
+    // The model can still be used
+    expect(screen.getByRole("link", { name: "Продолжить" })).toBeTruthy();
+
+    answer("speech_benchmark", PASSED);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Скачать запасную модель" })
+    );
+    await waitFor(() =>
+      expect(calls("speech_model_download")).toEqual([
+        { args: { id: "small" }, command: "speech_model_download" },
+      ])
+    );
+
+    // Small is ready: it is selected and checked in turn
+    await modelChanged(model("small", MODEL_READY, false));
+    await waitFor(() =>
+      expect(calls("speech_model_select")).toEqual([
+        { args: { id: "small" }, command: "speech_model_select" },
+      ])
+    );
+    await waitFor(() =>
+      expect(calls("speech_benchmark").at(-1)).toEqual({
+        args: { model: "small" },
+        command: "speech_benchmark",
+      })
+    );
+    expect(await screen.findByText("Модель готова")).toBeTruthy();
+  });
+
+  it("says recognition works wrong when the check finds errors", async () => {
+    showsModels(MODEL_READY);
+    answer("speech_benchmark", {
+      p95Ms: 900,
+      passed: false,
+      reason: "inaccurate",
+      rtf: 0.1,
+      wer: 0.6,
+    } satisfies BenchmarkResult);
+    render(<SpeechPage />);
+
+    expect(
+      await screen.findByText("Распознавание работает неправильно")
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "На проверочных фразах модель ошиблась в 60% слов. Скачайте её заново; если не поможет, напишите нам."
+      )
+    ).toBeTruthy();
+  });
+
+  it("stores the call language in the settings", async () => {
+    showsModels(NOT_DOWNLOADED);
+    render(<SpeechPage />);
+    await screen.findByRole("button", { name: "Скачать" });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Українська" }));
+    await waitFor(() =>
+      expect(calls("settings_update")).toEqual([
+        {
+          args: { patch: { callLanguage: "uk" } },
+          command: "settings_update",
+        },
+      ])
+    );
+    expect(screen.getByText("Модель для украинского языка")).toBeTruthy();
   });
 });

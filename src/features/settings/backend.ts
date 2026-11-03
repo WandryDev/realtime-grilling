@@ -75,8 +75,6 @@ export class SettingsBackend extends Context.Service<
     readonly inputLevel: (channel: AudioChannel) => Stream.Stream<number>;
     /** Records both channels for a moment; what was recognized. */
     readonly soundCheck: Effect.Effect<SoundCheckResult>;
-    /** Downloads or updates a speech model. */
-    readonly downloadSpeechModel: (modelId: string) => Stream.Stream<number>;
     /** Looks for the CLI at `path` and checks that it is signed in. */
     readonly checkAgent: (path: string) => Effect.Effect<void, AgentCheckError>;
     /** Signs the CLI in (the browser opens). */
@@ -136,7 +134,6 @@ export class SettingsBackend extends Context.Service<
       } satisfies IntegrationState;
     }),
     deleteAllData: Effect.sleep("1500 millis"),
-    downloadSpeechModel: (_modelId: string) => simulateProgress(2500),
     exportData: (_options: ExportOptions) => simulateProgress(2000),
     inputLevel: (channel: AudioChannel) =>
       Stream.iterate(0, (tick) => tick + 1).pipe(

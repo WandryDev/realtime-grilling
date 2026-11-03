@@ -170,7 +170,7 @@ describe("RecordingBackend.layerTauri", () => {
       const id = yield* recorder.start();
       assert.isTrue(id.startsWith(FAKE_RECORDING_PREFIX));
       assert.deepStrictEqual(invokedWith("recording_start").at(-1), {
-        input: { callId: null },
+        input: { callId: null, participantIds: null, projectId: null },
       });
       const status = yield* recorder.status;
       assert.strictEqual(status.id, id);
@@ -182,6 +182,20 @@ describe("RecordingBackend.layerTauri", () => {
       assert.isNull(idle.startedAt);
       const unknown = yield* Effect.flip(recorder.stop("no-such-recording"));
       assert.strictEqual(unknown.kind, "NotFound");
+
+      // The project and the people on the call, for the glossary.
+      const next = yield* recorder.start({
+        participantIds: ["person-1"],
+        projectId: TELEMEDIA,
+      });
+      assert.deepStrictEqual(invokedWith("recording_start").at(-1), {
+        input: {
+          callId: null,
+          participantIds: ["person-1"],
+          projectId: TELEMEDIA,
+        },
+      });
+      yield* recorder.stop(next);
     }).pipe(Effect.provide(RecordingBackend.layerTauri))
   );
 
@@ -211,6 +225,7 @@ describe("RecordingBackend.layerTauri", () => {
           id: "r2",
           segmentation: "ok",
           startedAt: 7,
+          transcription: { state: "ok" },
         } as const;
         // Rust records and announces it while the read is on its way back
         // with the older status.
@@ -275,6 +290,7 @@ describe("RecordingBackend.layerTauri", () => {
         id: "r1",
         segmentation: "unavailable",
         startedAt: 5,
+        transcription: { model: "turbo", state: "segmentationUnavailable" },
       });
       fake.emit("recording-levels", { me: 0.25, others: 0.5 });
       fake.emit("mic-activity-changed", { busy: false, since: 9 });
@@ -285,6 +301,7 @@ describe("RecordingBackend.layerTauri", () => {
           id: "r1",
           segmentation: "unavailable",
           startedAt: 5,
+          transcription: { model: "turbo", state: "segmentationUnavailable" },
         },
       ]);
       assert.deepStrictEqual(yield* Fiber.join(levels), [
@@ -314,8 +331,9 @@ describe("start widget", () => {
     await waitFor(() => expect(sessionText()).toMatch(LIVE_RECORDED));
     const recordingId = fake.recording.id;
     expect(sessionText()).toBe(`live:${recordingId}`);
+    // The project goes with it, for the speech model's glossary.
     expect(invokedWith("recording_start")).toEqual([
-      { input: { callId: null } },
+      { input: { callId: null, participantIds: [], projectId: TELEMEDIA } },
     ]);
     await waitFor(() =>
       expect(invokedWith("windows_show")).toEqual([

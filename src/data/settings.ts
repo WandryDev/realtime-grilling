@@ -2,6 +2,7 @@
 
 import { Effect } from "effect";
 
+import type { BenchmarkResult } from "@/bindings";
 import { toast } from "@/components/ui/toast";
 import { appRuntime, inTauri } from "@/effect/runtime";
 import { AGENT, RECORDINGS, SHORTCUTS } from "@/features/settings/mock";
@@ -31,24 +32,27 @@ export interface SettingsValues {
   compactOverlay: boolean;
   finalCheck: string;
   hideOnShare: boolean;
-  /** Speech models present on disk, by id. */
-  installedModels: string[];
   interfaceLanguage: string;
   launchAtLogin: boolean;
   micBusyBehavior: string;
   microphone: string;
-  /** Installed models with a newer version available. */
-  modelUpdates: string[];
   questionCount: string;
   questionFrequency: string;
   recordingsFolder: string;
   /** Global shortcuts by action id; an empty list means "not set". */
   shortcuts: Record<string, string[]>;
-  speechModel: string;
+  /**
+   * The hardware check by model id, as the check stored it. Read only:
+   * Rust writes it (`speech_benchmark`).
+   */
+  speechBenchmark: Partial<Record<string, StoredBenchmark>>;
   systemAudio: string;
   theme: string;
   transcriptRetention: string;
 }
+
+/** A hardware check result and when it ran (ms since the epoch). */
+export type StoredBenchmark = BenchmarkResult & { checkedAt?: number };
 
 type KeysOfType<T> = {
   [K in keyof SettingsValues]: SettingsValues[K] extends T ? K : never;
@@ -76,17 +80,15 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   compactOverlay: true,
   finalCheck: "10",
   hideOnShare: true,
-  installedModels: ["whisper"],
   interfaceLanguage: "ru",
   launchAtLogin: true,
   micBusyBehavior: "widget",
   microphone: "airpods",
-  modelUpdates: ["whisper"],
   questionCount: "3",
   questionFrequency: "normal",
   recordingsFolder: RECORDINGS.folder,
   shortcuts: DEFAULT_SHORTCUTS,
-  speechModel: "whisper",
+  speechBenchmark: {},
   systemAudio: "system",
   theme: "light",
   transcriptRetention: "6m",
@@ -119,9 +121,21 @@ export function toStoredSettings(stored: SettingsMap): StoredSettings {
   };
 }
 
+/**
+ * Keys only the backend writes: the hardware check results. The selected
+ * speech model (`speechModel`) is not a preference here at all: it goes
+ * through `speech_model_select` (`src/features/speech`).
+ */
+const BACKEND_KEYS: readonly (keyof SettingsValues)[] = ["speechBenchmark"];
+
 /** One preference as the backend stores it. */
 function toSettingsPatch(patch: Partial<SettingsValues>): SettingsMap {
-  return JSON.parse(JSON.stringify(patch)) as SettingsMap;
+  const writable = Object.fromEntries(
+    Object.entries(patch).filter(
+      ([key]) => !BACKEND_KEYS.includes(key as keyof SettingsValues)
+    )
+  );
+  return JSON.parse(JSON.stringify(writable)) as SettingsMap;
 }
 
 /* --------------------------------------------------------------- Store */
