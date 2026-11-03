@@ -96,7 +96,7 @@
 
 ## 5. Живой проход и второй проход (Rust)
 
-- [ ] 5.1 `TranscriptSink: PhraseSink` вместо `default_sink()` в `recording/app.rs`. Сначала `TranscriptPending`, затем задание распознавателю. Ответ:
+- [x] 5.1 `TranscriptSink: PhraseSink` вместо `default_sink()` в `recording/app.rs`. Сначала `TranscriptPending`, затем задание распознавателю. Ответ:
   - пустой — `TranscriptDropped`;
   - текст — `append_live` и `TranscriptPhrase`.
 
@@ -109,7 +109,7 @@
   - фильтрованная фраза даёт `Dropped`, а не сегмент;
   - медленный распознаватель даёт `Lag`, а затем `Skipped`, и запись при этом не тормозит;
   - без модели — `noModel`, а запись идёт.
-- [ ] 5.2 `Refiner`:
+- [x] 5.2 `Refiner`:
   - после остановки записи — декодирование `me.opus` и `others.opus`, VAD по файлу целиком, beam 5 с полным глоссарием, `replace_refined`;
   - `TranscriptRefine { recordingId, progress, state }` не чаще раза в секунду;
   - пауза, пока идёт запись;
@@ -121,7 +121,7 @@
   - пауза на время записи;
   - рестарт продолжает;
   - ошибка оставляет живой и `failed`.
-- [ ] 5.3 Проверка железа `speech_benchmark(model)`:
+- [x] 5.3 Проверка железа `speech_benchmark(model)`:
   - прогрев, затем 6 встроенных фраз в темпе реального времени;
   - p95, Σ RTF, WER с упрощённой нормализацией, пороги 3 с, 0.5 и 15 %;
   - итог в `speechBenchmark[model]`, отмена.
