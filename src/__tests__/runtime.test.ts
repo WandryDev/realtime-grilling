@@ -14,6 +14,7 @@ import { OnboardingBackend } from "@/features/onboarding/backend";
 import { IntegrationsBackend } from "@/features/onboarding/integrations/backend";
 import { PostCallBackend } from "@/features/post-call/backend";
 import { ProjectsBackend } from "@/features/projects/backend";
+import { RecordingBackend } from "@/features/recording/backend";
 import { SettingsBackend } from "@/features/settings/backend";
 
 afterEach(() => {
@@ -46,9 +47,10 @@ describe("app runtime", () => {
         OnboardingBackend,
         PostCallBackend,
         ProjectsBackend,
+        RecordingBackend,
         SettingsBackend,
       ])
     );
-    expect(services).toHaveLength(7);
+    expect(services).toHaveLength(8);
   });
 });

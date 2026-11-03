@@ -8,6 +8,7 @@ import { OnboardingBackend } from "@/features/onboarding/backend";
 import { IntegrationsBackend } from "@/features/onboarding/integrations/backend";
 import { PostCallBackend } from "@/features/post-call/backend";
 import { ProjectsBackend } from "@/features/projects/backend";
+import { RecordingBackend } from "@/features/recording/backend";
 import { SettingsBackend } from "@/features/settings/backend";
 import { ShellBackend } from "@/features/shell/backend";
 
@@ -27,6 +28,7 @@ export const MockLayer = Layer.mergeAll(
   OnboardingBackend.layerMock,
   PostCallBackend.layerMock,
   ProjectsBackend.layerMock,
+  RecordingBackend.layerMock,
   SettingsBackend.layerMock,
   ShellBackend.layerMock
 );
@@ -39,6 +41,7 @@ export const TauriLayer = Layer.mergeAll(
   OnboardingBackend.layerTauri,
   PostCallBackend.layerMock,
   ProjectsBackend.layerMock,
+  RecordingBackend.layerTauri,
   SettingsBackend.layerMock,
   ShellBackend.layerTauri
 );
