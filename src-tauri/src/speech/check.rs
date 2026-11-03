@@ -54,6 +54,16 @@ pub struct CheckSet {
 }
 
 impl CheckSet {
+    /// A set of made-up phrases, for the tests.
+    #[cfg(test)]
+    pub fn new(phrases: Vec<CheckPhrase>, glossary_ru: &str, glossary_uk: &str) -> Self {
+        Self {
+            phrases,
+            glossary_ru: glossary_ru.to_owned(),
+            glossary_uk: glossary_uk.to_owned(),
+        }
+    }
+
     /// The glossary prompt the spike used for `language`.
     pub fn glossary(&self, language: Language) -> &str {
         match language {

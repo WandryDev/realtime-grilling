@@ -49,6 +49,7 @@ use crate::{
     },
     error::{CaptureFailure, CommandError, CommandResult},
     permissions::{PermissionKind, PermissionState, PermissionStatus},
+    speech::status::TranscriptionStatus,
     storage::{
         self,
         recordings::{self, RecordingLinks},
@@ -230,6 +231,8 @@ impl Shared {
         self.update(|status| {
             if status.id.as_deref() == Some(id) {
                 status.segmentation = SegmentationStatus::Unavailable;
+                let transcription = status.transcription;
+                status.set_transcription(transcription);
             }
         });
     }
@@ -386,6 +389,7 @@ impl Shared {
                 )));
             }
         };
+        let transcription = config.phrases.recording_started(&id);
         // The status first: the supervisor reports changes against it.
         self.recording.store(true, Ordering::SeqCst);
         self.update(|status| {
@@ -401,7 +405,9 @@ impl Shared {
                 } else {
                     segmentation
                 },
+                transcription,
             };
+            status.set_transcription(transcription);
         });
         let supervisor = Supervisor {
             shared: Arc::clone(self),
@@ -424,6 +430,7 @@ impl Shared {
                 finish.requested.store(true, Ordering::SeqCst);
                 drop(recorder.join());
                 self.abandon(&id, store.as_ref());
+                self.config.phrases.recording_finished(&id);
                 self.recording.store(false, Ordering::SeqCst);
                 self.update(|status| *status = RecordingStatus::idle());
                 return Err(CommandError::external(format!(
@@ -462,6 +469,7 @@ impl Shared {
             Some(Ok(finished)) => {
                 finished.log(id);
                 Ended {
+                    id: id.to_owned(),
                     vads: finished.vads,
                     stats: Some([finished.me.stats, finished.others.stats]),
                 }
@@ -469,6 +477,7 @@ impl Shared {
             _ => {
                 eprintln!("grill: the recorder thread of {id} panicked");
                 Ended {
+                    id: id.to_owned(),
                     vads: Vec::new(),
                     stats: None,
                 }
@@ -495,14 +504,18 @@ impl Shared {
 
 /// What a stopped session leaves.
 struct Ended {
+    id: String,
     vads: Vec<VadWorker>,
     /// Timeline corrections of "Я" and "Остальные".
     stats: Option<[TimelineStats; 2]>,
 }
 
-/// Lets the VAD workers score their last audio without holding up `stop`.
-fn finish_in_background(vads: Vec<VadWorker>) {
+/// Lets the VAD workers score their last audio without holding up `stop`,
+/// then tells the phrase sink the recording's phrases are all out.
+fn finish_in_background(ended: Ended, phrases: Arc<dyn PhraseSink>) {
+    let Ended { id, vads, .. } = ended;
     if vads.is_empty() {
+        phrases.recording_finished(&id);
         return;
     }
     let spawned = thread::Builder::new()
@@ -511,6 +524,7 @@ fn finish_in_background(vads: Vec<VadWorker>) {
             for vad in vads {
                 vad.finish();
             }
+            phrases.recording_finished(&id);
         });
     if let Err(error) = spawned {
         eprintln!("grill: could not finish segmentation in the background: {error}");
@@ -562,8 +576,9 @@ impl RecordingManager {
         if let Some(session) = control.take_if(|session| session.id == id) {
             let ended = self.0.end(session);
             drop(control);
-            finish_in_background(ended.vads);
-            return Ok(ended.stats);
+            let stats = ended.stats;
+            finish_in_background(ended, Arc::clone(&self.0.config.phrases));
+            return Ok(stats);
         }
         drop(control);
         self.0
@@ -577,7 +592,7 @@ impl RecordingManager {
         if let Some(session) = control.take() {
             let ended = self.0.end(session);
             drop(control);
-            finish_in_background(ended.vads);
+            finish_in_background(ended, Arc::clone(&self.0.config.phrases));
         }
     }
 
@@ -587,6 +602,15 @@ impl RecordingManager {
 
     pub fn is_recording(&self) -> bool {
         self.0.recording.load(Ordering::SeqCst)
+    }
+
+    /// The live pass of the recording `id` changed; ignored once it stopped.
+    pub fn set_transcription(&self, id: &str, transcription: TranscriptionStatus) {
+        self.0.update(|status| {
+            if status.id.as_deref() == Some(id) {
+                status.set_transcription(transcription);
+            }
+        });
     }
 }
 

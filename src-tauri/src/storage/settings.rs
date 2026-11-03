@@ -14,7 +14,7 @@ use super::json::Json;
 use crate::{
     error::{CommandError, CommandResult},
     events::{Change, DataChanged, Entity},
-    speech::models::ModelId,
+    speech::{language::CallLanguage, models::ModelId},
 };
 
 pub type SettingsMap = BTreeMap<String, Value>;
@@ -36,6 +36,9 @@ pub const AGENT_PATH: &str = "agentPath";
 pub const SPEECH_MODEL: &str = "speechModel";
 /// The hardware check by model, as the benchmark writes it; stored as given.
 pub const SPEECH_BENCHMARK: &str = "speechBenchmark";
+/// «Язык звонка»: `ru`, `uk` or `both` (speech-recognition design.md,
+/// decision 7). Not stored by default: the frontend's default is `ru`.
+pub const CALL_LANGUAGE: &str = "callLanguage";
 
 pub const SETTINGS_ID: &str = "settings";
 
@@ -113,6 +116,7 @@ pub fn validate(patch: &SettingsMap) -> CommandResult<()> {
             SHORTCUTS => serde_json::from_value::<Shortcuts>(value.clone()).is_ok(),
             MIC_BUSY_BEHAVIOR => value.as_str().and_then(MicBusyBehavior::parse).is_some(),
             SPEECH_MODEL => value.as_str().and_then(ModelId::parse).is_some(),
+            CALL_LANGUAGE => value.as_str().and_then(CallLanguage::parse).is_some(),
             // Any JSON: the benchmark owns its shape.
             SPEECH_BENCHMARK => true,
             // Only a path to the agent CLI: it is what the agent commands run.
@@ -196,4 +200,13 @@ pub fn speech_model(settings: &SettingsMap) -> ModelId {
         .and_then(Value::as_str)
         .and_then(ModelId::parse)
         .unwrap_or(ModelId::Turbo)
+}
+
+/// `callLanguage`; a missing or unreadable value is Russian.
+pub fn call_language(settings: &SettingsMap) -> CallLanguage {
+    settings
+        .get(CALL_LANGUAGE)
+        .and_then(Value::as_str)
+        .and_then(CallLanguage::parse)
+        .unwrap_or_default()
 }

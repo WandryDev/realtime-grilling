@@ -7,10 +7,6 @@ mod events;
 mod permissions;
 mod recording;
 mod shell;
-#[allow(
-    dead_code,
-    reason = "the live pass and the checks wire it in (tasks 5.x)"
-)]
 mod speech;
 mod storage;
 mod vad;

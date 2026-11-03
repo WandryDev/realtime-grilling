@@ -65,4 +65,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "speech_model_cancel",
     "speech_model_remove",
     "speech_model_select",
+    "speech_benchmark",
+    "speech_benchmark_cancel",
+    "speech_mic_check",
 ];

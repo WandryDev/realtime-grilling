@@ -14,7 +14,13 @@ use crate::{
     commands,
     events::{CallSessionChanged, DataChanged, Navigate, ShortcutPressed},
     recording::status::{RecordingChanged, RecordingLevels},
-    speech::models::SpeechModelChanged,
+    speech::{
+        events::{
+            TranscriptDropped, TranscriptLag, TranscriptPending, TranscriptPhrase,
+            TranscriptRefine, TranscriptSkipped,
+        },
+        models::SpeechModelChanged,
+    },
 };
 
 pub fn builder() -> Builder<tauri::Wry> {
@@ -90,6 +96,9 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::speech_model_cancel,
             commands::speech_model_remove,
             commands::speech_model_select,
+            commands::speech_benchmark,
+            commands::speech_benchmark_cancel,
+            commands::speech_mic_check,
         ])
         .events(collect_events![
             AgentInstallProgress,
@@ -102,7 +111,13 @@ pub fn builder() -> Builder<tauri::Wry> {
             RecordingChanged,
             RecordingLevels,
             ShortcutPressed,
-            SpeechModelChanged
+            SpeechModelChanged,
+            TranscriptDropped,
+            TranscriptLag,
+            TranscriptPending,
+            TranscriptPhrase,
+            TranscriptRefine,
+            TranscriptSkipped
         ])
 }
 

@@ -109,6 +109,8 @@ pub enum ErrorReason {
     Io,
     /// The server answered with an error (404, 403…) or a file of another size.
     Http,
+    /// The file is installed but whisper.cpp did not load it.
+    Load,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -202,6 +204,23 @@ impl<R: Runtime> ModelEvents for AppHandle<R> {
     fn changed(&self, model: &SpeechModel) {
         if let Err(error) = SpeechModelChanged(model.clone()).emit(self) {
             eprintln!("grill: failed to emit speech-model-changed: {error}");
+        }
+    }
+}
+
+/// The windows, and the recognizer through `on_selected`.
+struct AppEvents<R: Runtime> {
+    app: AppHandle<R>,
+    dir: PathBuf,
+    on_selected: Box<dyn Fn(Option<PathBuf>) + Send + Sync>,
+}
+
+impl<R: Runtime> ModelEvents for AppEvents<R> {
+    fn changed(&self, model: &SpeechModel) {
+        self.app.changed(model);
+        if model.selected {
+            let installed = model.state == ModelState::Ready;
+            (self.on_selected)(installed.then(|| model_file(&self.dir, model.id)));
         }
     }
 }
@@ -332,18 +351,28 @@ impl ModelManager {
         }))
     }
 
-    /// The catalog of the app in `<app_data>/models/`, changes to every window.
-    pub fn for_app<R: Runtime>(app: &AppHandle<R>, selected: ModelId) -> Self {
+    /// The catalog of the app in `<app_data>/models/`, changes to every
+    /// window. `on_selected` hears the selected model's file whenever that
+    /// model changes: `Some` when it is installed, `None` when not.
+    pub fn for_app<R: Runtime>(
+        app: &AppHandle<R>,
+        selected: ModelId,
+        on_selected: impl Fn(Option<PathBuf>) + Send + Sync + 'static,
+    ) -> Self {
         let dir = app
             .path()
             .app_data_dir()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join("models");
         Self::new(
-            dir,
+            dir.clone(),
             Box::new(|id| id.spec().source()),
             download::Config::official(),
-            app.clone(),
+            AppEvents {
+                app: app.clone(),
+                dir,
+                on_selected: Box::new(on_selected),
+            },
             selected,
         )
     }
@@ -374,7 +403,6 @@ impl ModelManager {
 
     /// The file to load, when the model is installed (file of the exact
     /// size, no download running). A file gone since is noticed here.
-    #[allow(dead_code, reason = "for the recognizer (tasks 4.x)")]
     pub fn model_path(&self, id: ModelId) -> Option<PathBuf> {
         let mut shared = self.0.lock();
         self.0.refresh(&mut shared, id);
@@ -382,7 +410,6 @@ impl ModelManager {
     }
 
     /// [`Self::model_path`] of the selected model.
-    #[allow(dead_code, reason = "for the recognizer (tasks 4.x)")]
     pub fn selected_path(&self) -> Option<PathBuf> {
         self.model_path(self.selected())
     }
@@ -535,7 +562,6 @@ impl ModelManager {
 
     /// The model is installed but doesn't work (whisper.cpp refused to load
     /// it): `error` until it is downloaded again or removed.
-    #[allow(dead_code, reason = "for the recognizer (tasks 4.x)")]
     pub fn set_error(&self, id: ModelId, reason: ErrorReason, message: impl Into<String>) {
         let mut shared = self.0.lock();
         if shared.slots[&id].task.is_none() {

@@ -23,7 +23,7 @@ use specta::Type;
 use super::detector::{PASS_WINDOWS, STEP_WINDOWS, SileroVad, VadError, pass_start};
 use super::segmenter::{Segmenter, SegmenterParams, Span};
 use super::{SAMPLE_RATE, SAMPLES_PER_MS, WINDOW_SAMPLES};
-use crate::storage::transcript::TranscriptChannel;
+use crate::{speech::status::TranscriptionStatus, storage::transcript::TranscriptChannel};
 
 /// Queued audio beyond this is dropped from the old end.
 const MAX_BACKLOG_SAMPLES: usize = 30 * SAMPLE_RATE as usize;
@@ -56,13 +56,23 @@ pub struct Phrase {
     pub samples: Vec<f32>,
 }
 
-/// Where phrases go: speech recognition (task 5). Called on the worker
-/// thread; a slow sink delays segmentation, never recording.
+/// Where phrases go: speech recognition (`speech::live`). Called on the
+/// worker thread; a slow sink delays segmentation, never recording.
 pub trait PhraseSink: Send + Sync {
     fn phrase(&self, phrase: Phrase);
+
+    /// The recording `recording_id` starts; its phrases follow. Returns how
+    /// its transcription starts out (part of the recording status).
+    fn recording_started(&self, _recording_id: &str) -> TranscriptionStatus {
+        TranscriptionStatus::idle()
+    }
+
+    /// The recording stopped and its last phrase was delivered.
+    fn recording_finished(&self, _recording_id: &str) {}
 }
 
 /// Prints phrase boundaries to stderr in debug builds; drops them in release.
+#[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
 pub struct StderrSink;
 
 impl PhraseSink for StderrSink {
@@ -80,6 +90,7 @@ impl PhraseSink for StderrSink {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
 pub fn default_sink() -> Arc<dyn PhraseSink> {
     Arc::new(StderrSink)
 }

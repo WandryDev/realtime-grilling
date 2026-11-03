@@ -10,6 +10,7 @@ use super::*;
 use crate::{
     audio::sink::{BlockFormat, SampleSink},
     recording::store::{ME_FILE, OTHERS_FILE, RECORDINGS_DIR},
+    speech::status::TranscriptionState,
     storage::{
         Storage,
         calls::{self, CallCreate},
@@ -750,4 +751,96 @@ fn segmentation_is_ok_with_the_model() {
     assert_eq!(manager.status().segmentation, SegmentationStatus::Ok);
     thread::sleep(Duration::from_millis(100));
     manager.stop(&id).unwrap();
+}
+
+/// The live pass as the recorder sees it: what it says at the start, and
+/// that every recording is finished for it.
+#[derive(Default)]
+struct NoModelSink {
+    finished: Mutex<Vec<String>>,
+}
+
+impl PhraseSink for NoModelSink {
+    fn phrase(&self, _phrase: crate::vad::worker::Phrase) {}
+
+    fn recording_started(&self, _recording_id: &str) -> TranscriptionStatus {
+        TranscriptionStatus::new(
+            TranscriptionState::NoModel,
+            Some(crate::speech::models::ModelId::Turbo),
+        )
+    }
+
+    fn recording_finished(&self, recording_id: &str) {
+        self.finished.lock().unwrap().push(recording_id.to_owned());
+    }
+}
+
+#[test]
+fn without_a_model_the_recording_goes_on_and_the_status_says_no_model() {
+    let sink = Arc::new(NoModelSink::default());
+    let phrases = Arc::clone(&sink) as Arc<dyn PhraseSink>;
+    let fx = Fixture::configured(|_| {}, move |config| config.phrases = phrases);
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
+    let status = fx.manager.status();
+    assert_eq!(status.id.as_deref(), Some(id.as_str()));
+    // No VAD model in the fixture either: segmentation wins.
+    assert_eq!(
+        status.transcription,
+        TranscriptionStatus::new(
+            TranscriptionState::SegmentationUnavailable,
+            Some(crate::speech::models::ModelId::Turbo)
+        )
+    );
+    assert!(fx.manager.is_recording(), "the recording goes on");
+
+    // A change from the live pass reaches the status (and the windows).
+    fx.manager.set_transcription(
+        &id,
+        TranscriptionStatus::new(TranscriptionState::ModelFailed, None),
+    );
+    assert_eq!(
+        fx.manager.status().transcription.state,
+        TranscriptionState::SegmentationUnavailable
+    );
+    thread::sleep(Duration::from_millis(100));
+    fx.manager.stop(&id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while sink.finished.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the sink hears the end");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(*sink.finished.lock().unwrap(), std::slice::from_ref(&id));
+    assert!(opus_duration_ms(&fx.file(&id, ME_FILE)) >= 50);
+    assert_eq!(fx.manager.status(), RecordingStatus::idle());
+}
+
+#[test]
+fn with_segmentation_the_live_pass_status_is_reported_as_it_changes() {
+    let sink = Arc::new(NoModelSink::default());
+    let phrases = Arc::clone(&sink) as Arc<dyn PhraseSink>;
+    let fx = Fixture::configured(
+        |_| {},
+        move |config| {
+            config.model = crate::vad::dev_model_path();
+            config.phrases = phrases;
+        },
+    );
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
+    assert_eq!(
+        fx.manager.status().transcription.state,
+        TranscriptionState::NoModel
+    );
+    let ok = TranscriptionStatus::new(
+        TranscriptionState::Ok,
+        Some(crate::speech::models::ModelId::Small),
+    );
+    fx.manager.set_transcription(&id, ok);
+    fx.manager
+        .set_transcription("another", TranscriptionStatus::idle());
+    assert_eq!(fx.manager.status().transcription, ok);
+    assert!(
+        fx.changes().iter().any(|status| status.transcription == ok),
+        "RecordingChanged carried it"
+    );
+    fx.manager.stop(&id).unwrap();
 }

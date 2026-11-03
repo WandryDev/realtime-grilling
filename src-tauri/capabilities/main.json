@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window and onboarding: all data commands, settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call recording, the speech models and the OS name (the Windows variant of onboarding).",
+  "description": "Main window and onboarding: all data commands, settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call recording, the speech models, the hardware check and the mic check, and the OS name (the Windows variant of onboarding).",
   "windows": ["main", "onboarding"],
   "permissions": [
     "core:default",
@@ -78,6 +78,9 @@
     "allow-speech-model-pause",
     "allow-speech-model-cancel",
     "allow-speech-model-remove",
-    "allow-speech-model-select"
+    "allow-speech-model-select",
+    "allow-speech-benchmark",
+    "allow-speech-benchmark-cancel",
+    "allow-speech-mic-check"
   ]
 }

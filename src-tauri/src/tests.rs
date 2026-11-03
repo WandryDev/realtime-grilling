@@ -1294,16 +1294,20 @@ mod acl {
         }
     }
 
-    const SPEECH_MODEL_COMMANDS: [&str; 6] = [
+    const SPEECH_MODEL_COMMANDS: [&str; 9] = [
         "speech_models_list",
         "speech_model_download",
         "speech_model_pause",
         "speech_model_cancel",
         "speech_model_remove",
         "speech_model_select",
+        "speech_benchmark",
+        "speech_benchmark_cancel",
+        "speech_mic_check",
     ];
 
-    /// The speech models are for the main and onboarding windows only.
+    /// The speech models, the hardware check and the mic check are for the
+    /// main and onboarding windows only.
     #[test]
     fn speech_models_are_for_main_and_onboarding_only() {
         for command in SPEECH_MODEL_COMMANDS {
@@ -1432,6 +1436,9 @@ fn capabilities_match_the_command_list() {
         "speech_model_cancel",
         "speech_model_remove",
         "speech_model_select",
+        "speech_benchmark",
+        "speech_benchmark_cancel",
+        "speech_mic_check",
     ] {
         assert!(
             !floating.iter().any(|command| command == forbidden),

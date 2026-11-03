@@ -29,7 +29,12 @@ use crate::{
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
     recording::{RecordingManager, status::RecordingStatus},
     shell::{self, SettingsLock, shortcuts::ShortcutError, windows},
-    speech::models::{ModelId, ModelManager, SpeechModel},
+    speech::{
+        benchmark::{self, BenchmarkFailure, BenchmarkResult, Thresholds},
+        check, mic_check,
+        models::{ErrorReason, ModelId, ModelManager, SpeechModel},
+        service::Speech,
+    },
     storage::{
         Storage,
         calls::{self, Call, CallCreate, CallUpdate},
@@ -966,16 +971,28 @@ pub async fn speech_model_cancel(
     models.cancel(id).await
 }
 
-/// "Удалить": deletes the model's files (a download in progress stops).
+/// "Удалить": deletes the model's files (a download in progress stops, a
+/// hardware check of it is cancelled, the recognizer lets go of it first).
 /// The selected model can't be removed while recording: `Invalid`.
 #[tauri::command]
 #[specta::specta]
 pub async fn speech_model_remove(
     models: State<'_, ModelManager>,
     recorder: State<'_, RecordingManager>,
+    speech: State<'_, Speech>,
     id: ModelId,
 ) -> CommandResult<SpeechModel> {
-    models.remove(id, recorder.is_recording()).await
+    let recording = recorder.is_recording();
+    speech.cancel_check(None, Some(id));
+    if models.selected() == id && !recording {
+        let speech = speech.inner().clone();
+        permissions::blocking(move || speech.unload()).await?;
+    }
+    let removed = models.remove(id, recording).await;
+    // A failed removal leaves the model installed: the recognizer gets it
+    // back.
+    speech.set_selected_model(models.selected_path());
+    removed
 }
 
 /// Recognize with this model: stores `speechModel` (`DataChanged` of the
@@ -1002,4 +1019,105 @@ pub async fn speech_model_select(
         .await?;
     models.set_selected(id);
     Ok(models.get(id))
+}
+
+/* Speech checks */
+
+/// The hardware check of an installed model (speech-recognition design.md
+/// decision 14): the bundled phrases at the pace of a call. The result is
+/// also stored in `speechBenchmark[model]` with `checkedAt` (`DataChanged`
+/// of the settings); a model that is not installed is `noModel` and nothing
+/// is stored. One check at a time, never while recording (`Invalid`).
+/// `speech_benchmark_cancel` or closing the window ends it with `Invalid`.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_benchmark(
+    app: AppHandle,
+    window: WebviewWindow,
+    models: State<'_, ModelManager>,
+    recorder: State<'_, RecordingManager>,
+    speech: State<'_, Speech>,
+    model: ModelId,
+) -> CommandResult<BenchmarkResult> {
+    if recorder.is_recording() {
+        return Err(CommandError::invalid(
+            "Проверку нельзя запустить во время записи",
+        ));
+    }
+    let Some(path) = models.model_path(model) else {
+        return Ok(BenchmarkResult::not_run(BenchmarkFailure::NoModel));
+    };
+    let dir = check::bundled_dir(&app);
+    let set = permissions::blocking(move || check::load(&dir))
+        .await?
+        .map_err(|error| CommandError::storage(error.to_string()))?;
+    let guard = speech.begin_check(model, Some(path), window.label())?;
+    let outcome = benchmark::run(
+        &speech.recognizer(),
+        &set,
+        &Thresholds::default(),
+        1.0,
+        guard.cancelled.clone(),
+    )
+    .await;
+    drop(guard);
+    let Ok(result) = outcome else {
+        return Err(CommandError::invalid("Проверка отменена"));
+    };
+    if result.reason == Some(BenchmarkFailure::ModelFailed) {
+        models.set_error(model, ErrorReason::Load, "Модель не загрузилась");
+    }
+    let mut entry = serde_json::to_value(result)?;
+    entry["checkedAt"] = Value::from(crate::storage::now_ms());
+    let lock = app.state::<SettingsLock>();
+    let _one_at_a_time = lock.0.lock().await;
+    app.state::<Storage>()
+        .write(&app, move |db| {
+            let mut checks = settings::get(db)?
+                .remove(settings::SPEECH_BENCHMARK)
+                .filter(Value::is_object)
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            checks[model.as_str()] = entry;
+            let patch = SettingsMap::from([(settings::SPEECH_BENCHMARK.to_owned(), checks)]);
+            Ok(((), settings::put(db, &patch)?))
+        })
+        .await?;
+    Ok(result)
+}
+
+/// Cancels the calling window's hardware check; nothing when none runs.
+#[tauri::command]
+#[specta::specta]
+pub fn speech_benchmark_cancel(
+    window: WebviewWindow,
+    speech: State<'_, Speech>,
+) -> CommandResult<()> {
+    speech.cancel_check(Some(window.label()), None);
+    Ok(())
+}
+
+/// The mic check of onboarding (decision 15): up to 8 s from the default
+/// input, ended early by the end of a phrase, recognized in the call
+/// language with the selected model. Nothing is stored. Empty text when
+/// nothing was said. `Invalid` without an installed model, `External` with
+/// `reason` when the microphone can't be used.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_mic_check(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    models: State<'_, ModelManager>,
+    speech: State<'_, Speech>,
+) -> CommandResult<String> {
+    if models.selected_path().is_none() {
+        return Err(CommandError::invalid("Модель распознавания не скачана"));
+    }
+    let language = storage
+        .read(|db| Ok(settings::call_language(&settings::get(db)?)))
+        .await
+        .unwrap_or_default();
+    let vad_model = crate::vad::bundled_model_path(&app);
+    let audio =
+        permissions::blocking(move || mic_check::listen_to_microphone(&vad_model)).await??;
+    mic_check::recognize(&speech.recognizer(), audio, language).await
 }

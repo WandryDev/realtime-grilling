@@ -109,6 +109,7 @@ export const FAKE_RECORDING_PREFIX = "fake-recording-";
 export const IDLE_RECORDING: RecordingStatus = {
   channels: { me: "ok", others: "ok" },
   segmentation: "ok",
+  transcription: { state: "ok" },
 };
 
 export function createFakeTauri(): FakeTauri {

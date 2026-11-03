@@ -437,6 +437,7 @@ describe("«Микрофон освободился» in the overlay", () => {
       id: FIRST_RECORDING,
       segmentation: "ok",
       startedAt: Date.now(),
+      transcription: { state: "ok" },
     };
     startLiveCall(FIRST_RECORDING);
     render(<OverlayPage />);

@@ -17,6 +17,11 @@ use crate::{
     audio::{AudioSource, levels::Opened, sink::RingSink, sources},
     error::{CommandError, CommandResult},
     permissions::{self, PermissionKind, PermissionStatus},
+    speech::{
+        self,
+        live::{LiveConfig, TranscriptSink},
+        recognizer::Recognizer,
+    },
     storage::Storage,
     vad,
 };
@@ -81,12 +86,17 @@ impl<R: Runtime> RecordingHost for AppHost<R> {
 }
 
 /// The recorder of the app: real devices, bundled VAD model, phrases to
-/// the default sink (stderr in debug builds) until recognition exists.
-pub fn manager_for_app<R: Runtime>(app: &AppHandle<R>) -> RecordingManager {
+/// the live pass on `recognizer`.
+pub fn manager_for_app<R: Runtime>(app: &AppHandle<R>, recognizer: Recognizer) -> RecordingManager {
+    let phrases = TranscriptSink::new(
+        speech::service::app_host(app),
+        recognizer,
+        LiveConfig::default(),
+    );
     RecordingManager::new(
         AppDevices,
         AppHost { app: app.clone() },
-        Config::new(vad::bundled_model_path(app), vad::worker::default_sink()),
+        Config::new(vad::bundled_model_path(app), Arc::new(phrases)),
     )
 }
 

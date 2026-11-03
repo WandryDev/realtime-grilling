@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
 
-use crate::{error::CaptureFailure, vad::worker::SegmentationStatus};
+use crate::{
+    error::CaptureFailure,
+    speech::status::{TranscriptionState, TranscriptionStatus},
+    vad::worker::SegmentationStatus,
+};
 
 /// How a channel of the running recording captures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -61,6 +65,8 @@ pub struct RecordingStatus {
     pub channels: RecordingChannels,
     /// Whether phrases come out of both channels.
     pub segmentation: SegmentationStatus,
+    /// Whether the phrases are recognized (`ok` and no model while idle).
+    pub transcription: TranscriptionStatus,
 }
 
 impl RecordingStatus {
@@ -73,6 +79,16 @@ impl RecordingStatus {
                 others: ChannelState::Ok,
             },
             segmentation: SegmentationStatus::Ok,
+            transcription: TranscriptionStatus::idle(),
+        }
+    }
+
+    /// Sets the transcription of the running recording; without
+    /// segmentation it stays `segmentationUnavailable` (no phrases come).
+    pub fn set_transcription(&mut self, status: TranscriptionStatus) {
+        self.transcription = status;
+        if self.segmentation == SegmentationStatus::Unavailable {
+            self.transcription.state = TranscriptionState::SegmentationUnavailable;
         }
     }
 }
@@ -138,6 +154,10 @@ mod tests {
                 others: ChannelState::SilentUnknownAccess,
             },
             segmentation: SegmentationStatus::Unavailable,
+            transcription: TranscriptionStatus::new(
+                TranscriptionState::SegmentationUnavailable,
+                Some(crate::speech::models::ModelId::Turbo),
+            ),
         };
         assert_eq!(
             serde_json::to_value(RecordingChanged(status)).unwrap(),
@@ -146,6 +166,7 @@ mod tests {
                 "startedAt": 1_000,
                 "channels": { "me": "reconnecting", "others": "silentUnknownAccess" },
                 "segmentation": "unavailable",
+                "transcription": { "state": "segmentationUnavailable", "model": "turbo" },
             })
         );
         assert_eq!(
@@ -153,6 +174,7 @@ mod tests {
             serde_json::json!({
                 "channels": { "me": "ok", "others": "ok" },
                 "segmentation": "ok",
+                "transcription": { "state": "ok" },
             })
         );
         assert_eq!(

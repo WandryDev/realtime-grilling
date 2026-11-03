@@ -11,9 +11,17 @@ use serde_json::Value;
 use tauri::{App, AppHandle, Manager, RunEvent, Runtime, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 
-use crate::storage::{
-    Storage,
-    settings::{self, SettingsMap},
+use crate::{
+    speech::{
+        models::ModelManager,
+        recognizer::Recognizer,
+        refiner::{Refiner, RefinerConfig},
+        service::{self, Speech},
+    },
+    storage::{
+        Storage,
+        settings::{self, SettingsMap},
+    },
 };
 use shortcuts::ShortcutError;
 
@@ -80,10 +88,19 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(SettingsLock::default());
     app.manage(crate::audio::levels_for_app(app.handle()));
     app.manage(crate::agent::AgentSessions::default());
-    app.manage(crate::speech::models::ModelManager::for_app(
+    // One recognizer for the app; it runs the selected model once installed.
+    let speech = Speech::new(Recognizer::whisper(None));
+    let follow = speech.clone();
+    let models = ModelManager::for_app(
         app.handle(),
         settings::speech_model(&settings),
-    ));
+        move |path| {
+            follow.set_selected_model(path);
+        },
+    );
+    speech.set_selected_model(models.selected_path());
+    app.manage(models);
+    app.manage(speech.clone());
     app.manage(Entry {
         onboarding_completed: AtomicBool::new(settings::flag(
             &settings,
@@ -99,8 +116,15 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     if !std::env::args().any(|arg| arg == AUTOSTART_ARG) {
         show_entry(app.handle());
     }
-    let recorder = crate::recording::manager_for_app(app.handle());
+    let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer());
     app.manage(recorder.clone());
+    // After the recorder: it pauses while recording. Queues what a previous
+    // run left unrefined.
+    app.manage(Refiner::start(
+        service::app_host(app.handle()),
+        speech.recognizer(),
+        RefinerConfig::default(),
+    ));
     // Runs for the app's whole life; needs no microphone access. No start
     // widget while recording.
     let watch = crate::audio::mic_watch::start_for_app(app.handle());
@@ -163,13 +187,22 @@ fn hide_on_close<R: Runtime>(app: &AppHandle<R>) {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = target.hide();
-                crate::audio::forget_window(target.app_handle(), target.label());
+                forget_window(target.app_handle(), target.label());
             }
             WindowEvent::Destroyed => {
-                crate::audio::forget_window(target.app_handle(), target.label());
+                forget_window(target.app_handle(), target.label());
             }
             _ => {}
         });
+    }
+}
+
+/// A closed window stops listening to the meters and cancels its hardware
+/// check.
+fn forget_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    crate::audio::forget_window(app, label);
+    if let Some(speech) = app.try_state::<Speech>() {
+        speech.cancel_check(Some(label), None);
     }
 }
 

@@ -207,7 +207,8 @@ export const commands = {
 	 */
 	speechModelCancel: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_cancel", { id })),
 	/**
-	 *  "Удалить": deletes the model's files (a download in progress stops).
+	 *  "Удалить": deletes the model's files (a download in progress stops, a
+	 *  hardware check of it is cancelled, the recognizer lets go of it first).
 	 *  The selected model can't be removed while recording: `Invalid`.
 	 */
 	speechModelRemove: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_remove", { id })),
@@ -217,6 +218,25 @@ export const commands = {
 	 *  (`Invalid` otherwise); while recording only the model already selected.
 	 */
 	speechModelSelect: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_select", { id })),
+	/**
+	 *  The hardware check of an installed model (speech-recognition design.md
+	 *  decision 14): the bundled phrases at the pace of a call. The result is
+	 *  also stored in `speechBenchmark[model]` with `checkedAt` (`DataChanged`
+	 *  of the settings); a model that is not installed is `noModel` and nothing
+	 *  is stored. One check at a time, never while recording (`Invalid`).
+	 *  `speech_benchmark_cancel` or closing the window ends it with `Invalid`.
+	 */
+	speechBenchmark: (model: ModelId) => typedError<BenchmarkResult, CommandError>(__TAURI_INVOKE("speech_benchmark", { model })),
+	/**  Cancels the calling window's hardware check; nothing when none runs. */
+	speechBenchmarkCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("speech_benchmark_cancel")),
+	/**
+	 *  The mic check of onboarding (decision 15): up to 8 s from the default
+	 *  input, ended early by the end of a phrase, recognized in the call
+	 *  language with the selected model. Nothing is stored. Empty text when
+	 *  nothing was said. `Invalid` without an installed model, `External` with
+	 *  `reason` when the microphone can't be used.
+	 */
+	speechMicCheck: () => typedError<string, CommandError>(__TAURI_INVOKE("speech_mic_check")),
 };
 
 /** Events */
@@ -232,6 +252,12 @@ export const events = {
 	recordingLevels: makeEvent<RecordingLevels, RecordingLevels>("recording-levels"),
 	shortcutPressed: makeEvent<ShortcutPressed, ShortcutPressed>("shortcut-pressed"),
 	speechModelChanged: makeEvent<SpeechModelChanged, SpeechModelChanged>("speech-model-changed"),
+	transcriptDropped: makeEvent<TranscriptDropped, TranscriptDropped>("transcript-dropped"),
+	transcriptLag: makeEvent<TranscriptLag, TranscriptLag>("transcript-lag"),
+	transcriptPending: makeEvent<TranscriptPending, TranscriptPending>("transcript-pending"),
+	transcriptPhrase: makeEvent<TranscriptPhrase, TranscriptPhrase>("transcript-phrase"),
+	transcriptRefine: makeEvent<TranscriptRefine, TranscriptRefine>("transcript-refine"),
+	transcriptSkipped: makeEvent<TranscriptSkipped, TranscriptSkipped>("transcript-skipped"),
 };
 
 /* Types */
@@ -282,6 +308,29 @@ export type AudioSource =
 "microphone" | 
 /**  What the other apps play ("Остальные"), without this app. */
 "system";
+
+/**  Why a check did not pass. */
+export type BenchmarkFailure = 
+/**  p95 latency over 3 s or Σ RTF over 0.5: the live pass would lag. */
+"slow" | 
+/**  WER of 15 % or more: the accelerator gives garbage. */
+"inaccurate" | 
+/**  The model is not installed. */
+"noModel" | 
+/**  The model is installed but whisper.cpp did not load it. */
+"modelFailed";
+
+/**  What the check measured. */
+export type BenchmarkResult = {
+	passed: boolean,
+	/**  95th percentile of the phrases' latency (nearest rank). */
+	p95Ms: number,
+	/**  Σ latency / Σ audio duration. */
+	rtf: number,
+	/**  Word error rate over all phrases, 0–1 (and more). */
+	wer: number,
+	reason?: BenchmarkFailure | null,
+};
 
 export type Call = {
 	id: string,
@@ -442,7 +491,9 @@ export type ErrorReason =
 /**  The disk refused to write, rename or read the file. */
 "io" | 
 /**  The server answered with an error (404, 403…) or a file of another size. */
-"http";
+"http" | 
+/**  The file is installed but whisper.cpp did not load it. */
+"load";
 
 export type InstallStage = "downloading" | "installing" | 
 /**  The installer finished; the app checks the CLI. */
@@ -669,7 +720,15 @@ export type RecordingStatus = {
 	channels: RecordingChannels,
 	/**  Whether phrases come out of both channels. */
 	segmentation: SegmentationStatus,
+	/**  Whether the phrases are recognized (`ok` and no model while idle). */
+	transcription: TranscriptionStatus,
 };
+
+export type RefineState = "refining" | 
+/**  The refined transcript is stored: `transcript_for_recording` returns it. */
+"done" | 
+/**  The live transcript stays. */
+"failed";
 
 /**  Whether phrases come out of a channel; part of the recording status. */
 export type SegmentationStatus = "ok" | 
@@ -796,12 +855,64 @@ export type TranscriptChannel =
 /**  System audio: everyone else on the call. */
 "others";
 
+/**
+ *  The phrase had no text after the filters (or recognition failed): its
+ *  `TranscriptPending` goes away.
+ */
+export type TranscriptDropped = {
+	recordingId: string,
+	channel: TranscriptChannel,
+	startMs: number,
+};
+
+/**
+ *  The live queue holds more than 10 s of audio: sent every 5 s while it
+ *  does; `seconds: 0` once it no longer does.
+ */
+export type TranscriptLag = {
+	recordingId: string,
+	seconds: number,
+};
+
 /**  Which recognition pass wrote a segment. */
 export type TranscriptPass = 
 /**  While recording, phrase by phrase. */
 "live" | 
 /**  After the recording, over the whole files. */
 "refined";
+
+/**  A phrase went to recognition: "расшифровываю" in its place. */
+export type TranscriptPending = {
+	recordingId: string,
+	channel: TranscriptChannel,
+	startMs: number,
+};
+
+/**
+ *  A phrase is recognized and stored; replaces its `TranscriptPending`
+ *  (same channel and `startMs`).
+ */
+export type TranscriptPhrase = {
+	recordingId: string,
+	/**  The stored segment. */
+	id: string,
+	channel: TranscriptChannel,
+	startMs: number,
+	endMs: number,
+	text: string,
+	pass: TranscriptPass,
+};
+
+/**
+ *  The second pass over a recording: at most once a second while it runs,
+ *  then `done` or `failed`.
+ */
+export type TranscriptRefine = {
+	recordingId: string,
+	/**  0–100: the share of the recording's speech processed. */
+	progress: number,
+	state: RefineState,
+};
 
 export type TranscriptSegment = {
 	id: string,
@@ -816,6 +927,31 @@ export type TranscriptSegment = {
 	text: string,
 	createdAt: number,
 	updatedAt: number,
+};
+
+/**
+ *  The live pass gave up on a phrase (over 60 s behind); its
+ *  `TranscriptPending` becomes "пропущено", the second pass fills it in.
+ */
+export type TranscriptSkipped = {
+	recordingId: string,
+	channel: TranscriptChannel,
+	startMs: number,
+	endMs: number,
+};
+
+export type TranscriptionState = "ok" | 
+/**  The selected model is not installed: recording goes on without text. */
+"noModel" | 
+/**  The selected model is installed but whisper.cpp did not load it. */
+"modelFailed" | 
+/**  No phrases come out of segmentation, so there is nothing to recognize. */
+"segmentationUnavailable";
+
+export type TranscriptionStatus = {
+	state: TranscriptionState,
+	/**  The model the live pass runs (or failed to run) with. */
+	model?: ModelId | null,
 };
 
 export type Value = null | boolean | number | string | Value[] | { [key in string]: Value };
