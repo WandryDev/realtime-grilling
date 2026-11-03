@@ -463,9 +463,11 @@ impl Pipeline {
                 let mut queue = shared.lock();
                 queue.scoring_samples = 0;
                 if result.is_err() {
-                    // Nothing scores it any more.
+                    // Nothing scores it any more; closed under the same lock,
+                    // so a frame pushed before `fail` is not queued either.
                     queue.frames.clear();
                     queue.queued_samples = 0;
+                    queue.closed = true;
                 }
             }
             if let Err(error) = result {
