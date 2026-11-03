@@ -9,7 +9,7 @@ use std::{collections::HashSet, path::Path, time::UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::{calls, now_ms};
+use super::{calls, now_ms, people, projects};
 use crate::{
     error::{CommandError, CommandResult},
     recording::store::RecordingStore,
@@ -51,6 +51,66 @@ impl RecordingState {
     }
 }
 
+/// Where the second pass over a recording is (speech-recognition design.md,
+/// decision 12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptState {
+    /// Only the live pass, the second has not started.
+    Live,
+    /// The second pass runs (or ran when the app stopped).
+    Refining,
+    /// The refined segments are stored.
+    Refined,
+    Failed,
+}
+
+impl TranscriptState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Refining => "refining",
+            Self::Refined => "refined",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn parse(text: &str) -> rusqlite::Result<Self> {
+        match text {
+            "live" => Ok(Self::Live),
+            "refining" => Ok(Self::Refining),
+            "refined" => Ok(Self::Refined),
+            "failed" => Ok(Self::Failed),
+            other => Err(rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                format!("unknown transcript state {other}").into(),
+            )),
+        }
+    }
+}
+
+/// What a recording is of, given at its start: the call (if there is one
+/// yet), the project and the client's people on it (the glossary of the
+/// speech recognition).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordingLinks {
+    pub call_id: Option<String>,
+    /// Defaults to the call's project.
+    pub project_id: Option<String>,
+    /// People of the project.
+    pub participant_ids: Vec<String>,
+}
+
+impl RecordingLinks {
+    /// A recording of a call (its project comes from the call).
+    pub fn call(call_id: &str) -> Self {
+        Self {
+            call_id: Some(call_id.to_owned()),
+            ..Self::default()
+        }
+    }
+}
+
 /// Channel files of a recording, relative to the app data folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordingFiles {
@@ -62,24 +122,35 @@ pub struct RecordingFiles {
 pub struct Recording {
     pub id: String,
     pub call_id: Option<String>,
+    /// The call's project, or the project given at the start.
+    pub project_id: Option<String>,
+    /// People of `project_id` on the recording, in the order given.
+    pub participant_ids: Vec<String>,
     pub status: RecordingState,
     /// Milliseconds since the Unix epoch, UTC.
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub files: RecordingFiles,
+    pub transcript_state: TranscriptState,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 const SELECT: &str = "SELECT id, call_id, status, started_at, ended_at, me_file, others_file,
-       created_at, updated_at
+       created_at, updated_at, project_id, participant_ids, transcript_state
   FROM recordings";
 
 fn from_row(row: &Row) -> rusqlite::Result<Recording> {
     let status: String = row.get(2)?;
+    let participant_ids: String = row.get(10)?;
+    let transcript_state: String = row.get(11)?;
     Ok(Recording {
         id: row.get(0)?,
         call_id: row.get(1)?,
+        project_id: row.get(9)?,
+        participant_ids: serde_json::from_str(&participant_ids).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, error.into())
+        })?,
         status: RecordingState::parse(&status)?,
         started_at: row.get(3)?,
         ended_at: row.get(4)?,
@@ -87,40 +158,47 @@ fn from_row(row: &Row) -> rusqlite::Result<Recording> {
             me: row.get(5)?,
             others: row.get(6)?,
         },
+        transcript_state: TranscriptState::parse(&transcript_state)?,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
     })
 }
 
-fn not_found(id: &str) -> CommandError {
+pub(super) fn not_found(id: &str) -> CommandError {
     CommandError::not_found(format!("Запись {id} не найдена"))
 }
 
 /// Adds a row in the `recording` state and returns its new id (UUID v7).
 /// `files` names the channel files for that id (see
-/// [`RecordingStore::files`]). `NotFound` when `call_id` names no call.
+/// [`RecordingStore::files`]).
+///
+/// `NotFound` when the call, the project or a participant doesn't exist;
+/// `Invalid` when the project is not the call's, a participant is not of
+/// the project, or there are participants without a project. A participant
+/// given twice is stored once.
 ///
 /// Insert the row before creating the files: a sweep deletes every folder
 /// without a row.
 pub fn create(
     connection: &Connection,
-    call_id: Option<&str>,
+    links: &RecordingLinks,
     started_at: i64,
     files: impl FnOnce(&str) -> RecordingFiles,
 ) -> CommandResult<String> {
-    if let Some(call_id) = call_id {
-        calls::project_of(connection, call_id)?;
-    }
+    let (project_id, participant_ids) = checked_links(connection, links)?;
     let id = super::new_id();
     let files = files(&id);
     let now = now_ms();
     connection.execute(
         "INSERT INTO recordings
-           (id, call_id, status, started_at, ended_at, me_file, others_file, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?7)",
+           (id, call_id, project_id, participant_ids, status, started_at, ended_at,
+            me_file, others_file, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?9)",
         params![
             id,
-            call_id,
+            links.call_id,
+            project_id,
+            serde_json::to_string(&participant_ids)?,
             RecordingState::Recording.as_str(),
             started_at,
             files.me,
@@ -129,6 +207,62 @@ pub fn create(
         ],
     )?;
     Ok(id)
+}
+
+/// The project (given or the call's) and the participants without repeats.
+fn checked_links(
+    connection: &Connection,
+    links: &RecordingLinks,
+) -> CommandResult<(Option<String>, Vec<String>)> {
+    if let Some(project_id) = &links.project_id {
+        projects::exists(connection, project_id)?;
+    }
+    let call_project = match &links.call_id {
+        Some(call_id) => Some(calls::project_of(connection, call_id)?),
+        None => None,
+    };
+    let project_id = match (&links.project_id, call_project) {
+        (Some(given), Some(of_call)) if *given != of_call => {
+            return Err(CommandError::invalid("Звонок записи из другого проекта"));
+        }
+        (Some(given), _) => Some(given.clone()),
+        (None, of_call) => of_call,
+    };
+    let mut participant_ids: Vec<String> = Vec::with_capacity(links.participant_ids.len());
+    for person_id in &links.participant_ids {
+        let Some(project_id) = &project_id else {
+            return Err(CommandError::invalid(
+                "Участники записи указываются вместе с проектом",
+            ));
+        };
+        let person = people::get(connection, person_id)?;
+        if person.project_id != *project_id {
+            return Err(CommandError::invalid(format!(
+                "{} из другого проекта и не может быть участником этой записи",
+                person.name
+            )));
+        }
+        if !participant_ids.contains(person_id) {
+            participant_ids.push(person_id.clone());
+        }
+    }
+    Ok((project_id, participant_ids))
+}
+
+/// Records where the second pass is. `NotFound` for an unknown id.
+pub fn set_transcript_state(
+    connection: &Connection,
+    id: &str,
+    state: TranscriptState,
+) -> CommandResult<()> {
+    let changed = connection.execute(
+        "UPDATE recordings SET transcript_state = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, state.as_str(), now_ms()],
+    )?;
+    if changed == 0 {
+        return Err(not_found(id));
+    }
+    Ok(())
 }
 
 pub fn get(connection: &Connection, id: &str) -> CommandResult<Recording> {
@@ -247,6 +381,7 @@ mod tests {
             DATABASE_FILE, MIGRATIONS,
             calls::{self, CallCreate},
             open, open_in_memory,
+            people::{self, PersonCreate},
             projects::{self, ProjectCreate},
         },
     };
@@ -278,13 +413,160 @@ mod tests {
         calls::create(connection, input).unwrap().0.id
     }
 
+    fn person(connection: &Connection, project_id: &str, name: &str) -> String {
+        let input = PersonCreate {
+            project_id: project_id.into(),
+            name: name.into(),
+            ..Default::default()
+        };
+        people::create(connection, input).unwrap().0.id
+    }
+
+    fn links(project_id: Option<&str>, participant_ids: &[&str]) -> RecordingLinks {
+        RecordingLinks {
+            call_id: None,
+            project_id: project_id.map(str::to_owned),
+            participant_ids: participant_ids.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn stores_the_project_and_its_people() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+        let olga = person(&connection, &acme, "Ольга");
+        let ivan = person(&connection, &acme, "Иван");
+
+        let id = create(
+            &connection,
+            &links(Some(&acme), &[&ivan, &olga, &ivan]),
+            0,
+            files,
+        )
+        .unwrap();
+        let recording = get(&connection, &id).unwrap();
+        assert_eq!(recording.project_id.as_deref(), Some(acme.as_str()));
+        assert_eq!(
+            recording.participant_ids,
+            vec![ivan.clone(), olga],
+            "once each, in order"
+        );
+        assert_eq!(recording.call_id, None);
+        assert_eq!(recording.transcript_state, TranscriptState::Live);
+
+        // A call gives its project.
+        let call_id = call(&connection, &acme);
+        let id = create(&connection, &RecordingLinks::call(&call_id), 0, files).unwrap();
+        let recording = get(&connection, &id).unwrap();
+        assert_eq!(recording.project_id.as_deref(), Some(acme.as_str()));
+        assert!(recording.participant_ids.is_empty());
+        let with_people = RecordingLinks {
+            participant_ids: vec![ivan.clone()],
+            ..RecordingLinks::call(&call_id)
+        };
+        let id = create(&connection, &with_people, 0, files).unwrap();
+        assert_eq!(get(&connection, &id).unwrap().participant_ids, vec![ivan]);
+
+        let loose = create(&connection, &RecordingLinks::default(), 0, files).unwrap();
+        let loose = get(&connection, &loose).unwrap();
+        assert_eq!(
+            (loose.project_id, loose.participant_ids),
+            (None, Vec::new())
+        );
+    }
+
+    #[test]
+    fn rejects_links_that_dont_fit() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+        let globex = project(&connection, "Globex");
+        let olga = person(&connection, &acme, "Ольга");
+        let marina = person(&connection, &globex, "Марина");
+        let globex_call = call(&connection, &globex);
+        let missing = "0190d1a0-0000-7000-8000-000000000000";
+
+        let not_found = [links(Some(missing), &[]), links(Some(&acme), &[missing])];
+        for links in not_found {
+            let error = create(&connection, &links, 0, files).unwrap_err();
+            assert!(
+                matches!(error, CommandError::NotFound { .. }),
+                "{links:?}: {error:?}"
+            );
+        }
+        let invalid = [
+            // A person of another project.
+            links(Some(&acme), &[&olga, &marina]),
+            // People without a project.
+            links(None, &[&olga]),
+            // A project other than the call's.
+            RecordingLinks {
+                project_id: Some(acme.clone()),
+                ..RecordingLinks::call(&globex_call)
+            },
+            RecordingLinks {
+                participant_ids: vec![olga.clone()],
+                ..RecordingLinks::call(&globex_call)
+            },
+        ];
+        for links in invalid {
+            let error = create(&connection, &links, 0, files).unwrap_err();
+            assert!(
+                matches!(error, CommandError::Invalid { .. }),
+                "{links:?}: {error:?}"
+            );
+        }
+        assert!(list_ids(&connection).unwrap().is_empty(), "nothing stored");
+    }
+
+    #[test]
+    fn deleting_a_project_deletes_the_recordings_started_for_it() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+        let globex = project(&connection, "Globex");
+        let of_acme = create(&connection, &links(Some(&acme), &[]), 0, files).unwrap();
+        let of_globex = create(&connection, &links(Some(&globex), &[]), 0, files).unwrap();
+        let loose = create(&connection, &RecordingLinks::default(), 0, files).unwrap();
+
+        projects::delete(&connection, &acme).unwrap();
+
+        assert!(get(&connection, &of_acme).is_err());
+        assert_eq!(list_ids(&connection).unwrap(), vec![of_globex, loose]);
+    }
+
+    #[test]
+    fn deleting_a_person_keeps_the_recording() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+        let olga = person(&connection, &acme, "Ольга");
+        let id = create(&connection, &links(Some(&acme), &[&olga]), 0, files).unwrap();
+        people::delete(&connection, &olga).unwrap();
+        // The id stays in the list; readers skip people that are gone.
+        assert_eq!(get(&connection, &id).unwrap().participant_ids, vec![olga]);
+    }
+
+    #[test]
+    fn transcript_state_changes() {
+        let connection = open_in_memory().unwrap();
+        let id = create(&connection, &RecordingLinks::default(), 0, files).unwrap();
+        for state in [
+            TranscriptState::Refining,
+            TranscriptState::Failed,
+            TranscriptState::Refined,
+        ] {
+            set_transcript_state(&connection, &id, state).unwrap();
+            assert_eq!(get(&connection, &id).unwrap().transcript_state, state);
+        }
+        let error = set_transcript_state(&connection, "nope", TranscriptState::Live).unwrap_err();
+        assert!(matches!(error, CommandError::NotFound { .. }));
+    }
+
     #[test]
     fn creates_finishes_and_lists() {
         let connection = open_in_memory().unwrap();
         let project_id = project(&connection, "Acme");
         let call_id = call(&connection, &project_id);
 
-        let id = create(&connection, Some(&call_id), 1_000, files).unwrap();
+        let id = create(&connection, &RecordingLinks::call(&call_id), 1_000, files).unwrap();
         assert!(uuid::Uuid::parse_str(&id).is_ok_and(|uuid| uuid.get_version_num() == 7));
         let recording = get(&connection, &id).unwrap();
         assert_eq!(recording.status, RecordingState::Recording);
@@ -302,7 +584,7 @@ mod tests {
         let interrupted = mark_interrupted(&connection, &id, 99_000).unwrap();
         assert_eq!(interrupted.status, RecordingState::Finished);
 
-        let loose = create(&connection, None, 2_000, files).unwrap();
+        let loose = create(&connection, &RecordingLinks::default(), 2_000, files).unwrap();
         assert_eq!(list_ids(&connection).unwrap(), vec![id, loose]);
     }
 
@@ -310,7 +592,7 @@ mod tests {
     fn rejects_unknown_ids() {
         let connection = open_in_memory().unwrap();
         let missing = "0190d1a0-0000-7000-8000-000000000000";
-        let error = create(&connection, Some(missing), 0, files).unwrap_err();
+        let error = create(&connection, &RecordingLinks::call(missing), 0, files).unwrap_err();
         assert!(matches!(error, CommandError::NotFound { .. }));
         assert!(list_ids(&connection).unwrap().is_empty());
         for error in [
@@ -326,7 +608,7 @@ mod tests {
     #[test]
     fn end_time_is_never_before_the_start() {
         let connection = open_in_memory().unwrap();
-        let id = create(&connection, None, 5_000, files).unwrap();
+        let id = create(&connection, &RecordingLinks::default(), 5_000, files).unwrap();
         let recording = finish(&connection, &id, 4_000).unwrap();
         assert_eq!(recording.ended_at, Some(5_000));
     }
@@ -340,10 +622,10 @@ mod tests {
         let globex_call = call(&connection, &globex);
         let other_call = call(&connection, &globex);
 
-        let of_acme = create(&connection, Some(&acme_call), 0, files).unwrap();
-        let of_globex = create(&connection, Some(&globex_call), 0, files).unwrap();
-        let of_other = create(&connection, Some(&other_call), 0, files).unwrap();
-        let loose = create(&connection, None, 0, files).unwrap();
+        let of_acme = create(&connection, &RecordingLinks::call(&acme_call), 0, files).unwrap();
+        let of_globex = create(&connection, &RecordingLinks::call(&globex_call), 0, files).unwrap();
+        let of_other = create(&connection, &RecordingLinks::call(&other_call), 0, files).unwrap();
+        let loose = create(&connection, &RecordingLinks::default(), 0, files).unwrap();
 
         projects::delete(&connection, &acme).unwrap();
         assert!(get(&connection, &of_acme).is_err());
@@ -384,8 +666,97 @@ mod tests {
             calls::get(&connection, &call_id).unwrap().project_id,
             project_id
         );
-        let id = create(&connection, Some(&call_id), 0, files).unwrap();
+        let id = create(&connection, &RecordingLinks::call(&call_id), 0, files).unwrap();
         assert_eq!(list_ids(&connection).unwrap(), vec![id]);
+    }
+
+    #[test]
+    fn migration_0003_keeps_the_recordings_of_0002_and_drops_the_old_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let before = [
+            M::up(include_str!("../../migrations/0001_init.sql")),
+            M::up(include_str!("../../migrations/0002_recordings.sql")),
+        ];
+        let (project_id, call_id, of_call, loose) = {
+            let connection = open(&path, &Migrations::from_slice(&before)).unwrap();
+            let project_id = project(&connection, "Acme");
+            let call_id = call(&connection, &project_id);
+            let insert = |id: &str, call_id: Option<&str>| {
+                connection
+                    .execute(
+                        "INSERT INTO recordings
+                           (id, call_id, status, started_at, ended_at, me_file, others_file,
+                            created_at, updated_at)
+                         VALUES (?1, ?2, 'finished', 0, 10, 'a', 'b', 0, 0)",
+                        params![id, call_id],
+                    )
+                    .unwrap();
+            };
+            let of_call = "0190d1a0-0000-7000-8000-000000000001".to_owned();
+            let loose = "0190d1a0-0000-7000-8000-000000000002".to_owned();
+            insert(&of_call, Some(&call_id));
+            insert(&loose, None);
+            connection
+                .execute(
+                    "INSERT INTO transcript_segments
+                       (id, call_id, channel, start_ms, end_ms, text, created_at, updated_at)
+                     VALUES ('old', ?1, 'me', 0, 1, 'старый', 0, 0)",
+                    [&call_id],
+                )
+                .unwrap();
+            assert!(super::super::has_call_transcript(&connection));
+            assert_eq!(super::super::call_transcript_rows(&connection), Some(1));
+            (project_id, call_id, of_call, loose)
+        };
+
+        let connection = open(&path, &MIGRATIONS).unwrap();
+        assert!(!super::super::has_call_transcript(&connection));
+        assert_eq!(super::super::call_transcript_rows(&connection), None);
+        let segments: i64 = connection
+            .query_row("SELECT count(*) FROM transcript_segments", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(segments, 0, "the old rows had no recording");
+
+        let recording = get(&connection, &of_call).unwrap();
+        assert_eq!(recording.call_id.as_deref(), Some(call_id.as_str()));
+        assert_eq!(
+            recording.project_id.as_deref(),
+            Some(project_id.as_str()),
+            "from the call"
+        );
+        assert!(recording.participant_ids.is_empty());
+        assert_eq!(recording.transcript_state, TranscriptState::Live);
+        assert_eq!(recording.status, RecordingState::Finished);
+        let loose = get(&connection, &loose).unwrap();
+        assert_eq!(loose.project_id, None);
+        let violations: i64 = connection
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+
+        // The new transcript works on the migrated rows.
+        let segment = crate::storage::transcript::SegmentInput {
+            channel: crate::storage::transcript::TranscriptChannel::Me,
+            start_ms: 0,
+            end_ms: 1,
+            text: "новый".to_owned(),
+        };
+        let (added, _) =
+            crate::storage::transcript::append_live(&connection, &recording.id, segment).unwrap();
+        assert_eq!(added.call_id.as_deref(), Some(call_id.as_str()));
+        projects::delete(&connection, &project_id).unwrap();
+        assert_eq!(list_ids(&connection).unwrap(), vec![loose.id]);
+        let segments: i64 = connection
+            .query_row("SELECT count(*) FROM transcript_segments", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(segments, 0);
     }
 
     #[test]
@@ -393,7 +764,9 @@ mod tests {
         let connection = open_in_memory().unwrap();
         let error = connection
             .execute(
-                "INSERT INTO recordings VALUES ('x', NULL, 'paused', 0, NULL, 'a', 'b', 0, 0)",
+                "INSERT INTO recordings
+                   (id, status, started_at, me_file, others_file, created_at, updated_at)
+                 VALUES ('x', 'paused', 0, 'a', 'b', 0, 0)",
                 [],
             )
             .unwrap_err();
@@ -408,7 +781,10 @@ mod tests {
         let started_at = epoch_ms(SystemTime::now()) - 300_000;
 
         // Crashed after writing: the file times give the end.
-        let crashed = create(&connection, None, started_at, |id| store.files(id)).unwrap();
+        let crashed = create(&connection, &RecordingLinks::default(), started_at, |id| {
+            store.files(id)
+        })
+        .unwrap();
         let writers = store.create(&crashed).unwrap();
         drop(writers);
         let me = dir.path().join(store.files(&crashed).me);
@@ -430,9 +806,15 @@ mod tests {
             .unwrap();
 
         // Crashed before creating its files: ends at its start.
-        let empty = create(&connection, None, started_at, |id| store.files(id)).unwrap();
+        let empty = create(&connection, &RecordingLinks::default(), started_at, |id| {
+            store.files(id)
+        })
+        .unwrap();
         // Finished properly: left alone.
-        let done = create(&connection, None, started_at, |id| store.files(id)).unwrap();
+        let done = create(&connection, &RecordingLinks::default(), started_at, |id| {
+            store.files(id)
+        })
+        .unwrap();
         finish(&connection, &done, started_at + 10).unwrap();
 
         let changed = recover_interrupted(&connection, dir.path()).unwrap();
@@ -463,10 +845,16 @@ mod tests {
         let project_id = project(&connection, "Acme");
         let call_id = call(&connection, &project_id);
 
-        let live = create(&connection, None, 0, |id| store.files(id)).unwrap();
+        let live = create(&connection, &RecordingLinks::default(), 0, |id| {
+            store.files(id)
+        })
+        .unwrap();
         drop(store.create(&live).unwrap());
         store.finish(&live).unwrap();
-        let of_call = create(&connection, Some(&call_id), 0, |id| store.files(id)).unwrap();
+        let of_call = create(&connection, &RecordingLinks::call(&call_id), 0, |id| {
+            store.files(id)
+        })
+        .unwrap();
         drop(store.create(&of_call).unwrap());
         store.finish(&of_call).unwrap();
 

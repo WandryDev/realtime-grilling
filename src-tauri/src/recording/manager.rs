@@ -49,7 +49,11 @@ use crate::{
     },
     error::{CaptureFailure, CommandError, CommandResult},
     permissions::{PermissionKind, PermissionState, PermissionStatus},
-    storage::{self, recordings, transcript::TranscriptChannel},
+    storage::{
+        self,
+        recordings::{self, RecordingLinks},
+        transcript::TranscriptChannel,
+    },
     vad::worker::{PhraseSink, SegmentationStatus, VadWorker},
 };
 
@@ -253,7 +257,7 @@ impl Shared {
     }
 
     /// Opens the devices, the row, the files and the threads.
-    fn begin(self: &Arc<Self>, call_id: Option<&str>) -> CommandResult<Session> {
+    fn begin(self: &Arc<Self>, links: &RecordingLinks) -> CommandResult<Session> {
         let devices = &*self.devices;
         let (kind, what) = Channel::Me.permission();
         ensure_access(&devices.permission(kind), what)?;
@@ -297,7 +301,7 @@ impl Shared {
 
         // The row first: a sweep removes every folder without one.
         let id = self.database(|connection| {
-            recordings::create(connection, call_id, started_at, |id| store.files(id))
+            recordings::create(connection, links, started_at, |id| store.files(id))
         })?;
         let writers = match store.create(&id) {
             Ok(writers) => writers,
@@ -530,16 +534,18 @@ impl RecordingManager {
         }))
     }
 
-    /// Starts a recording, optionally of a call, and returns its id. While
-    /// one runs, returns its id and opens nothing. No microphone access (or
-    /// microphone) is an error and leaves no row. Blocks while the devices
-    /// open: call it off the main thread.
-    pub fn start(&self, call_id: Option<&str>) -> CommandResult<String> {
+    /// Starts a recording, optionally of a call, a project and its people,
+    /// and returns its id. While one runs, returns its id and opens nothing
+    /// (`links` are not checked then). No microphone access (or
+    /// microphone), or `links` that `recordings::create` refuses, is an
+    /// error and leaves no row. Blocks while the devices open: call it off
+    /// the main thread.
+    pub fn start(&self, links: &RecordingLinks) -> CommandResult<String> {
         let mut control = lock(&self.0.control);
         if let Some(session) = control.as_ref() {
             return Ok(session.id.clone());
         }
-        let session = self.0.begin(call_id)?;
+        let session = self.0.begin(links)?;
         let id = session.id.clone();
         *control = Some(session);
         Ok(id)

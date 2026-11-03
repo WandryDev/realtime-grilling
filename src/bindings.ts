@@ -47,10 +47,17 @@ export const commands = {
 	questionsCreate: (input: QuestionCreate) => typedError<Question, CommandError>(__TAURI_INVOKE("questions_create", { input })),
 	questionsUpdate: (id: string, patch: QuestionUpdate) => typedError<Question, CommandError>(__TAURI_INVOKE("questions_update", { id, patch })),
 	questionsDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("questions_delete", { id })),
-	/**  Both channels of a call in time order. */
+	/**
+	 *  The transcripts of a call's recordings, recording after recording, both
+	 *  channels in time order; refined where the second pass is done.
+	 */
 	transcriptList: (callId: string) => typedError<TranscriptSegment[], CommandError>(__TAURI_INVOKE("transcript_list", { callId })),
-	/**  Adds a batch of segments with one `transcript` event. */
-	transcriptAppend: (callId: string, segments: SegmentInput[]) => typedError<TranscriptSegment[], CommandError>(__TAURI_INVOKE("transcript_append", { callId, segments })),
+	/**
+	 *  The transcript of a recording, both channels in time order: the refined
+	 *  pass if there is one, else the live pass. `NotFound` for an unknown
+	 *  recording.
+	 */
+	transcriptForRecording: (recordingId: string) => typedError<TranscriptSegment[], CommandError>(__TAURI_INVOKE("transcript_for_recording", { recordingId })),
 	/**
 	 *  Stored preferences over the defaults of the keys Rust acts on
 	 *  (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`,
@@ -160,6 +167,10 @@ export const commands = {
 	 *  While a recording runs, returns its id and opens nothing. Without
 	 *  microphone access: `External` with `reason: noAccess`, nothing stored.
 	 *  Without system audio access the recording goes on with "Я" only.
+	 * 
+	 *  Unknown call, project or person: `NotFound`. A participant of another
+	 *  project, participants without a project, or a project other than the
+	 *  call's: `Invalid`.
 	 */
 	recordingStart: (input: RecordingStart) => typedError<string, CommandError>(__TAURI_INVOKE("recording_start", { input })),
 	/**
@@ -378,7 +389,10 @@ export type DataChanged = {
 export type Entity = "project" | "person" | 
 /**  Also sent when the call's participants change. */
 "call" | "topic" | "taskCard" | "question" | 
-/**  A batch of transcript segments; `id` is the call id. */
+/**
+ *  Transcript segments of a recording were written; `id` is the
+ *  recording id, `projectId` the recording's project (if any).
+ */
 "transcript" | 
 /**  `id` is `"settings"`. */
 "settings";
@@ -566,6 +580,10 @@ export type RecordingLevels = {
 export type RecordingStart = {
 	/**  The call being recorded; a recording without a call is fine. */
 	callId?: string | null,
+	/**  The project of the call (the call's project when omitted). */
+	projectId?: string | null,
+	/**  The client's people on the call, people of `projectId`. */
+	participantIds?: string[] | null,
 };
 
 /**
@@ -579,13 +597,6 @@ export type RecordingStatus = {
 	channels: RecordingChannels,
 	/**  Whether phrases come out of both channels. */
 	segmentation: SegmentationStatus,
-};
-
-export type SegmentInput = {
-	channel: TranscriptChannel,
-	startMs: number,
-	endMs: number,
-	text: string,
 };
 
 /**  Whether phrases come out of a channel; part of the recording status. */
@@ -696,9 +707,19 @@ export type TranscriptChannel =
 /**  System audio: everyone else on the call. */
 "others";
 
+/**  Which recognition pass wrote a segment. */
+export type TranscriptPass = 
+/**  While recording, phrase by phrase. */
+"live" | 
+/**  After the recording, over the whole files. */
+"refined";
+
 export type TranscriptSegment = {
 	id: string,
-	callId: string,
+	recordingId: string,
+	/**  The recording's call when the segment was written. */
+	callId: string | null,
+	pass: TranscriptPass,
 	channel: TranscriptChannel,
 	/**  Offset from the start of the recording. */
 	startMs: number,

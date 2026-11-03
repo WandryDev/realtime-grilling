@@ -35,10 +35,11 @@ use crate::{
         people::{self, Person, PersonCreate, PersonUpdate},
         projects::{self, Project, ProjectCreate, ProjectUpdate},
         questions::{self, Question, QuestionCreate, QuestionUpdate},
+        recordings::RecordingLinks,
         settings::{self, SettingsMap},
         task_cards::{self, TaskCard, TaskCardCreate, TaskCardUpdate},
         topics::{self, Topic, TopicCreate, TopicUpdate},
-        transcript::{self, SegmentInput, TranscriptSegment},
+        transcript::{self, TranscriptSegment},
     },
 };
 
@@ -427,27 +428,32 @@ pub async fn questions_delete(
 
 /* Transcript */
 
-/// Both channels of a call in time order.
+// Only the backend writes the transcript (speech recognition).
+
+/// The transcripts of a call's recordings, recording after recording, both
+/// channels in time order; refined where the second pass is done.
 #[tauri::command]
 #[specta::specta]
 pub async fn transcript_list(
     storage: State<'_, Storage>,
     call_id: String,
 ) -> CommandResult<Vec<TranscriptSegment>> {
-    storage.read(move |db| transcript::list(db, &call_id)).await
+    storage
+        .read(move |db| transcript::for_call(db, &call_id))
+        .await
 }
 
-/// Adds a batch of segments with one `transcript` event.
+/// The transcript of a recording, both channels in time order: the refined
+/// pass if there is one, else the live pass. `NotFound` for an unknown
+/// recording.
 #[tauri::command]
 #[specta::specta]
-pub async fn transcript_append(
-    app: AppHandle,
+pub async fn transcript_for_recording(
     storage: State<'_, Storage>,
-    call_id: String,
-    segments: Vec<SegmentInput>,
+    recording_id: String,
 ) -> CommandResult<Vec<TranscriptSegment>> {
     storage
-        .write(&app, move |db| transcript::append(db, &call_id, segments))
+        .read(move |db| transcript::for_recording(db, &recording_id))
         .await
 }
 
@@ -841,12 +847,32 @@ pub struct RecordingStart {
     /// The call being recorded; a recording without a call is fine.
     #[specta(optional)]
     pub call_id: Option<String>,
+    /// The project of the call (the call's project when omitted).
+    #[specta(optional)]
+    pub project_id: Option<String>,
+    /// The client's people on the call, people of `projectId`.
+    #[specta(optional)]
+    pub participant_ids: Option<Vec<String>>,
+}
+
+impl From<RecordingStart> for RecordingLinks {
+    fn from(input: RecordingStart) -> Self {
+        Self {
+            call_id: input.call_id,
+            project_id: input.project_id,
+            participant_ids: input.participant_ids.unwrap_or_default(),
+        }
+    }
 }
 
 /// Starts recording both channels and returns the recording's id (UUID v7).
 /// While a recording runs, returns its id and opens nothing. Without
 /// microphone access: `External` with `reason: noAccess`, nothing stored.
 /// Without system audio access the recording goes on with "Я" only.
+///
+/// Unknown call, project or person: `NotFound`. A participant of another
+/// project, participants without a project, or a project other than the
+/// call's: `Invalid`.
 #[tauri::command]
 #[specta::specta]
 pub async fn recording_start(
@@ -854,7 +880,7 @@ pub async fn recording_start(
     input: RecordingStart,
 ) -> CommandResult<String> {
     let recorder = recorder.inner().clone();
-    permissions::blocking(move || recorder.start(input.call_id.as_deref())).await?
+    permissions::blocking(move || recorder.start(&input.into())).await?
 }
 
 /// Stops the recording `id`: the files are closed and the devices released.
