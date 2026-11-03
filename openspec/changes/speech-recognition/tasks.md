@@ -2,7 +2,7 @@
 
 ## 1. Зависимости и сборка
 
-- [ ] 1.1 Подключить зависимости:
+- [x] 1.1 Подключить зависимости:
   - фича `metal` у `whisper-rs` на macOS (через `[target.'cfg(target_os = "macos")'.dependencies]`);
   - `reqwest` (rustls, stream, без native-tls);
   - `sha2`.
@@ -11,14 +11,14 @@
   - `cargo build`, `cargo clippy --all-targets -- -D warnings` и `cargo test` проходят;
   - debug-бандл и universal debug-бандл собираются. Время записать в design.md (риски);
   - Metal-шейдеры встроены: в бандле нет отдельного `.metal`/`.metallib`, а `#[ignore]`-тест на настоящей модели пишет в журнал, что используется GPU.
-- [ ] 1.2 Собрать встроенные фразы проверки железа `src-tauri/resources/speech-check/`: 6 фраз, ru (голос Milena) и uk (голос Lesya), по 3, 6 и 12 с. Взять их из `spikes/stt/phrases.json`, пропустить через «телефонный» тракт (полоса 300–3400 Гц) и закодировать в Opus 16 кГц, эталоны положить в `.json`. Скрипт генерации — в `scripts/`. Подключить в `bundle.resources`. Проверка:
+- [x] 1.2 Собрать встроенные фразы проверки железа `src-tauri/resources/speech-check/`: 6 фраз, ru (голос Milena) и uk (голос Lesya), по 3, 6 и 12 с. Взять их из `spikes/stt/phrases.json`, пропустить через «телефонный» тракт (полоса 300–3400 Гц) и закодировать в Opus 16 кГц, эталоны положить в `.json`. Скрипт генерации — в `scripts/`. Подключить в `bundle.resources`. Проверка:
   - фразы декодируются тестом `cargo test`;
   - суммарный размер ≤ 0.5 МБ;
   - debug-бандл кладёт их в `Contents/Resources/speech-check`.
 
 ## 2. Хранилище (Rust)
 
-- [ ] 2.1 Миграция `0003_transcript_by_recording.sql`:
+- [x] 2.1 Миграция `0003_transcript_by_recording.sql`:
   - пересобрать `transcript_segments`: `recording_id` NOT NULL FK ON DELETE CASCADE, `call_id` NULL, `pass` CHECK `live|refined`, индекс `(recording_id, pass, start_ms)`; старые строки удалить с записью в журнал;
   - в `recordings` добавить `project_id` NULL FK ON DELETE CASCADE, `participant_ids` JSON и `transcript_state` CHECK `live|refining|refined|failed`.
 
@@ -27,7 +27,7 @@
   - удаление записи удаляет её сегменты;
   - удаление проекта удаляет записи проекта и их сегменты;
   - запись без проекта и звонка не трогается.
-- [ ] 2.2 `storage/transcript.rs`:
+- [x] 2.2 `storage/transcript.rs`:
   - `append_live(recording_id, segment)`;
   - `replace_refined(recording_id, segments)` одной транзакцией;
   - `for_recording(recording_id)` (уточнённый проход, если есть, иначе живой; `NotFound` для неизвестной записи);
@@ -39,14 +39,14 @@
   - `NotFound`.
 
   `bun run test` зелёный.
-- [ ] 2.3 `recording_start` принимает `{ callId?, projectId?, participantIds? }`, проект и участники сохраняются в строке записи. Проверка:
+- [x] 2.3 `recording_start` принимает `{ callId?, projectId?, participantIds? }`, проект и участники сохраняются в строке записи. Проверка:
   - `cargo test`: неизвестный проект → `NotFound`, участник из другого проекта → `Invalid`;
   - `src/bindings.ts` перегенерирован.
 
 ## 3. Модели (Rust)
 
-- [ ] 3.1 Каталог `speech/models.rs`: `ModelId::{Turbo, Small}`, URL, размер, SHA-256 (из design.md); `ModelManager` с состояниями `notDownloaded | downloading { percent, bytesPerSec } | paused { percent } | checking | ready | noSpace { needBytes, freeBytes } | noNetwork { percent, retryInSec } | error { reason }`; файлы в `<app_data>/models/`; «установлена» = файл верного размера. Проверка: `cargo test` на определение состояния по файлам (нет файла, `.part`, верный размер, неверный размер).
-- [ ] 3.2 Загрузчик:
+- [x] 3.1 Каталог `speech/models.rs`: `ModelId::{Turbo, Small}`, URL, размер, SHA-256 (из design.md); `ModelManager` с состояниями `notDownloaded | downloading { percent, bytesPerSec } | paused { percent } | checking | ready | noSpace { needBytes, freeBytes } | noNetwork { percent, retryInSec } | error { reason }`; файлы в `<app_data>/models/`; «установлена» = файл верного размера. Проверка: `cargo test` на определение состояния по файлам (нет файла, `.part`, верный размер, неверный размер).
+- [x] 3.2 Загрузчик:
   - `reqwest` stream в `.part`, SHA-256 на лету;
   - докачка через `Range` (на 200 вместо 206 — сначала);
   - проверка места (`statvfs` или `GetDiskFreeSpaceExW`), нужно остаток + 10 %;
@@ -61,7 +61,7 @@
   - сервер без Range;
   - неверная сумма;
   - нехватка места через подменённую функцию свободного места.
-- [ ] 3.3 Команды:
+- [x] 3.3 Команды:
   - `speech_models_list`, `speech_model_download(id)`, `speech_model_pause(id)`, `speech_model_cancel(id)`, `speech_model_remove(id)`, `speech_model_select(id)`;
   - событие `SpeechModelChanged` не чаще 4 раз в секунду.
 
@@ -75,20 +75,20 @@
 
 ## 4. Распознаватель (Rust)
 
-- [ ] 4.1 `speech/recognizer.rs`: один поток с загруженной моделью (Metal на macOS) и приоритетной очередью «живая > проба/проверка > второй проход»; ленивая загрузка, выгрузка через 2 минуты простоя и при смене модели. Параметры: `no_context`, язык задан явно, temperature 0 с fallback, greedy или beam 5. Сегменты отдаются с `no_speech_prob` и `avg_logprob`. Работа с моделью — за типажом `Engine`. Проверка: `cargo test` с фейковым `Engine`:
+- [x] 4.1 `speech/recognizer.rs`: один поток с загруженной моделью (Metal на macOS) и приоритетной очередью «живая > проба/проверка > второй проход»; ленивая загрузка, выгрузка через 2 минуты простоя и при смене модели. Параметры: `no_context`, язык задан явно, temperature 0 с fallback, greedy или beam 5. Сегменты отдаются с `no_speech_prob` и `avg_logprob`. Работа с моделью — за типажом `Engine`. Проверка: `cargo test` с фейковым `Engine`:
   - порядок приоритетов;
   - живая фраза ждёт не больше одной фразы второго прохода;
   - выгрузка по простою.
 
   `#[ignore]`-тест с настоящей turbo на фикстуре: текст похож на эталон.
-- [ ] 4.2 Язык «Оба»: автоопределение, из которого берутся только `ru` или `uk`, кеш на 30 с на канал. Проверка: `cargo test` выбора из вероятностей на фейке; `#[ignore]`-тест на фикстуре uk.
-- [ ] 4.3 Фильтры `speech/filters.rs`:
+- [x] 4.2 Язык «Оба»: автоопределение, из которого берутся только `ru` или `uk`, кеш на 30 с на канал. Проверка: `cargo test` выбора из вероятностей на фейке; `#[ignore]`-тест на фикстуре uk.
+- [x] 4.3 Фильтры `speech/filters.rs`:
   - пороги сегментов `no_speech_prob > 0.6`, `avg_logprob < −1.0`;
   - стоп-лист фантомов ru и uk из спайка с нормализацией;
   - отброс повтора глоссария (3 и больше терминов подряд, которых нет в соседних фразах канала).
 
   Проверка: `cargo test` на таблице случаев: «Продолжение следует...», «Дякую за перегляд!», глоссарий дословно, настоящая фраза с двумя именами проходит.
-- [ ] 4.4 Глоссарий `speech/glossary.rs`:
+- [x] 4.4 Глоссарий `speech/glossary.rs`:
   - порядок: проект → участники → другие люди → термины брифа (`brief.glossary[].term`, `brief.stack[]`);
   - через запятую, обрезка по целым терминам до 600 символов, живой проход — первые 300.
 
