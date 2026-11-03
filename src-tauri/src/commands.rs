@@ -20,7 +20,10 @@ use crate::{
         install::{self, AgentInstallProgress},
         login,
     },
-    audio::{AudioLevels, AudioSource},
+    audio::{
+        AudioLevels, AudioSource,
+        mic_watch::{MicActivityChanged, MicWatch},
+    },
     error::{CommandError, CommandResult},
     events::Navigate,
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
@@ -442,7 +445,8 @@ pub async fn transcript_append(
 /* Settings */
 
 /// Stored preferences over the defaults of the keys Rust acts on
-/// (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`).
+/// (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`,
+/// `micBusyBehavior`).
 /// The frontend merges the result over its own defaults.
 #[tauri::command]
 #[specta::specta]
@@ -808,4 +812,14 @@ pub async fn audio_level_stop(
     let label = window.label().to_owned();
     let levels = levels.inner().clone();
     permissions::blocking(move || levels.stop(&label, source)).await
+}
+
+/* Microphone activity */
+
+/// Whether another app uses the microphone now, as the last
+/// `MicActivityChanged` said: a window opened during a call sees "busy".
+#[tauri::command]
+#[specta::specta]
+pub fn mic_activity_get(watch: State<'_, MicWatch>) -> CommandResult<MicActivityChanged> {
+    Ok(watch.current())
 }

@@ -10,7 +10,7 @@ use tauri_specta::{Builder, collect_commands, collect_events};
 
 use crate::{
     agent::install::AgentInstallProgress,
-    audio::{AudioLevel, AudioLevelStopped},
+    audio::{AudioLevel, AudioLevelStopped, mic_watch::MicActivityChanged},
     commands,
     events::{CallSessionChanged, DataChanged, Navigate, ShortcutPressed},
 };
@@ -78,6 +78,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::audio_level_start,
             commands::audio_level_stop,
             commands::app_restart,
+            commands::mic_activity_get,
         ])
         .events(collect_events![
             AgentInstallProgress,
@@ -85,6 +86,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             AudioLevelStopped,
             CallSessionChanged,
             DataChanged,
+            MicActivityChanged,
             Navigate,
             ShortcutPressed
         ])
