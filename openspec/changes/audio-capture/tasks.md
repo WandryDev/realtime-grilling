@@ -94,20 +94,20 @@
 
 ## 6. Фронтенд
 
-- [ ] 6.1 `src/features/recording/backend.ts`: `RecordingBackend` с `layerTauri` (через `call`/`listen`) и `layerMock` (фейковые таймеры, уровни-синусоида, `micActivity` от демо-действий). Подключить в `src/effect/runtime.ts`. Проверка: `@effect/vitest` на `layerMock` (старт идемпотентен, стоп неизвестной → `NotFound`); тест `layerTauri` на `fake-tauri.ts` декодирует события.
-- [ ] 6.2 `CallSession.recordingId?` в TS и в Rust `CallSessionChanged`. `startRecording()` сначала стартует запись, затем `startCall`; ошибка «нет доступа» показывается в виджете с кнопкой «Открыть настройки». `endCall()` останавливает запись. Проверка: Vitest в Tauri-режиме:
+- [x] 6.1 `src/features/recording/backend.ts`: `RecordingBackend` с `layerTauri` (через `call`/`listen`) и `layerMock` (фейковые таймеры, уровни-синусоида, `micActivity` от демо-действий). Подключить в `src/effect/runtime.ts`. Проверка: `@effect/vitest` на `layerMock` (старт идемпотентен, стоп неизвестной → `NotFound`); тест `layerTauri` на `fake-tauri.ts` декодирует события.
+- [x] 6.2 `CallSession.recordingId?` в TS и в Rust `CallSessionChanged`. `startRecording()` сначала стартует запись, затем `startCall`; ошибка «нет доступа» показывается в виджете с кнопкой «Открыть настройки». `endCall()` останавливает запись. Проверка: Vitest в Tauri-режиме:
   - «Начать» вызывает `recording_start`, а «Завершить» — `recording_stop` с тем же id;
   - при `NoAccess` сессия не становится `live`.
-- [ ] 6.3 Виджет называет приложение из `micActivity` (`mic_activity_get` при открытии, затем событие) вместо `MEETING_APP`. Проверка: Vitest — событие `busy` с «Google Chrome» меняет текст карточки.
-- [ ] 6.4 «Микрофон освободился» по `micActivity` = `free`, пока сессия `live`: оверлей (`overlay-page.tsx`) и панель окна звонка (`live-call.ts`). Название и время берутся из события, отсчёт панели — из настройки `autoEnd` вместо `6:48`. «Продолжить» скрывает экран до следующего `busy → free`. Демо-кнопка и скрипт mock остаются для браузера. Проверка: Vitest в Tauri-режиме:
+- [x] 6.3 Виджет называет приложение из `micActivity` (`mic_activity_get` при открытии, затем событие) вместо `MEETING_APP`. Проверка: Vitest — событие `busy` с «Google Chrome» меняет текст карточки.
+- [x] 6.4 «Микрофон освободился» по `micActivity` = `free`, пока сессия `live`: оверлей (`overlay-page.tsx`) и панель окна звонка (`live-call.ts`). Название и время берутся из события, отсчёт панели — из настройки `autoEnd` вместо `6:48`. «Продолжить» скрывает экран до следующего `busy → free`. Демо-кнопка и скрипт mock остаются для браузера. Проверка: Vitest в Tauri-режиме:
   - событие `free` открывает экран с названием;
   - «Продолжить» скрывает его;
   - `free` без живой сессии игнорируется.
-- [ ] 6.5 `RecordingIndicator`: необязательные `level` (уровни «Я» и «Остальных») и `warning` (канал без доступа или переподключается). Хук `useRecordingLevels()`, подключение в шапке оверлея, пилюле и окне звонка. Проверка: Vitest на индикатор (уровень рисуется, предупреждение имеет текст для скринридера); `bun run check`.
+- [x] 6.5 `RecordingIndicator`: необязательные `level` (уровни «Я» и «Остальных») и `warning` (канал без доступа или переподключается). Хук `useRecordingLevels()`, подключение в шапке оверлея, пилюле и окне звонка. Проверка: Vitest на индикатор (уровень рисуется, предупреждение имеет текст для скринридера); `bun run check`.
 
 ## 7. Интеграционная проверка
 
-- [ ] 7.1 Прогнать:
+- [x] 7.1 Прогнать:
   - `bun run check`, `typecheck`, `test`, `build`, `bun run e2e`;
   - `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`;
   - `git diff --exit-code src/bindings.ts`.
