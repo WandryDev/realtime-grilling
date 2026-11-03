@@ -7,6 +7,9 @@ mod events;
 mod permissions;
 mod shell;
 mod storage;
+// Speech segmentation; the recorder (audio-capture 4.5) wires it in.
+#[cfg_attr(not(test), allow(dead_code))]
+mod vad;
 
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent};
 

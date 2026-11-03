@@ -79,6 +79,8 @@ windows-core = "0.62"
 
 [dev-dependencies]
 tempfile = "3"
+# Speech fixtures for the VAD tests (tests/fixtures/*.wav).
+hound = "3.5"
 # Mock runtime: capability (ACL) checks against the real config in tests.
 tauri = { version = "2", features = ["test"] }
 
