@@ -95,6 +95,8 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     if !std::env::args().any(|arg| arg == AUTOSTART_ARG) {
         show_entry(app.handle());
     }
+    // Runs for the app's whole life; needs no microphone access.
+    app.manage(crate::audio::mic_watch::start_for_app(app.handle()));
     Ok(())
 }
 
@@ -163,8 +165,10 @@ fn hide_on_close<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Keeps the app alive when the last window goes away; only "Выйти" exits.
+/// On exit stops the microphone watcher.
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     match event {
+        RunEvent::Exit => crate::audio::mic_watch::stop(app),
         RunEvent::ExitRequested { api, .. }
             if !app.state::<QuitRequested>().0.load(Ordering::SeqCst) =>
         {

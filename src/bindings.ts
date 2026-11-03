@@ -53,7 +53,8 @@ export const commands = {
 	transcriptAppend: (callId: string, segments: SegmentInput[]) => typedError<TranscriptSegment[], CommandError>(__TAURI_INVOKE("transcript_append", { callId, segments })),
 	/**
 	 *  Stored preferences over the defaults of the keys Rust acts on
-	 *  (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`).
+	 *  (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`,
+	 *  `micBusyBehavior`).
 	 *  The frontend merges the result over its own defaults.
 	 */
 	settingsGet: () => typedError<{ [key in string]: Value }, CommandError>(__TAURI_INVOKE("settings_get")),
@@ -149,6 +150,11 @@ export const commands = {
 	 *  process only after a restart.
 	 */
 	appRestart: () => typedError<null, CommandError>(__TAURI_INVOKE("app_restart")),
+	/**
+	 *  Whether another app uses the microphone now, as the last
+	 *  `MicActivityChanged` said: a window opened during a call sees "busy".
+	 */
+	micActivityGet: () => typedError<MicActivityChanged, CommandError>(__TAURI_INVOKE("mic_activity_get")),
 };
 
 /** Events */
@@ -158,6 +164,7 @@ export const events = {
 	audioLevelStopped: makeEvent<AudioLevelStopped, AudioLevelStopped>("audio-level-stopped"),
 	callSessionChanged: makeEvent<CallSessionChanged, CallSessionChanged>("call-session-changed"),
 	dataChanged: makeEvent<DataChanged, DataChanged>("data-changed"),
+	micActivityChanged: makeEvent<MicActivityChanged, MicActivityChanged>("mic-activity-changed"),
 	navigate: makeEvent<Navigate, Navigate>("navigate"),
 	shortcutPressed: makeEvent<ShortcutPressed, ShortcutPressed>("shortcut-pressed"),
 };
@@ -341,6 +348,22 @@ export type Entity = "project" | "person" |
 export type InstallStage = "downloading" | "installing" | 
 /**  The installer finished; the app checks the CLI. */
 "verifying";
+
+/**
+ *  Whether another app captures from an input. Sent to every window on
+ *  every change; `mic_activity_get` returns the current one.
+ * 
+ *  - busy: `app` holds the input since `since` (the start of the busy
+ *    period; a takeover by another app keeps it);
+ *  - free: `app` held it last and released it at `since`. Before the first
+ *    busy period `app` is absent and `since` is the app's start.
+ */
+export type MicActivityChanged = {
+	busy: boolean,
+	app?: string | null,
+	/**  Milliseconds since the Unix epoch. */
+	since: number,
+};
 
 /**  Tells the main window to open a route, e.g. "Настройки" in the tray menu. */
 export type Navigate = {

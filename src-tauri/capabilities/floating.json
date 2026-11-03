@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "floating",
-  "description": "Start widget and call overlay: read projects, people and calls; start and run a call; drag and hide; hand over to another window (windows_show). No project, people or settings changes.",
+  "description": "Start widget and call overlay: read projects, people and calls; start and run a call; drag and hide; hand over to another window (windows_show); read whether another app uses the microphone (mic_activity_get). No project, people or settings changes.",
   "windows": ["widget", "overlay"],
   "permissions": [
     "core:default",
@@ -29,6 +29,7 @@
     "allow-questions-update",
     "allow-transcript-list",
     "allow-settings-get",
-    "allow-windows-show"
+    "allow-windows-show",
+    "allow-mic-activity-get"
   ]
 }

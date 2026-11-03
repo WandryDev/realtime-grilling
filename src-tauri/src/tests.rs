@@ -846,6 +846,44 @@ fn settings_merge_over_defaults_and_validate_types() {
 }
 
 #[test]
+fn mic_busy_behavior_is_widget_record_or_nothing() {
+    let fx = Fixture::new();
+    let stored = fx.read(settings::get).unwrap();
+    assert_eq!(stored[settings::MIC_BUSY_BEHAVIOR], json!("widget"));
+    assert_eq!(
+        settings::mic_busy_behavior(&SettingsMap::new()),
+        settings::MicBusyBehavior::Widget,
+        "a missing key is widget"
+    );
+
+    for (value, expected) in [
+        ("widget", settings::MicBusyBehavior::Widget),
+        ("record", settings::MicBusyBehavior::Record),
+        ("nothing", settings::MicBusyBehavior::Nothing),
+    ] {
+        let patch = SettingsMap::from([(settings::MIC_BUSY_BEHAVIOR.to_owned(), json!(value))]);
+        fx.write(move |db| Ok(((), settings::put(db, &patch)?)))
+            .unwrap();
+        let stored = fx.read(settings::get).unwrap();
+        assert_eq!(settings::mic_busy_behavior(&stored), expected);
+    }
+
+    for bad in [json!("popup"), json!(""), json!(true), json!(null)] {
+        let patch = SettingsMap::from([(settings::MIC_BUSY_BEHAVIOR.to_owned(), bad.clone())]);
+        let error = fx
+            .write(move |db| Ok(((), settings::put(db, &patch)?)))
+            .unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }), "{bad}");
+    }
+    let stored = fx.read(settings::get).unwrap();
+    assert_eq!(
+        stored[settings::MIC_BUSY_BEHAVIOR],
+        json!("nothing"),
+        "kept"
+    );
+}
+
+#[test]
 fn agent_path_is_only_a_path_to_the_cli() {
     let good = if cfg!(windows) {
         [
@@ -1024,6 +1062,9 @@ mod acl {
             ("onboarding", "agent_login_start"),
             ("onboarding", "audio_level_start"),
             ("main", "agent_status"),
+            ("main", "mic_activity_get"),
+            ("widget", "mic_activity_get"),
+            ("overlay", "mic_activity_get"),
         ] {
             let result = invoke(label, command);
             assert!(!denied(&result), "{label} → {command}: {result:?}");
