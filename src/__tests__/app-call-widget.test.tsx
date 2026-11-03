@@ -47,6 +47,13 @@ function advance(ms: number) {
   });
 }
 
+/** Lets the backend answer: the recorder's start, the mic watch's events. */
+async function settle() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   push.mockReset();
@@ -58,7 +65,7 @@ afterEach(() => {
 });
 
 describe("/widget", () => {
-  it("starts the call with the last project and people", () => {
+  it("starts the call with the last project and people", async () => {
     open(StartWidgetPage);
 
     expect(
@@ -70,6 +77,7 @@ describe("/widget", () => {
     expect(screen.queryByRole("button", { name: REMOVE_OLGA })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Начать" }));
+    await settle();
     expect(
       screen.getByRole("heading", { level: 1, name: "Готовлю бриф" })
     ).toBeTruthy();
@@ -82,7 +90,7 @@ describe("/widget", () => {
     expect(push).toHaveBeenCalledWith(routes.overlay());
   });
 
-  it("collapses into the pill and starts from there", () => {
+  it("collapses into the pill and starts from there", async () => {
     open(StartWidgetPage);
 
     fireEvent.click(screen.getByRole("button", { name: "Не сейчас" }));
@@ -96,6 +104,7 @@ describe("/widget", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Не сейчас" }));
     fireEvent.click(screen.getByRole("button", { name: "Начать" }));
+    await settle();
     expect(
       screen.getByRole("heading", { level: 1, name: "Готовлю бриф" })
     ).toBeTruthy();
@@ -161,10 +170,12 @@ describe("/overlay", () => {
     expect(screen.queryByText("Новый вопрос")).toBeNull();
   });
 
-  it("offers to end the call when the meeting app lets the mic go", () => {
+  it("offers to end the call when the meeting app lets the mic go", async () => {
     open(OverlayPage);
+    await settle();
 
     fireEvent.click(screen.getByRole("button", { name: "Выйти из встречи" }));
+    await settle();
     expect(
       screen.getByRole("heading", {
         level: 1,
@@ -178,6 +189,10 @@ describe("/overlay", () => {
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Выйти из встречи" }));
+    await settle();
+    expect(
+      screen.getByText("Zoom отпустил микрофон", { exact: false })
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
     expect(push).toHaveBeenCalledWith(routes.callSummary(CURRENT_CALL_ID));
   });

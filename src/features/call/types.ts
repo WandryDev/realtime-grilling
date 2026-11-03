@@ -1,5 +1,6 @@
 import type { ContextSource } from "@/components/ui/context-card";
 import type { QuestionHistoryStatus } from "@/components/ui/question-history";
+import type { RecordingLevel } from "@/components/ui/recording-indicator";
 
 /*
  * Data shapes of the call window. Screens get them through props, the demo
@@ -11,11 +12,15 @@ import type { QuestionHistoryStatus } from "@/components/ui/question-history";
 export interface CallInfo {
   /** "Завершить": black while the call runs, white while the mic is free. */
   endAction: "primary" | "secondary" | "hidden";
+  /** Live levels of "Я" and "Остальные" on the recording indicator. */
+  level?: RecordingLevel | null;
   participants: string;
   project: string;
   /** `stopped` grays the dot once the call is being wrapped up. */
   recording: "live" | "stopped";
   time: string;
+  /** A channel that doesn't capture, on the recording indicator. */
+  warning?: string | null;
 }
 
 /* Transcript */
@@ -229,7 +234,8 @@ export interface ContextData {
 /* Overlays */
 
 export interface MicReleasedData {
-  countdown: string;
+  /** Time left, "6:48"; none when the call never ends by itself. */
+  countdown?: string;
   countdownLabel: string;
   description: string;
   /** Time left, in percent of the timeout. */

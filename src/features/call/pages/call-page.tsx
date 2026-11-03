@@ -4,13 +4,17 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import { toast } from "@/components/ui/toast";
-import {
-  finishCall,
-  resumeCall,
-  startCall,
-  useCallSession,
-} from "@/data/call-session";
+import { startCall, useCallSession } from "@/data/call-session";
 import { useProject } from "@/data/projects";
+import { autoEndSeconds, useSettings } from "@/data/settings";
+import { inTauri } from "@/effect/runtime";
+import {
+  finishRecordedCall,
+  releaseMicDemo,
+  resumeRecordedCall,
+  subscribeToMicActivity,
+  useRecordingSignal,
+} from "@/features/recording/api";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
@@ -29,6 +33,7 @@ import {
 } from "../feed-script";
 import {
   createLiveCall,
+  type LiveCallAction,
   type LiveCallState,
   liveCallReducer,
   startingCall,
@@ -37,6 +42,7 @@ import {
 import { CALL_SCREENS } from "../mock";
 import { CallScreen } from "../screens/call-screen";
 import type {
+  CallFeedEvent,
   CallScreenActions,
   CallScreenState,
   QuestionQuickAction,
@@ -45,7 +51,14 @@ import type {
 /*
  * /call: the live call window. The scripted feed from ../api streams the
  * transcript, topics, questions and context; clicks change the questions
- * locally; "Завершить" collects the summary and opens it.
+ * locally; "Завершить" stops the recording, collects the summary and
+ * opens it.
+ *
+ * "Микрофон освободился" comes from the microphone watch while the call is
+ * live: the app's name and the time it let go, the countdown from the
+ * "Завершать звонок сам" setting. "Продолжить" (or the app taking the
+ * microphone back) hides it until the next release. In the browser the
+ * script's last step frees the mock meeting app's microphone.
  *
  * Opened directly without a call in progress, it starts the demo call of
  * Телемедиа.
@@ -102,6 +115,21 @@ export function CallPage() {
   return <LiveCallWindow demo={demo} key={demo ?? "live"} />;
 }
 
+/**
+ * A feed event into the window. The script's "mic-released" is the browser
+ * demo's meeting app leaving: it frees the mock's microphone, the watch
+ * does the rest. In Tauri the real microphone says when, so it's dropped.
+ */
+function feedHandler(dispatch: (action: LiveCallAction) => void) {
+  return (event: CallFeedEvent) => {
+    if (event.type !== "mic-released") {
+      dispatch({ event, type: "feed" });
+    } else if (!inTauri) {
+      releaseMicDemo();
+    }
+  };
+}
+
 /** Cancels pending fake async operations when the window goes away. */
 function usePendingOperations() {
   const pending = useRef(new Set<() => void>());
@@ -127,6 +155,8 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const project = useProject(session.projectId ?? DEMO_PROJECT_ID);
   const [state, dispatch] = useReducer(liveCallReducer, demo, initialState);
   const track = usePendingOperations();
+  const { autoEnd } = useSettings();
+  const signal = useRecordingSignal();
 
   const { callId } = session;
   const finishing = Boolean(state.data.finishing);
@@ -155,17 +185,45 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
 
   // The agent and the recorder; pauses while finishing, resumes on cancel
   const feedPosition = useRef(feedStart(demo));
+  const playFeedEvent = useMemo(() => feedHandler(dispatch), []);
   useEffect(() => {
     if (finishing || feedPosition.current >= FEED_LENGTH) {
       return;
     }
-    return subscribeToCallFeed((event) => dispatch({ event, type: "feed" }), {
+    return subscribeToCallFeed(playFeedEvent, {
       from: feedPosition.current,
       onStep: (next) => {
         feedPosition.current = next;
       },
     });
-  }, [finishing]);
+  }, [finishing, playFeedEvent]);
+
+  // The meeting app and the microphone: a release while the call is live
+  // offers to end it, the app taking the microphone back hides the offer.
+  const live = session.status === "live";
+  const watch = useRef({ live, timeout: autoEndSeconds(autoEnd) });
+  useEffect(() => {
+    watch.current = { live, timeout: autoEndSeconds(autoEnd) };
+  }, [autoEnd, live]);
+  useEffect(
+    () =>
+      subscribeToMicActivity((activity) => {
+        if (activity.busy) {
+          dispatch({ type: "mic-continue" });
+          return;
+        }
+        if (watch.current.live) {
+          dispatch({
+            app: activity.app,
+            now: Date.now(),
+            releasedAt: activity.since,
+            timeout: watch.current.timeout,
+            type: "mic-released",
+          });
+        }
+      }),
+    []
+  );
 
   // "Собираю итоги": steps, then the summary of the call
   useEffect(() => {
@@ -188,7 +246,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   }, [lagging]);
 
   const end = useCallback(() => {
-    finishCall();
+    finishRecordedCall();
     dispatch({ project: projectName, type: "finish-start" });
   }, [projectName]);
 
@@ -281,7 +339,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   );
 
   const onCancelFinish = useCallback(() => {
-    resumeCall();
+    resumeRecordedCall();
     dispatch({ type: "finish-cancel" });
   }, []);
 
@@ -338,14 +396,16 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       ...screen,
       call: {
         ...screen.call,
+        level: signal.level,
         participants:
           session.participants.length > 0
             ? session.participants.join(", ")
             : screen.call.participants,
         project: projectName,
+        warning: signal.warning,
       },
     };
-  }, [projectName, session.participants, state]);
+  }, [projectName, session.participants, signal, state]);
 
   return <CallScreen actions={actions} className="h-svh" data={data} />;
 }

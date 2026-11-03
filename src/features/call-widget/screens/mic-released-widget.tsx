@@ -30,7 +30,8 @@ export function MicReleasedWidget({
   releasedAt = MIC_RELEASED.releasedAt,
   time = MIC_RELEASED.time,
 }: {
-  app?: string;
+  /** The app that let the microphone go; null when unknown. */
+  app?: string | null;
   className?: string;
   /** Time left before the call ends by itself: "6:48". null: never. */
   countdown?: string | null;
@@ -54,7 +55,11 @@ export function MicReleasedWidget({
       </WidgetHeader>
       <WidgetHeading
         className="gap-1.5"
-        description={`${app} отпустил микрофон в ${releasedAt}.`}
+        description={
+          app
+            ? `${app} отпустил микрофон в ${releasedAt}.`
+            : `Микрофон освободился в ${releasedAt}.`
+        }
         title="Микрофон больше не используется. Завершить звонок?"
       />
       {countdown === null ? null : (

@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority"
-import { PauseIcon } from "lucide-react"
+import { PauseIcon, TriangleAlertIcon } from "lucide-react"
 import { cn } from "cn"
 
 import { Spinner } from "@/components/ui/spinner"
@@ -13,8 +13,13 @@ import { Spinner } from "@/components/ui/spinner"
  * red halo around the dot, used right after the recording starts. The
  * `inline` variant drops the chip, as in call history rows.
  *
+ * While recording, `level` adds two 3×12 bars after the dot: the live input
+ * of "Я" and of "Остальные", filling from the bottom. `warning` (a channel
+ * without access or reconnecting) adds an orange triangle; its text joins
+ * the accessible name and the tooltip.
+ *
  * The root is a `timer` (implicitly aria-live="off") so screen readers don't
- * announce every second.
+ * announce every second, nor the levels.
  */
 const recordingIndicatorVariants = cva(
   "inline-flex w-fit shrink-0 items-center gap-2 whitespace-nowrap text-foreground data-paused:text-muted-foreground",
@@ -31,6 +36,12 @@ const recordingIndicatorVariants = cva(
   }
 )
 
+/** Live input of both channels, 0–1. */
+type RecordingLevel = {
+  me: number
+  others: number
+}
+
 type RecordingIndicatorProps = React.ComponentProps<"span"> &
   VariantProps<typeof recordingIndicatorVariants> & {
     /** Elapsed call time, already formatted: "24:18". */
@@ -38,7 +49,33 @@ type RecordingIndicatorProps = React.ComponentProps<"span"> &
     paused?: boolean
     /** Text before the time. Paused defaults to "пауза". */
     label?: React.ReactNode
+    /** Live levels of "Я" and "Остальные"; none draws no bars. */
+    level?: RecordingLevel | null
+    /** A channel that doesn't capture: "Нет доступа к звуку собеседников". */
+    warning?: string | null
   }
+
+/** Bar height in px: 12 at full level, a 2px stub at silence. */
+const LEVEL_BAR_PX = 12
+const LEVEL_MIN_PX = 2
+
+function LevelBar({ channel, value }: { channel: string; value: number }) {
+  const clamped = Math.min(1, Math.max(0, value))
+  return (
+    <span
+      data-slot="recording-indicator-level-bar"
+      data-channel={channel}
+      className="flex h-3 w-[3px] items-end overflow-hidden rounded-full bg-border-strong"
+    >
+      <span
+        className="w-full rounded-full bg-current transition-[height] duration-100 ease-out motion-reduce:transition-none"
+        style={{
+          height: Math.max(LEVEL_MIN_PX, Math.round(clamped * LEVEL_BAR_PX)),
+        }}
+      />
+    </span>
+  )
+}
 
 function RecordingIndicator({
   className,
@@ -46,9 +83,14 @@ function RecordingIndicator({
   time,
   paused = false,
   label,
+  level,
+  warning,
+  "aria-label": ariaLabel,
   ...props
 }: RecordingIndicatorProps) {
   const text = label ?? (paused ? "пауза" : null)
+  const name =
+    ariaLabel ?? (paused ? `Запись на паузе, ${time}` : `Идёт запись, ${time}`)
 
   // A span, so the indicator can sit inside row buttons (CallRow).
   return (
@@ -56,7 +98,7 @@ function RecordingIndicator({
       data-slot="recording-indicator"
       data-paused={paused ? "" : undefined}
       role="timer"
-      aria-label={paused ? `Запись на паузе, ${time}` : `Идёт запись, ${time}`}
+      aria-label={warning ? `${name}. ${warning}` : name}
       className={cn(recordingIndicatorVariants({ variant }), className)}
       {...props}
     >
@@ -76,6 +118,25 @@ function RecordingIndicator({
           )}
         />
       )}
+      {level && !paused ? (
+        <span
+          aria-hidden
+          data-slot="recording-indicator-level"
+          className="flex items-end gap-px"
+        >
+          <LevelBar channel="me" value={level.me} />
+          <LevelBar channel="others" value={level.others} />
+        </span>
+      ) : null}
+      {warning ? (
+        <TriangleAlertIcon
+          aria-hidden
+          data-slot="recording-indicator-warning"
+          className="size-3.5 shrink-0 text-accent-ink"
+        >
+          <title>{warning}</title>
+        </TriangleAlertIcon>
+      ) : null}
       {text ? (
         <span data-slot="recording-indicator-label" className="text-sm">
           {text}
@@ -163,4 +224,9 @@ function AgentStatus({
 }
 
 export { AgentStatus, RecordingIndicator, recordingIndicatorVariants }
-export type { AgentState, AgentStatusTone, RecordingIndicatorProps }
+export type {
+  AgentState,
+  AgentStatusTone,
+  RecordingIndicatorProps,
+  RecordingLevel,
+}

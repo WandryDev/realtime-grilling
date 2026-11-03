@@ -10,7 +10,10 @@ import {
   QuestionTitle,
   QuestionTopic,
 } from "@/components/ui/question";
-import { RecordingIndicator } from "@/components/ui/recording-indicator";
+import {
+  RecordingIndicator,
+  type RecordingLevel,
+} from "@/components/ui/recording-indicator";
 import { RowStatus } from "@/components/ui/row-status";
 import { cn } from "@/lib/utils";
 import { CollapseIcon, ExpandIcon, EyeOffIcon } from "../icons";
@@ -24,16 +27,22 @@ import { ActionButton } from "./action-button";
 export function OverlayHeader({
   callHref,
   className,
+  level,
   onCollapse,
   project,
   time,
+  warning,
   ...props
 }: ComponentProps<"div"> & {
   /** Where the arrows lead: the call window. */
   callHref?: string;
+  /** Live levels next to the recording dot. */
+  level?: RecordingLevel | null;
   onCollapse?: () => void;
   project: string;
   time: string;
+  /** A channel that doesn't capture, on the recording indicator. */
+  warning?: string | null;
 }) {
   return (
     <div
@@ -44,7 +53,12 @@ export function OverlayHeader({
       {...props}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <RecordingIndicator time={time} variant="inline" />
+        <RecordingIndicator
+          level={level}
+          time={time}
+          variant="inline"
+          warning={warning}
+        />
         <span className="truncate text-sm font-semibold">{project}</span>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">

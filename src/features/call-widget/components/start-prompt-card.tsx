@@ -1,7 +1,8 @@
 "use client";
 
+import { CircleAlertIcon } from "lucide-react";
 import { type ComponentProps, useCallback } from "react";
-
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ZoomIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,6 +116,57 @@ function ParticipantsField({
   );
 }
 
+const ZOOM = /zoom/iu;
+
+/*
+ * "Zoom использует микрофон": Zoom has its logo (and its name for screen
+ * readers), any other app its name.
+ */
+function MeetingApp({ app }: { app: string }) {
+  if (ZOOM.test(app)) {
+    return (
+      <>
+        <ZoomIcon className="-my-2 size-8" />
+        <span className="text-muted-foreground text-sm">
+          <span className="sr-only">{app} </span>
+          использует микрофон
+        </span>
+      </>
+    );
+  }
+  return (
+    <span className="text-muted-foreground min-w-0 truncate text-sm">
+      <span className="text-foreground font-medium">{app}</span> использует
+      микрофон
+    </span>
+  );
+}
+
+/** Why "Начать" didn't start the recording. */
+export interface StartError {
+  description: string;
+  /** "Открыть настройки": where the access is turned on. */
+  onOpenSettings?: () => void;
+  title: string;
+}
+
+function StartErrorAlert({ error }: { error: StartError }) {
+  return (
+    <Alert variant="destructive">
+      <CircleAlertIcon aria-hidden="true" />
+      <AlertTitle>{error.title}</AlertTitle>
+      <AlertDescription className="flex flex-col items-start gap-2">
+        {error.description}
+        {error.onOpenSettings ? (
+          <Button onClick={error.onOpenSettings} size="sm" variant="secondary">
+            Открыть настройки
+          </Button>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /*
  * "Начать звонок?": the meeting app took the microphone. Project and people
  * come from the last call; `projectOpen` shows the project list open.
@@ -132,6 +184,8 @@ export function StartPromptCard({
   projectId,
   projectOpen = false,
   projects,
+  startError,
+  starting = false,
   ...props
 }: ComponentProps<"div"> & {
   /** The client's people not on the call yet, for the "+" menu. */
@@ -147,6 +201,10 @@ export function StartPromptCard({
   projectId: string | null;
   projectOpen?: boolean;
   projects: PickerProject[];
+  /** The last "Начать" failed: why, and where to fix it. */
+  startError?: StartError | null;
+  /** "Начать" was pressed and the recording is starting. */
+  starting?: boolean;
 }) {
   return (
     <WidgetCard className={className} {...props}>
@@ -158,11 +216,7 @@ export function StartPromptCard({
         }
       >
         <StatusDot tone="accent" />
-        <ZoomIcon className="-my-2 size-8" />
-        <span className="text-muted-foreground text-sm">
-          <span className="sr-only">{app} </span>
-          использует микрофон
-        </span>
+        <MeetingApp app={app} />
       </WidgetHeader>
       <WidgetHeading
         description="Буду слушать и подсказывать вопросы. В звонок никто не подключится."
@@ -180,8 +234,14 @@ export function StartPromptCard({
         onRemove={onRemoveParticipant}
         participants={participants}
       />
+      {startError ? <StartErrorAlert error={startError} /> : null}
       <CallWidgetFooter className="items-center pt-0.5">
-        <Button className="flex-1" onClick={onStart} size="lg">
+        <Button
+          className="flex-1"
+          disabled={starting}
+          onClick={onStart}
+          size="lg"
+        >
           <span
             aria-hidden="true"
             className="bg-recording size-[7px] shrink-0 rounded-full"

@@ -153,6 +153,15 @@ function selectValues(stored: StoredSettings) {
   return stored.values;
 }
 
+/**
+ * The "Завершать звонок сам" setting in seconds: how long after the meeting
+ * app let the microphone go; null for "Никогда".
+ */
+export function autoEndSeconds(setting: string): number | null {
+  const minutes = Number(setting);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : null;
+}
+
 export function useSettings() {
   return selectValues(settingsStore.use());
 }

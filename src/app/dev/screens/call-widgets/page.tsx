@@ -20,6 +20,10 @@ const SCREENS = [
   { id: "start-launch", title: "01 Виджет старта — запуск" },
   { id: "start-pill", title: "01 Виджет старта — свёрнут в пилюлю" },
   {
+    id: "start-no-access",
+    title: "01 Виджет старта — нет доступа к микрофону",
+  },
+  {
     id: "mic-released",
     title: "05 Микрофон освободился — приложение в фоне",
   },
@@ -29,6 +33,10 @@ const SCREENS = [
     title: "06 Компактный оверлей — финальная проверка",
   },
   { id: "overlay-collapsed", title: "06 Компактный оверлей — свёрнут" },
+  {
+    id: "overlay-levels",
+    title: "06 Компактный оверлей — уровни и канал без доступа",
+  },
 ];
 
 const [
@@ -36,11 +44,25 @@ const [
   startProject,
   startLaunch,
   startPill,
+  startNoAccess,
   micReleased,
   overlay,
   overlayFinalCheck,
   overlayCollapsed,
+  overlayLevels,
 ] = SCREENS;
+
+const NO_ACCESS_ERROR = {
+  description:
+    "Разрешите Grill доступ к микрофону в системных настройках и нажмите «Начать» ещё раз.",
+  onOpenSettings: () => undefined,
+  title: "Нет доступа к микрофону",
+};
+
+const LEVELS_WITH_WARNING = {
+  level: { me: 0.7, others: 0.35 },
+  warning: "Нет доступа к звуку собеседников",
+};
 
 // Screen catalog for development. Not shipped in the production build.
 export default function CallWidgetsPage() {
@@ -100,6 +122,18 @@ export default function CallWidgetsPage() {
 
       <ScreenFrame
         height={HEIGHT}
+        id={startNoAccess.id}
+        note="«Начать», а доступ к микрофону отозван → запись не начинается, звонок тоже. «Открыть настройки» открывает в главном окне шаг онбординга с доступами."
+        title={startNoAccess.title}
+        width={WIDTH}
+      >
+        <DesktopScene className="size-full" clock="Пн 12:00">
+          <StartWidget startError={NO_ACCESS_ERROR} state="prompt" />
+        </DesktopScene>
+      </ScreenFrame>
+
+      <ScreenFrame
+        height={HEIGHT}
         id={micReleased.id}
         note="Никто, кроме нас, не держит микрофон (это не mute), окно звонка в фоне → предложение завершить приходит плавающим виджетом поверх всех окон. Таймер из настроек (5–10 мин, по умолчанию 7); ноль → звонок завершается сам и начинает собирать итоги. «Продолжить» → виджет скрывается до следующего освобождения микрофона."
         title={micReleased.title}
@@ -148,6 +182,18 @@ export default function CallWidgetsPage() {
       >
         <DesktopScene className="size-full" clock="Пн 12:24" sharing>
           <CompactOverlay state="collapsed" />
+        </DesktopScene>
+      </ScreenFrame>
+
+      <ScreenFrame
+        height={HEIGHT}
+        id={overlayLevels.id}
+        note="Рядом с точкой записи — живой уровень «Я» и «Остальных». Канал без доступа или переподключается → оранжевый треугольник, текст в подсказке и для скринридера."
+        title={overlayLevels.title}
+        width={WIDTH}
+      >
+        <DesktopScene className="size-full" clock="Пн 12:24" sharing>
+          <CompactOverlay recording={LEVELS_WITH_WARNING} state="default" />
         </DesktopScene>
       </ScreenFrame>
     </ScreenFlow>

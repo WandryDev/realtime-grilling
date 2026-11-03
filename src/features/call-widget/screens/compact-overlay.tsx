@@ -1,4 +1,7 @@
-import { AgentStatus } from "@/components/ui/recording-indicator";
+import {
+  AgentStatus,
+  type RecordingLevel,
+} from "@/components/ui/recording-indicator";
 import { cn } from "@/lib/utils";
 
 import { FloatingSurface } from "../components/floating-surface";
@@ -36,6 +39,12 @@ export type CompactOverlayState = "default" | "final-check" | "collapsed";
 
 type AgentState = "listening" | "thinking";
 
+/** What the recording indicator draws besides the time. */
+export interface OverlayRecording {
+  level: RecordingLevel | null;
+  warning: string | null;
+}
+
 export function CompactOverlay({
   agentState = "listening",
   callHref,
@@ -51,6 +60,7 @@ export function CompactOverlay({
   pastTopics = OVERLAY.pastTopics,
   project = CALL_PROJECT,
   questions,
+  recording,
   state = "default",
   time,
   topic = OVERLAY_TOPIC,
@@ -79,6 +89,8 @@ export function CompactOverlay({
   project?: string;
   /** Rows under the main question. Defaults depend on the state. */
   questions?: OverlayQuestionItem[];
+  /** Live levels and a channel's warning; previews draw none. */
+  recording?: OverlayRecording;
   state?: CompactOverlayState;
   time?: string;
   topic?: string;
@@ -91,10 +103,12 @@ export function CompactOverlay({
     return (
       <div className={cn("flex w-fit flex-col items-end gap-2", className)}>
         <OverlayPill
+          level={recording?.level}
           onExpand={onExpand}
           openQuestions={openQuestions}
           time={callTime}
           topic={topic}
+          warning={recording?.warning}
         />
         {card === null ? null : (
           <NewQuestionCard
@@ -114,9 +128,11 @@ export function CompactOverlay({
     <FloatingSurface className={cn("w-overlay gap-1 p-2", className)}>
       <OverlayHeader
         callHref={callHref}
+        level={recording?.level}
         onCollapse={onCollapse}
         project={project}
         time={callTime}
+        warning={recording?.warning}
       />
       {finalCheck ? (
         <OverlayHeading

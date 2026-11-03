@@ -2,9 +2,14 @@
 
 import { Effect, Stream } from "effect";
 
-import { finishCall, startCall } from "@/data/call-session";
+import { startCall } from "@/data/call-session";
 import type { ClientPerson } from "@/data/people";
 import { runCancelable } from "@/effect/runtime";
+import {
+  beginRecording,
+  finishRecordedCall,
+  type RecordingStart,
+} from "@/features/recording/api";
 
 import {
   type AgentEvent,
@@ -23,7 +28,7 @@ import {
  * React-facing side of the floating widgets:
  * - getLastCallParticipantIds / toPickerProject: who was on the project's
  *   last call (mock data until the calls store reads the backend)
- * - startRecording / endCall: start and stop the recorder
+ * - startRecording / endCall: start and stop the recorder with the call
  * - buildBrief / subscribeToAgent: run the CallWidgetBackend Effect service
  *   (`./backend.ts`) and return a cancel function; call it on unmount.
  */
@@ -65,19 +70,28 @@ export function toPickerProject(project: {
 
 /* ------------------------------------------------------------- Recording */
 
-export function startRecording(input: {
+/**
+ * "Начать": starts recording, then the call with it. A failed start (no
+ * microphone access) leaves the call as it was and says why.
+ */
+export async function startRecording(input: {
   participants: Participant[];
   projectId: string | null;
-}) {
-  startCall({
-    participants: input.participants.map((person) => person.name),
-    projectId: input.projectId,
-  });
+}): Promise<RecordingStart> {
+  const started = await beginRecording();
+  if (started.ok) {
+    startCall({
+      participants: input.participants.map((person) => person.name),
+      projectId: input.projectId,
+      recordingId: started.id,
+    });
+  }
+  return started;
 }
 
 /** "Завершить": recording stops, the agent collects the summary. */
 export function endCall() {
-  finishCall();
+  finishRecordedCall();
 }
 
 /* ----------------------------------------------------------------- Brief */

@@ -31,6 +31,8 @@ export interface LiveCallState {
   elapsed: number;
   /** Seconds before the call ends by itself after the mic was released. */
   micLeft: number | null;
+  /** The whole countdown in seconds, for the panel's bar. */
+  micTotal: number;
   /**
    * Questions taken out of the list (pinned, asked, hidden), by pinned
    * question id or history entry id, so "Вернуть" restores them whole.
@@ -51,6 +53,17 @@ export type LiveCallAction =
   | { topicId: string; type: "unpin" }
   | { type: "toggle-transcript" }
   | { type: "leave-final-check" }
+  | {
+      /** The app that let the microphone go, if known. */
+      app: string | null;
+      /** Now, ms since the epoch. */
+      now: number;
+      /** When it let go, ms since the epoch. */
+      releasedAt: number;
+      /** The auto end in seconds; null: never. */
+      timeout: number | null;
+      type: "mic-released";
+    }
   | { type: "mic-continue" }
   | { project: string; type: "finish-start" }
   | { stage: number; type: "finish-stage" }
@@ -62,8 +75,11 @@ export type LiveCallAction =
   | { type: "audio-restored" }
   | { type: "transcript-caught-up" };
 
-/** Mic panel timeout: the bar is full at 10 minutes. */
+/** Mic panel timeout of the demo states: the bar is full at 10 minutes. */
 export const MIC_TIMEOUT = 600;
+
+const MIC_RELEASED_TITLE = "Микрофон больше не используется. Завершить звонок?";
+const MIC_COUNTDOWN_LABEL = "Завершу сам через";
 
 const NEW_QUESTION_STATUS = "Новый, только что";
 
@@ -100,6 +116,12 @@ export function clockAt(elapsed: number) {
   return `${Math.floor(minutes / 60)}:${pad(minutes % 60)}`;
 }
 
+/** "12:39": local wall clock of a moment, ms since the epoch. */
+function wallClock(at: number) {
+  const date = new Date(at);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function plural(count: number, one: string, few: string, many: string) {
   const mod10 = count % 10;
   const mod100 = count % 100;
@@ -121,6 +143,7 @@ export function createLiveCall(data: CallScreenData): LiveCallState {
     data,
     elapsed: parseTime(data.call.time) ?? 0,
     micLeft: data.micReleased ? parseTime(data.micReleased.countdown) : null,
+    micTotal: MIC_TIMEOUT,
     stash: {},
   };
 }
@@ -506,20 +529,49 @@ function applyFeed(state: LiveCallState, event: CallFeedEvent): LiveCallState {
         finalCheck: event.finalCheck,
       });
     default:
-      return {
-        ...state,
-        data: {
-          ...data,
-          call: { ...data.call, endAction: "secondary" },
-          micReleased: CALL_SCREENS["mic-released"].micReleased,
-          questions: {
-            ...questions,
-            agent: { label: "тишина", state: "listening", tone: "muted" },
-          },
-        },
-        micLeft: parseTime(CALL_SCREENS["mic-released"].micReleased?.countdown),
-      };
+      // "mic-released": the page hands it to the microphone watch, which
+      // answers with the `mic-released` action.
+      return state;
   }
+}
+
+/** "Zoom отпустил микрофон в 12:39." */
+function releasedBy(app: string | null, at: string) {
+  return app
+    ? `${app} отпустил микрофон в ${at}.`
+    : `Микрофон освободился в ${at}.`;
+}
+
+/** The meeting app let the microphone go: offer to end the call. */
+function releaseMic(
+  state: LiveCallState,
+  action: Extract<LiveCallAction, { type: "mic-released" }>
+): LiveCallState {
+  const { data } = state;
+  const passed = Math.max(
+    0,
+    Math.floor((action.now - action.releasedAt) / 1000)
+  );
+  return {
+    ...state,
+    data: {
+      ...data,
+      call: { ...data.call, endAction: "secondary" },
+      micReleased: {
+        countdownLabel: MIC_COUNTDOWN_LABEL,
+        description: `${releasedBy(action.app, wallClock(action.releasedAt))} Если это пауза, просто продолжайте.`,
+        progress: 100,
+        title: MIC_RELEASED_TITLE,
+      },
+      questions: {
+        ...data.questions,
+        agent: { label: "тишина", state: "listening", tone: "muted" },
+      },
+    },
+    micLeft:
+      action.timeout === null ? null : Math.max(0, action.timeout - passed),
+    micTotal: action.timeout ?? MIC_TIMEOUT,
+  };
 }
 
 /* Finishing */
@@ -619,7 +671,12 @@ export function liveCallReducer(
       };
     case "leave-final-check":
       return withQuestions(state, { ...questions, finalCheck: undefined });
+    case "mic-released":
+      return data.finishing ? state : releaseMic(state, action);
     case "mic-continue":
+      if (!data.micReleased) {
+        return state;
+      }
       return {
         ...state,
         data: {
@@ -758,7 +815,7 @@ export function liveCallReducer(
 
 /** Props of <CallScreen>: the state plus the ticking numbers. */
 export function toScreenData(state: LiveCallState): CallScreenData {
-  const { agentRetryIn, data, elapsed, micLeft } = state;
+  const { agentRetryIn, data, elapsed, micLeft, micTotal } = state;
   const { banner } = data.questions;
 
   return {
@@ -769,7 +826,7 @@ export function toScreenData(state: LiveCallState): CallScreenData {
         ? {
             ...data.micReleased,
             countdown: formatCountdown(micLeft),
-            progress: Math.round((micLeft / MIC_TIMEOUT) * 100),
+            progress: Math.round((micLeft / micTotal) * 100),
           }
         : data.micReleased,
     questions:

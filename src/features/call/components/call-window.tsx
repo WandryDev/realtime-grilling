@@ -96,7 +96,9 @@ export function CallTitlebar({
           className={cn(
             stopped && "[&_[data-slot=recording-indicator-dot]]:bg-subtle"
           )}
+          level={stopped ? null : call.level}
           time={call.time}
+          warning={stopped ? null : call.warning}
         />
         {call.endAction === "hidden" ? null : (
           <Button

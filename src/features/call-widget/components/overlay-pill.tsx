@@ -1,6 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Counter } from "@/components/ui/counter";
-import { RecordingIndicator } from "@/components/ui/recording-indicator";
+import {
+  RecordingIndicator,
+  type RecordingLevel,
+} from "@/components/ui/recording-indicator";
 import {
   Tooltip,
   TooltipContent,
@@ -33,16 +36,22 @@ function formatOpenQuestions(count: number) {
  */
 export function OverlayPill({
   className,
+  level,
   onExpand,
   openQuestions,
   time,
   topic,
+  warning,
 }: {
   className?: string;
+  /** Live levels next to the recording dot. */
+  level?: RecordingLevel | null;
   onExpand?: () => void;
   openQuestions: number;
   time: string;
   topic: string;
+  /** A channel that doesn't capture, on the recording indicator. */
+  warning?: string | null;
 }) {
   const countLabel = formatOpenQuestions(openQuestions);
 
@@ -51,7 +60,12 @@ export function OverlayPill({
       className={cn("h-11 gap-3 pr-1.5 pl-4", className)}
       shape="pill"
     >
-      <RecordingIndicator time={time} variant="inline" />
+      <RecordingIndicator
+        level={level}
+        time={time}
+        variant="inline"
+        warning={warning}
+      />
       <span aria-hidden="true" className="bg-border h-4 w-px shrink-0" />
       <div className="flex min-w-0 items-center gap-2">
         <span className="truncate text-sm font-medium">{topic}</span>

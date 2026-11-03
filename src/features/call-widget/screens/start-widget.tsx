@@ -1,6 +1,9 @@
 import { LaunchCard } from "../components/launch-card";
 import { StartPill } from "../components/start-pill";
-import { StartPromptCard } from "../components/start-prompt-card";
+import {
+  type StartError,
+  StartPromptCard,
+} from "../components/start-prompt-card";
 import {
   BRIEF_STEPS,
   type BriefStepItem,
@@ -53,6 +56,8 @@ export function StartWidget({
   participants = CALL_PARTICIPANTS,
   projectId = PICKER_PROJECTS[0].id,
   projects = PICKER_PROJECTS,
+  startError,
+  starting,
   state = "prompt",
   steps = BRIEF_STEPS,
 }: {
@@ -83,6 +88,10 @@ export function StartWidget({
   /** null: a call without a project. */
   projectId?: string | null;
   projects?: PickerProject[];
+  /** The last "Начать" failed: shown on the prompt. */
+  startError?: StartError | null;
+  /** The recording is starting: "Начать" waits. */
+  starting?: boolean;
   state?: StartWidgetState;
   steps?: BriefStepItem[];
 }) {
@@ -131,6 +140,8 @@ export function StartWidget({
       projectId={projectId}
       projectOpen={state === "choosing-project"}
       projects={projects}
+      startError={startError}
+      starting={starting}
     />
   );
 }

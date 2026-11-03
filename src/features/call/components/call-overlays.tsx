@@ -19,7 +19,7 @@ const OVERLAY_SURFACE =
 
 /**
  * Nobody holds the microphone any more: offer to end the call, with the
- * auto-end countdown.
+ * auto-end countdown (none when Settings say the call never ends itself).
  */
 export function MicReleasedPanel({
   className,
@@ -54,18 +54,22 @@ export function MicReleasedPanel({
         </div>
       </div>
       <div className="flex items-center gap-3 pl-[50px]">
-        <Progress
-          aria-label={`${panel.countdownLabel} ${panel.countdown}`}
-          className="[&_[data-slot=progress-track]]:bg-border flex-1 flex-col items-start gap-y-1.5 [&_[data-slot=progress-track]]:h-[3px] [&_[data-slot=progress-track]]:w-[140px]"
-          value={panel.progress}
-        >
-          <span className="text-muted-foreground flex items-baseline gap-1.5 text-sm">
-            {panel.countdownLabel}
-            <span className="text-foreground font-mono text-xs tabular-nums">
-              {panel.countdown}
+        {panel.countdown === undefined ? (
+          <span aria-hidden="true" className="flex-1" />
+        ) : (
+          <Progress
+            aria-label={`${panel.countdownLabel} ${panel.countdown}`}
+            className="[&_[data-slot=progress-track]]:bg-border flex-1 flex-col items-start gap-y-1.5 [&_[data-slot=progress-track]]:h-[3px] [&_[data-slot=progress-track]]:w-[140px]"
+            value={panel.progress}
+          >
+            <span className="text-muted-foreground flex items-baseline gap-1.5 text-sm">
+              {panel.countdownLabel}
+              <span className="text-foreground font-mono text-xs tabular-nums">
+                {panel.countdown}
+              </span>
             </span>
-          </span>
-        </Progress>
+          </Progress>
+        )}
         <Button
           className="h-9 px-4 text-base"
           onClick={onMicContinue}

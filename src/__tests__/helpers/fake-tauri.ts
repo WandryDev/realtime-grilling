@@ -2,8 +2,10 @@ import type {
   Call,
   CommandError,
   DataChanged,
+  MicActivityChanged,
   Person,
   Project,
+  RecordingStatus,
   Value,
 } from "@/bindings";
 import { mergePatch } from "@/lib/merge-patch";
@@ -12,7 +14,9 @@ import { mergePatch } from "@/lib/merge-patch";
  * A stand-in for the Tauri IPC in tests that run the app in "Tauri mode":
  * `invoke` answers the data commands from in-memory tables, `listen`
  * remembers the handlers so a test can play an event Rust would send to
- * every window (a write made in another window, a tray click).
+ * every window (a write made in another window, a tray click). The
+ * recorder starts one recording at a time (`recording`), and Zoom holds
+ * the microphone (`micActivity`) until a test says otherwise.
  *
  * Use with `vi.hoisted` + `vi.mock` of `@tauri-apps/api/core`,
  * `@tauri-apps/api/event` and `@tauri-apps/api/window`, and
@@ -44,6 +48,10 @@ export interface FakeTauri {
   invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
   readonly invoked: { args?: Record<string, unknown>; command: string }[];
   listen: (event: string, handler: Handler) => Promise<() => void>;
+  /** What `mic_activity_get` answers. */
+  micActivity: MicActivityChanged;
+  /** What `recording_status` answers; `recording_start` and `_stop` set it. */
+  recording: RecordingStatus;
 }
 
 let created = Date.UTC(2026, 9, 1);
@@ -95,6 +103,14 @@ export function fakeCall(id: string, projectId: string, title: string): Call {
   };
 }
 
+/** Ids `recording_start` gives: "fake-recording-1", "-2"… */
+export const FAKE_RECORDING_PREFIX = "fake-recording-";
+
+export const IDLE_RECORDING: RecordingStatus = {
+  channels: { me: "ok", others: "ok" },
+  segmentation: "ok",
+};
+
 export function createFakeTauri(): FakeTauri {
   const db: FakeTauri["db"] = {
     calls: [],
@@ -111,6 +127,7 @@ export function createFakeTauri(): FakeTauri {
     }
   };
   const invoked: FakeTauri["invoked"] = [];
+  const recordings: string[] = [];
 
   const answer = (command: string, args: Record<string, unknown>): unknown => {
     switch (command) {
@@ -137,12 +154,30 @@ export function createFakeTauri(): FakeTauri {
       case "windows_show":
       case "storage_reopen":
         return null;
+      case "mic_activity_get":
+        return fake.micActivity;
+      case "recording_status":
+        return fake.recording;
+      case "recording_start": {
+        if (fake.recording.id) {
+          return fake.recording.id;
+        }
+        const id = `${FAKE_RECORDING_PREFIX}${recordings.length + 1}`;
+        recordings.push(id);
+        fake.recording = { ...IDLE_RECORDING, id, startedAt: Date.now() };
+        return id;
+      }
+      case "recording_stop":
+        if (fake.recording.id === args.id) {
+          fake.recording = IDLE_RECORDING;
+        }
+        return null;
       default:
         throw new Error(`Нет команды ${command} в фейке`);
     }
   };
 
-  return {
+  const fake: FakeTauri = {
     answers,
     dataChanged: (change) => emit("data-changed", change),
     db,
@@ -154,6 +189,16 @@ export function createFakeTauri(): FakeTauri {
       const failure = failures.get(command);
       if (failure) {
         return Promise.reject(failure);
+      }
+      if (
+        command === "recording_stop" &&
+        !recordings.includes(String(args.id))
+      ) {
+        const unknown: CommandError = {
+          kind: "NotFound",
+          message: `Записи ${args.id} нет`,
+        };
+        return Promise.reject(unknown);
       }
       const custom = answers.get(command);
       if (custom) {
@@ -178,5 +223,8 @@ export function createFakeTauri(): FakeTauri {
         set.delete(handler);
       });
     },
+    micActivity: { app: "Zoom", busy: true, since: created },
+    recording: IDLE_RECORDING,
   };
+  return fake;
 }

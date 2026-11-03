@@ -31,6 +31,8 @@ export interface CallSession {
   /** Names of the client's people on the call. */
   participants: string[];
   projectId: string | null;
+  /** The recording of the call, stopped by "Завершить". */
+  recordingId?: string;
   /** When recording started (ms since epoch), for the call timers. */
   startedAt?: number;
   status: CallStatus;
@@ -46,12 +48,16 @@ const IDLE: CallSession = {
 const callSessionStore = createStore<CallSession>(IDLE);
 
 function fromShared(session: SharedCallSession): CallSession {
-  const { callId, participants, projectId, startedAt, status } = session;
+  const { callId, participants, projectId, recordingId, startedAt, status } =
+    session;
   return {
     callId,
     participants,
     projectId,
     status,
+    ...(recordingId === undefined || recordingId === null
+      ? {}
+      : { recordingId }),
     ...(startedAt === undefined || startedAt === null ? {} : { startedAt }),
   };
 }
@@ -102,25 +108,52 @@ export function useCallSession() {
 export function startCall(input: {
   participants: string[];
   projectId: string | null;
+  /** The recording "Начать" started; none for the demo call. */
+  recordingId?: string;
 }) {
   setSession({
     callId: CURRENT_CALL_ID,
     participants: input.participants,
     projectId: input.projectId,
+    ...(input.recordingId === undefined
+      ? {}
+      : { recordingId: input.recordingId }),
     startedAt: Date.now(),
     status: "live",
   });
 }
 
-/** "Завершить": the agent collects the summary. */
-export function finishCall() {
+/**
+ * "Завершить": the agent collects the summary. Returns the session as it
+ * was, so the caller can stop its recording.
+ */
+export function finishCall(): CallSession {
+  const before = callSessionStore.get();
   setSession((session) => ({ ...session, status: "finishing" }));
+  return before;
 }
 
-/** "Отменить завершение": back to the live call. */
-export function resumeCall() {
+/**
+ * "Отменить завершение": back to the live call. Its recording was stopped
+ * by "Завершить": returns the session as it was, so the caller can start a
+ * new one (`attachRecording`).
+ */
+export function resumeCall(): CallSession {
+  const before = callSessionStore.get();
+  setSession((session) => {
+    if (session.status !== "finishing") {
+      return session;
+    }
+    const { recordingId: _stopped, ...rest } = session;
+    return { ...rest, status: "live" };
+  });
+  return before;
+}
+
+/** The live call records into `recordingId` from now on. */
+export function attachRecording(recordingId: string) {
   setSession((session) =>
-    session.status === "finishing" ? { ...session, status: "live" } : session
+    session.status === "live" ? { ...session, recordingId } : session
   );
 }
 

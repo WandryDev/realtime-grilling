@@ -7,6 +7,7 @@ import { usePeople } from "@/data/people";
 import { useProjects } from "@/data/projects";
 import { useSettings } from "@/data/settings";
 import { inTauri } from "@/effect/runtime";
+import { type RecordingStart, useMicApp } from "@/features/recording/api";
 import { hideWindow, useOpenRoute } from "@/features/shell/api";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
@@ -22,7 +23,13 @@ import type { BriefProgress } from "../backend";
 import { DesktopStage } from "../components/desktop-stage";
 import { FloatingLink } from "../components/floating-link";
 import { FloatingSurface } from "../components/floating-surface";
-import { LAST_CALL_PROJECT_ID, LAUNCH, type Participant } from "../mock";
+import type { StartError } from "../components/start-prompt-card";
+import {
+  LAST_CALL_PROJECT_ID,
+  LAUNCH,
+  MEETING_APP,
+  type Participant,
+} from "../mock";
 import { joinNames } from "../names";
 import { StartWidget, type StartWidgetLaunch } from "../screens/start-widget";
 import { useCallTime } from "../use-call-clock";
@@ -41,7 +48,11 @@ import { useCallTime } from "../use-call-clock";
  *
  * The project and the people come from the live lists: the choice is kept
  * only while its project exists, otherwise the widget falls back to the
- * default. Nothing from the prerendered demo data sticks.
+ * default. Nothing from the prerendered demo data sticks. The meeting app
+ * is the one holding the microphone (the browser demo's is Zoom).
+ *
+ * "Начать" starts the recording first; without microphone access the call
+ * doesn't start and the prompt says so, with the way to the access step.
  */
 
 type Phase = "prompt" | "launching" | "collapsed" | "hidden";
@@ -89,6 +100,21 @@ function launchDescription(
   const names = people.map((person) => person.instrumental ?? person.name);
   const who = names.length > 0 ? `, с ${joinNames(names)}` : "";
   return `${project}${who}. ${LAUNCH_SPEECH}`;
+}
+
+function startError(
+  failure: Extract<RecordingStart, { ok: false }>,
+  openSettings: () => void
+): StartError {
+  if (failure.reason === "noAccess") {
+    return {
+      description:
+        "Разрешите Grill доступ к микрофону в системных настройках и нажмите «Начать» ещё раз.",
+      onOpenSettings: openSettings,
+      title: "Нет доступа к микрофону",
+    };
+  }
+  return { description: failure.message, title: "Запись не началась" };
 }
 
 /*
@@ -156,6 +182,10 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
 
   const afterStartHref = compactOverlay ? routes.overlay() : routes.call();
   const time = useCallTime(LAUNCH.time);
+  const micApp = useMicApp();
+  const app = micApp ?? (inTauri ? "Приложение" : MEETING_APP);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<StartError | null>(null);
 
   // Refresh the brief while the launch card is up.
   useEffect(() => {
@@ -193,8 +223,20 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
     [projectId, selectedIds]
   );
 
-  const start = useCallback(() => {
-    startRecording({ participants, projectId });
+  const openSettings = useCallback(
+    () => openRoute(routes.onboarding("permissions")),
+    [openRoute]
+  );
+  const start = useCallback(async () => {
+    setStarting(true);
+    setError(null);
+    const started = await startRecording({ participants, projectId });
+    setStarting(false);
+    if (!started.ok) {
+      setError(startError(started, openSettings));
+      setPhase("prompt");
+      return;
+    }
     if (inTauri) {
       // The overlay (or the call window) takes the call over.
       openRoute(afterStartHref);
@@ -205,7 +247,7 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
     setCallPeople(participants);
     setBrief(null);
     setPhase("launching");
-  }, [afterStartHref, openRoute, participants, projectId]);
+  }, [afterStartHref, openRoute, openSettings, participants, projectId]);
   const collapse = useCallback(() => setPhase("collapsed"), []);
   const expand = useCallback(() => setPhase("prompt"), []);
   const hide = useCallback(() => {
@@ -238,6 +280,7 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
       ) : (
         <StartWidget
           addablePeople={addablePeople}
+          app={app}
           callHref={routes.call()}
           launch={launch}
           onAddParticipant={addParticipant}
@@ -252,6 +295,8 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
           participants={participants}
           projectId={projectId}
           projects={pickerProjects}
+          startError={error}
+          starting={starting}
           state={phase}
         />
       )}

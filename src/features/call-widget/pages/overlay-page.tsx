@@ -2,9 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useCallSession } from "@/data/call-session";
+import { type CallStatus, useCallSession } from "@/data/call-session";
 import { useProject } from "@/data/projects";
-import { useSettings } from "@/data/settings";
+import { autoEndSeconds, useSettings } from "@/data/settings";
+import { inTauri } from "@/effect/runtime";
+import {
+  type MicActivity,
+  releaseMicDemo,
+  subscribeToMicActivity,
+  useRecordingSignal,
+} from "@/features/recording/api";
 import { useOpenRoute } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
@@ -14,6 +21,7 @@ import type { AgentEvent } from "../backend";
 import { DesktopStage } from "../components/desktop-stage";
 import {
   CALL_PROJECT,
+  MEETING_APP,
   MIC_RELEASED,
   OVERLAY,
   OVERLAY_MAIN_QUESTION,
@@ -32,9 +40,12 @@ import {
 /*
  * /overlay: the compact overlay over the meeting app during a call. New
  * questions arrive from the agent's feed; collapsed, a new one shows as a
- * card under the pill for 8 seconds. "Выйти из встречи" in the stand-in
- * Zoom frees the microphone: the offer to end the call replaces the overlay
- * and counts down to the auto end from Settings.
+ * card under the pill for 8 seconds. When the meeting app lets the
+ * microphone go (`micActivity` free, while the call runs), the offer to end
+ * the call replaces the overlay, names the app and the time it left, and
+ * counts down to the auto end from Settings. "Продолжить" hides it until
+ * the microphone is freed again; the app taking it back hides it too. In
+ * the browser "Выйти из встречи" in the stand-in Zoom frees the mock's.
  *
  * In Tauri the overlay is its own window, the only one hidden from screen
  * sharing. It shows the call the start widget started (the session is
@@ -78,10 +89,78 @@ function pushQuestion(feed: Feed, question: string): Feed {
   };
 }
 
-/** Minutes before the call ends by itself, null for "Никогда". */
-function autoEndSeconds(setting: string) {
-  const minutes = Number(setting);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : null;
+/** The meeting app let the microphone go. */
+interface Release {
+  /** null when unknown. */
+  app: string | null;
+  /** Seconds since the epoch; null: the demo's, from the first tick. */
+  at: number | null;
+}
+
+/**
+ * The auto end after a release: seconds left (null: never) and the percent
+ * of the countdown passed.
+ */
+function countdown(
+  release: Release | null,
+  autoEnd: string,
+  now: number | null
+): { elapsed: number; remaining: number | null } {
+  const total = autoEndSeconds(autoEnd);
+  const at = release?.at ?? null;
+  const passed = at !== null && now !== null ? Math.max(0, now - at) : 0;
+  if (total === null) {
+    return { elapsed: 0, remaining: null };
+  }
+  return { elapsed: (passed / total) * 100, remaining: total - passed };
+}
+
+/**
+ * The meeting app and the microphone: a release while the call runs (in
+ * Tauri a live session, in the browser the demo call too) offers to end
+ * it, the app taking the microphone back withdraws the offer. Returns the
+ * release on screen and "Продолжить", which hides it.
+ */
+function useMicRelease(
+  demo: boolean,
+  status: CallStatus,
+  now: number | null
+): [Release | null, () => void] {
+  const [release, setRelease] = useState<Release | null>(
+    demo ? { app: MEETING_APP, at: null } : null
+  );
+
+  // ?demo=mic-released: the microphone went free just now.
+  useEffect(() => {
+    if (release !== null && release.at === null && now !== null) {
+      setRelease({ ...release, at: now });
+    }
+  }, [now, release]);
+
+  const running = inTauri ? status === "live" : status !== "finishing";
+  const runningRef = useRef(running);
+  useEffect(() => {
+    runningRef.current = running;
+  }, [running]);
+  useEffect(
+    () =>
+      subscribeToMicActivity((activity: MicActivity) => {
+        if (activity.busy) {
+          setRelease(null);
+          return;
+        }
+        if (runningRef.current) {
+          setRelease({
+            app: activity.app,
+            at: Math.floor(activity.since / 1000),
+          });
+        }
+      }),
+    []
+  );
+
+  const hide = useCallback(() => setRelease(null), []);
+  return [release, hide];
 }
 
 function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
@@ -100,8 +179,13 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
   const [incoming, setIncoming] = useState<string | null>(
     demo === "collapsed" ? OVERLAY_MAIN_QUESTION : null
   );
-  const [micReleased, setMicReleased] = useState(demo === "mic-released");
-  const [releasedAt, setReleasedAt] = useState<number | null>(null);
+  const [release, keepRecording] = useMicRelease(
+    demo === "mic-released",
+    session.status,
+    now
+  );
+  const micReleased = release !== null;
+  const signal = useRecordingSignal();
 
   const time = useCallTime(finalCheck ? OVERLAY.timeFinalCheck : OVERLAY.time);
   let projectName = CALL_PROJECT;
@@ -134,13 +218,6 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     return () => clearTimeout(timer);
   }, [incoming]);
 
-  // ?demo=mic-released: the microphone went free just now.
-  useEffect(() => {
-    if (micReleased && releasedAt === null && now !== null) {
-      setReleasedAt(now);
-    }
-  }, [micReleased, now, releasedAt]);
-
   // Ends once: the auto end keeps ticking until the page is gone
   const ended = useRef<boolean>(false);
   const end = useCallback(() => {
@@ -152,9 +229,7 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     openRoute(routes.callSummary(session.callId));
   }, [openRoute, session.callId]);
 
-  const total = autoEndSeconds(autoEnd);
-  const passed = releasedAt !== null && now !== null ? now - releasedAt : 0;
-  const remaining = total === null ? null : total - passed;
+  const { elapsed, remaining } = countdown(release, autoEnd, now);
 
   // The countdown ran out: the call ends by itself.
   useEffect(() => {
@@ -172,29 +247,22 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     setView("expanded");
   }, []);
   const dismissIncoming = useCallback(() => setIncoming(null), []);
-  const leaveMeeting = useCallback(() => {
-    setReleasedAt(Math.floor(Date.now() / 1000));
-    setMicReleased(true);
-  }, []);
-  const keepRecording = useCallback(() => {
-    setMicReleased(false);
-    setReleasedAt(null);
-  }, []);
 
-  if (micReleased) {
+  if (release !== null) {
     return (
       <DesktopStage meetingEnded micInUse={false}>
         <MicReleasedWidget
+          app={release.app}
           countdown={remaining === null ? null : formatCountdown(remaining)}
-          elapsed={total === null ? 0 : (passed / total) * 100}
+          elapsed={elapsed}
           onContinue={keepRecording}
           onEnd={end}
           onMinimize={keepRecording}
           project={projectName}
           releasedAt={
-            releasedAt === null
+            release.at === null
               ? MIC_RELEASED.releasedAt
-              : formatClockTime(releasedAt)
+              : formatClockTime(release.at)
           }
           time={time}
         />
@@ -210,7 +278,7 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
   }
 
   return (
-    <DesktopStage onLeaveMeeting={leaveMeeting}>
+    <DesktopStage onLeaveMeeting={releaseMicDemo}>
       <CompactOverlay
         agentState={thinking ? "thinking" : "listening"}
         callHref={routes.call()}
@@ -223,6 +291,7 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
         openQuestions={feed.openQuestions}
         project={projectName}
         questions={finalCheck ? undefined : feed.rows}
+        recording={signal}
         state={state}
         time={time}
       />
