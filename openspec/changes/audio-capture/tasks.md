@@ -2,11 +2,11 @@
 
 ## 1. Зависимости и сборка
 
-- [ ] 1.1 Добавить в `src-tauri/Cargo.toml`: `sonora`, `opus`, `ogg`, `rubato`, `rtrb`, `whisper-rs` (без GPU-фич). Положить `ggml-silero-v5.1.2.bin` в `src-tauri/resources/models/` и подключить в `bundle.resources`. Проверка:
+- [x] 1.1 Добавить в `src-tauri/Cargo.toml`: `sonora`, `opus`, `ogg`, `rubato`, `rtrb`, `whisper-rs` (без GPU-фич). Положить `ggml-silero-v5.1.2.bin` в `src-tauri/resources/models/` и подключить в `bundle.resources`. Проверка:
   - `cargo build` и `cargo clippy --all-targets` проходят на macOS;
   - `cargo check --target x86_64-pc-windows-msvc` проходит (или CI-джоб Windows зелёный);
   - `bun run tauri build --debug --bundles app` кладёт модель в `Contents/Resources`.
-- [ ] 1.2 Проверить universal-сборку релиза: `bun run tauri build --target universal-apple-darwin --debug --bundles app` (whisper.cpp и libopus под обе архитектуры). Время холодной сборки записать в `design.md` (риски). Проверка: бандл собран, `lipo -archs` бинаря показывает `x86_64 arm64`.
+- [x] 1.2 Проверить universal-сборку релиза: `bun run tauri build --target universal-apple-darwin --debug --bundles app` (whisper.cpp и libopus под обе архитектуры). Время холодной сборки записать в `design.md` (риски). Проверка: бандл собран, `lipo -archs` бинаря показывает `x86_64 arm64`.
 
 ## 2. Детектор «микрофон занят» (Rust)
 
