@@ -86,7 +86,10 @@ pub async fn projects_delete(
 ) -> CommandResult<()> {
     storage
         .write(&app, move |db| projects::delete(db, &id))
-        .await
+        .await?;
+    // The project's calls took their recordings with them; now their files.
+    storage.sweep_recordings().await;
+    Ok(())
 }
 
 /* People */
@@ -208,7 +211,12 @@ pub async fn calls_delete(
     storage: State<'_, Storage>,
     id: String,
 ) -> CommandResult<()> {
-    storage.write(&app, move |db| calls::delete(db, &id)).await
+    storage
+        .write(&app, move |db| calls::delete(db, &id))
+        .await?;
+    // The call's recordings went with it; now their files.
+    storage.sweep_recordings().await;
+    Ok(())
 }
 
 #[tauri::command]

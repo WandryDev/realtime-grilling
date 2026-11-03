@@ -5,6 +5,11 @@ mod commands;
 mod error;
 mod events;
 mod permissions;
+#[allow(
+    dead_code,
+    reason = "building blocks of the recorder; RecordingManager (audio-capture task 4.5) wires them"
+)]
+mod recording;
 mod shell;
 mod storage;
 
