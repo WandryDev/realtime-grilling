@@ -276,6 +276,8 @@ export type CallSession = {
 	projectId: string | null,
 	/**  When recording started, milliseconds since the Unix epoch. */
 	startedAt?: number | null,
+	/**  The recording of the call (`recording_start`), stopped by "Завершить". */
+	recordingId?: string | null,
 	status: CallSessionStatus,
 };
 

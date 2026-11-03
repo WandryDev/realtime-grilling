@@ -82,6 +82,10 @@ pub struct CallSession {
     #[specta(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
+    /// The recording of the call (`recording_start`), stopped by "Завершить".
+    #[specta(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_id: Option<String>,
     pub status: CallSessionStatus,
 }
 
