@@ -1,7 +1,7 @@
 //! System audio with a Core Audio process tap (macOS 14.2+), from
 //! `spikes/audio/src/mac/tap.rs`:
 //!
-//! `CATapDescription` (stereo global tap without our own process)
+//! `CATapDescription` (stereo global tap without our own processes)
 //! → `AudioHardwareCreateProcessTap` → private aggregate device with the tap
 //! and no sub-device → IOProc: the tap's audio arrives as the aggregate's
 //! input. The IO starts only once something plays.
@@ -25,7 +25,10 @@ use objc2_core_audio_types::{
 use objc2_core_foundation::CFDictionary;
 use objc2_foundation::{NSArray, NSMutableDictionary, NSNumber, NSString};
 
-use super::hal::{self, check};
+use super::{
+    hal::{self, check},
+    process,
+};
 use crate::audio::{
     clock,
     sink::{BlockFormat, SampleSink},
@@ -109,17 +112,21 @@ unsafe extern "C-unwind" fn io_proc<S: SampleSink>(
 static NEXT_AGGREGATE: AtomicU32 = AtomicU32::new(0);
 
 impl<S: SampleSink> SystemTap<S> {
-    /// Starts a tap of everything that plays except this process. On the
+    /// Starts a tap of everything that plays except this app: our process
+    /// and the WebKit processes playing our webview's sound (macOS holds us
+    /// responsible for them). The list is taken now: one of ours that
+    /// becomes an audio client later (the webview plays its first sound
+    /// mid-recording) is not excluded until the tap is opened again. On the
     /// first tap macOS asks for "Запись системного аудио"; without the
     /// access the tap gives silence.
     pub fn start(sink: S) -> Result<Self, String> {
+        let mut own = process::own_process_objects();
         let own_object =
             hal::process_object_for_pid(i32::try_from(std::process::id()).unwrap_or(0));
-        let exclude: Vec<Retained<NSNumber>> = if own_object == 0 {
-            Vec::new()
-        } else {
-            vec![NSNumber::new_u32(own_object)]
-        };
+        if own_object != 0 && !own.contains(&own_object) {
+            own.push(own_object);
+        }
+        let exclude: Vec<Retained<NSNumber>> = own.into_iter().map(NSNumber::new_u32).collect();
         let exclude = NSArray::from_retained_slice(&exclude);
         // SAFETY: plain Objective-C calls on a fresh description.
         let description = unsafe {

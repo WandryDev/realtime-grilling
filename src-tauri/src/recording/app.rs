@@ -1,8 +1,8 @@
 //! The recorder in the app: real devices, the app's windows, its storage.
 
 use std::{
-    sync::{Arc, Mutex, PoisonError, mpsc},
-    time::{Duration, Instant},
+    sync::{Arc, mpsc},
+    time::Duration,
 };
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -41,33 +41,13 @@ impl CaptureDevices for AppDevices {
     }
 }
 
-/// How long the visible windows are trusted before asking again: asking
-/// goes through the main thread.
-const VISIBILITY_TTL: Duration = Duration::from_millis(500);
-
+/// The recorder's host in the app. The recorder thread calls it every
+/// 100 ms, so nothing here waits for the main thread: emitting only queues
+/// a script for each webview, while asking a window (`is_visible`) would
+/// block on the main thread, which a quitting app holds in `RunEvent::Exit`
+/// waiting for this very thread (`stop_on_exit`).
 struct AppHost<R: Runtime> {
     app: AppHandle<R>,
-    visible: Mutex<Option<(Instant, Vec<String>)>>,
-}
-
-impl<R: Runtime> AppHost<R> {
-    fn visible_windows(&self) -> Vec<String> {
-        let mut cached = self.visible.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((at, labels)) = cached.as_ref()
-            && at.elapsed() < VISIBILITY_TTL
-        {
-            return labels.clone();
-        }
-        let labels: Vec<String> = self
-            .app
-            .webview_windows()
-            .into_iter()
-            .filter(|(_, window)| window.is_visible().unwrap_or(false))
-            .map(|(label, _)| label)
-            .collect();
-        *cached = Some((Instant::now(), labels.clone()));
-        labels
-    }
 }
 
 impl<R: Runtime> RecordingHost for AppHost<R> {
@@ -77,11 +57,11 @@ impl<R: Runtime> RecordingHost for AppHost<R> {
         }
     }
 
+    /// To every window: only the webviews listening (a recording
+    /// indicator on screen) run anything.
     fn levels(&self, levels: &RecordingLevels) {
-        for label in self.visible_windows() {
-            if let Err(error) = levels.emit_to(&self.app, &label) {
-                eprintln!("grill: failed to emit recording-levels to {label}: {error}");
-            }
+        if let Err(error) = levels.emit(&self.app) {
+            eprintln!("grill: failed to emit recording-levels: {error}");
         }
     }
 
@@ -105,17 +85,14 @@ impl<R: Runtime> RecordingHost for AppHost<R> {
 pub fn manager_for_app<R: Runtime>(app: &AppHandle<R>) -> RecordingManager {
     RecordingManager::new(
         AppDevices,
-        AppHost {
-            app: app.clone(),
-            visible: Mutex::new(None),
-        },
+        AppHost { app: app.clone() },
         Config::new(vad::bundled_model_path(app), vad::worker::default_sink()),
     )
 }
 
-/// How long exit waits for the files to close. Emitting to a window may
-/// need the main thread, which is busy exiting: past this the app exits
-/// and the next start marks the recording interrupted.
+/// How long exit waits for the files to close. Nothing on the way needs the
+/// main thread (busy exiting); past this the app exits anyway and the next
+/// start marks the recording interrupted.
 const EXIT_WAIT: Duration = Duration::from_secs(3);
 
 /// Stops a running recording on app exit, so its files end with EOS.

@@ -30,6 +30,8 @@ struct Rig {
     /// The running devices' stop flags and breakdowns, to unplug them.
     live: Mutex<HashMap<AudioSource, (Arc<AtomicBool>, Breakdown)>>,
     default_input: Mutex<Option<String>>,
+    /// The default input becomes this while the microphone opens.
+    switch_on_open: Mutex<Option<String>>,
     /// System audio pushes zeros (no access on macOS).
     system_silent: AtomicBool,
     playing: Arc<AtomicBool>,
@@ -47,6 +49,7 @@ impl Default for Rig {
             mic_gone: AtomicBool::new(false),
             live: Mutex::default(),
             default_input: Mutex::new(Some("built-in".to_owned())),
+            switch_on_open: Mutex::default(),
             system_silent: AtomicBool::new(false),
             playing: Arc::new(AtomicBool::new(false)),
         }
@@ -157,6 +160,11 @@ impl CaptureDevices for FakeDevices {
             ));
         }
         self.0.opened.lock().unwrap().push(source);
+        if source == AudioSource::Microphone
+            && let Some(next) = self.0.switch_on_open.lock().unwrap().take()
+        {
+            *self.0.default_input.lock().unwrap() = Some(next);
+        }
         let stop = Arc::new(AtomicBool::new(false));
         self.0
             .live
@@ -229,6 +237,10 @@ impl Fixture {
     }
 
     fn with(setup: impl FnOnce(&Rig)) -> Self {
+        Self::configured(setup, |_| {})
+    }
+
+    fn configured(setup: impl FnOnce(&Rig), configure: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let rig = Arc::new(Rig::default());
         setup(&rig);
@@ -242,6 +254,7 @@ impl Fixture {
         config.supervise = Duration::from_millis(20);
         config.silent_for = Duration::from_millis(200);
         config.stall_margin = Duration::from_millis(100);
+        configure(&mut config);
         let manager = RecordingManager::new(
             FakeDevices(Arc::clone(&rig)),
             TestHost {
@@ -310,6 +323,22 @@ fn opus_duration_ms(path: &Path) -> u64 {
 
 fn ms(samples: u64) -> u64 {
     samples / 16
+}
+
+#[test]
+fn a_jump_of_the_host_clock_is_skipped_but_steps_are_not() {
+    const MS: u64 = 1_000_000;
+    let mut jump = ClockJump::new(Duration::from_millis(10));
+    assert_eq!(jump.skip(1_000 * MS), 0, "the first step");
+    assert_eq!(jump.skip(1_010 * MS), 0);
+    // A stalled thread: seconds, but within the limit.
+    assert_eq!(jump.skip(4_010 * MS), 0);
+    // The machine slept for an hour: all of it but one tick is left out.
+    let hour = 3_600_000 * MS;
+    assert_eq!(jump.skip(4_010 * MS + hour), hour - 10 * MS);
+    assert_eq!(jump.skip(4_020 * MS + hour), 0, "steps go on from there");
+    // The clock never goes back, but if it did nothing is skipped.
+    assert_eq!(jump.skip(5 * MS), 0);
 }
 
 #[test]
@@ -593,6 +622,22 @@ fn a_new_default_input_is_opened() {
 }
 
 #[test]
+fn a_default_input_switched_while_opening_is_noticed() {
+    let fx = Fixture::with(|rig| {
+        *rig.switch_on_open.lock().unwrap() = Some("airpods".to_owned());
+    });
+    let id = fx.manager.start(None).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fx.rig.opened(AudioSource::Microphone) < 2 {
+        assert!(Instant::now() < deadline, "the new default is never opened");
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(fx.rig.opened(AudioSource::Microphone), 2, "once");
+    fx.manager.stop(&id).unwrap();
+}
+
+#[test]
 fn silent_system_audio_with_unknown_access_is_flagged() {
     let fx = Fixture::with(|rig| {
         rig.permit(PermissionKind::SystemAudio, PermissionState::Unknown);
@@ -639,6 +684,49 @@ fn stop_running_closes_the_files() {
     );
     assert!(opus_duration_ms(&fx.file(&id, ME_FILE)) >= 100);
     fx.manager.stop_running();
+}
+
+/// A model that loads, then fails on its first pass.
+struct BrokenInference;
+
+impl crate::vad::worker::Detector for BrokenInference {
+    fn probabilities(
+        &mut self,
+        _samples: &[f32],
+    ) -> Result<&[f32], crate::vad::detector::VadError> {
+        Err(crate::vad::detector::VadError::Detect)
+    }
+}
+
+#[test]
+fn an_inference_error_while_recording_reports_segmentation_unavailable() {
+    let fx = Fixture::configured(
+        |_| {},
+        |config| {
+            config.spawn_vad = |_, id, channel, phrases| {
+                VadWorker::with_detector(Box::new(BrokenInference), id, channel, phrases)
+            };
+        },
+    );
+    let id = fx.manager.start(None).unwrap();
+    fx.wait_for("unavailable", |status| {
+        status.segmentation == SegmentationStatus::Unavailable
+    });
+    let segmentation: Vec<SegmentationStatus> = fx
+        .changes()
+        .iter()
+        .filter(|status| status.id.as_deref() == Some(id.as_str()))
+        .map(|status| status.segmentation)
+        .collect();
+    assert_eq!(
+        segmentation.last(),
+        Some(&SegmentationStatus::Unavailable),
+        "announced: {segmentation:?}"
+    );
+    assert!(fx.manager.is_recording(), "the recording goes on");
+    thread::sleep(Duration::from_millis(100));
+    fx.manager.stop(&id).unwrap();
+    assert!(opus_duration_ms(&fx.file(&id, ME_FILE)) >= 300);
 }
 
 #[test]

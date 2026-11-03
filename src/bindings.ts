@@ -556,7 +556,7 @@ export type RecordingChannels = {
 
 /**
  *  The level of both channels (0–1, the meters' dBFS scale), ~10 times a
- *  second to the visible windows while recording. "Я" is after AEC.
+ *  second to every window while recording. "Я" is after AEC.
  */
 export type RecordingLevels = {
 	me: number,

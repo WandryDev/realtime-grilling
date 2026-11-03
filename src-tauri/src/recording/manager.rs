@@ -19,7 +19,7 @@
 
 use std::{
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -74,7 +74,8 @@ pub type DbWork<'a> = &'a mut dyn FnMut(&Connection) -> CommandResult<()>;
 pub trait RecordingHost: Send + Sync + 'static {
     /// To every window.
     fn changed(&self, status: &RecordingStatus);
-    /// To the visible windows.
+    /// ~10 Hz while recording. Called on the recorder thread: must not
+    /// wait for anything (the main thread least of all).
     fn levels(&self, levels: &RecordingLevels);
     /// Runs `work` on the database (blocking).
     fn database(&self, work: DbWork<'_>) -> CommandResult<()>;
@@ -82,11 +83,15 @@ pub trait RecordingHost: Send + Sync + 'static {
     fn store(&self) -> Option<Arc<dyn RecordingStore>>;
 }
 
+/// Starts the VAD worker of a channel: [`VadWorker::spawn`] in the app.
+pub type SpawnVad = fn(&Path, &str, TranscriptChannel, Arc<dyn PhraseSink>) -> VadWorker;
+
 pub struct Config {
     /// Silero model for the VAD workers; a missing one leaves
     /// segmentation `unavailable`.
     pub model: PathBuf,
     pub phrases: Arc<dyn PhraseSink>,
+    pub spawn_vad: SpawnVad,
     /// Recorder period.
     pub tick: Duration,
     /// Levels go out every this many ticks.
@@ -106,6 +111,7 @@ impl Config {
         Self {
             model,
             phrases,
+            spawn_vad: |model, id, channel, phrases| VadWorker::spawn(model, id, channel, phrases),
             tick: Duration::from_millis(10),
             levels_every: 10,
             supervise: Duration::from_millis(500),
@@ -215,6 +221,15 @@ impl Shared {
         });
     }
 
+    /// A VAD worker of the recording `id` stopped scoring.
+    fn segmentation_failed(&self, id: &str) {
+        self.update(|status| {
+            if status.id.as_deref() == Some(id) {
+                status.segmentation = SegmentationStatus::Unavailable;
+            }
+        });
+    }
+
     fn database<T>(&self, work: impl FnOnce(&Connection) -> CommandResult<T>) -> CommandResult<T> {
         let mut work = Some(work);
         let mut output = None;
@@ -252,10 +267,13 @@ impl Shared {
         let t0_ns = clock::now_ns();
         let started_at = storage::now_ms();
         let (sink, me_source) = new_ring();
+        // Read before opening: a switch while the device opens shows up as
+        // a different default on the next check, not as the one opened.
+        let me_input = devices.default_input();
         let me_device = Device {
             breakdown: me_source.breakdown(),
             opened: Some(devices.open(AudioSource::Microphone, sink)?),
-            input: devices.default_input(),
+            input: me_input,
         };
         let mut others_device = Device::closed();
         let mut others_source = None;
@@ -299,13 +317,13 @@ impl Shared {
         };
 
         let config = &self.config;
-        let me_vad = VadWorker::spawn(
+        let me_vad = (config.spawn_vad)(
             &config.model,
             id.as_str(),
             TranscriptChannel::Me,
             Arc::clone(&config.phrases),
         );
-        let others_vad = VadWorker::spawn(
+        let others_vad = (config.spawn_vad)(
             &config.model,
             id.as_str(),
             TranscriptChannel::Others,
@@ -318,6 +336,20 @@ impl Shared {
         } else {
             SegmentationStatus::Unavailable
         };
+        // Inference that fails mid-recording is reported too. The flag
+        // covers a failure before the status below has the id.
+        let segmentation_failed = Arc::new(AtomicBool::new(false));
+        for vad in [&me_vad, &others_vad] {
+            let shared = Arc::downgrade(self);
+            let failed = Arc::clone(&segmentation_failed);
+            let id = id.clone();
+            vad.on_failure(move || {
+                failed.store(true, Ordering::SeqCst);
+                if let Some(shared) = shared.upgrade() {
+                    shared.segmentation_failed(&id);
+                }
+            });
+        }
 
         let (rings, ring_handoffs) = mpsc::channel();
         let (stop_devices, stopped) = mpsc::channel::<()>();
@@ -336,6 +368,7 @@ impl Shared {
             finish: Arc::clone(&finish),
             others_peak: Arc::clone(&others_peak),
             buffer: Vec::with_capacity(8_192),
+            jump: ClockJump::new(config.tick),
         };
         let recorder = match thread::Builder::new()
             .name("grill-recorder".to_owned())
@@ -359,7 +392,11 @@ impl Shared {
                     me: ChannelState::Ok,
                     others: others_state,
                 },
-                segmentation,
+                segmentation: if segmentation_failed.load(Ordering::SeqCst) {
+                    SegmentationStatus::Unavailable
+                } else {
+                    segmentation
+                },
             };
         });
         let supervisor = Supervisor {
@@ -665,6 +702,42 @@ impl Finished {
     }
 }
 
+/// A host clock that moved on further than this between two recorder
+/// steps (10 ms apart) jumped: the machine slept or the process was
+/// suspended. Longer than any scheduling hiccup, longer than the rings
+/// hold (~3 s), so no captured audio falls in the skipped part.
+const MAX_STEP_NS: u64 = 5_000_000_000;
+
+/// Notices a jump of the host clock between recorder steps.
+struct ClockJump {
+    last_ns: Option<u64>,
+    /// How far a step may move on without being a jump.
+    max_ns: u64,
+    /// What a skipped jump still counts as: one tick.
+    tick_ns: u64,
+}
+
+impl ClockJump {
+    fn new(tick: Duration) -> Self {
+        Self {
+            last_ns: None,
+            max_ns: MAX_STEP_NS,
+            tick_ns: u64::try_from(tick.as_nanos()).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// How much of the time up to `until_ns` to leave out of the recording.
+    fn skip(&mut self, until_ns: u64) -> u64 {
+        let jump = self.last_ns.map_or(0, |last| until_ns.saturating_sub(last));
+        self.last_ns = Some(until_ns);
+        if jump > self.max_ns {
+            jump - self.tick_ns.min(jump)
+        } else {
+            0
+        }
+    }
+}
+
 /// The recorder thread: rings → timelines → AEC → files, VAD, levels.
 struct Recorder {
     shared: Arc<Shared>,
@@ -676,6 +749,7 @@ struct Recorder {
     /// The loudest "Остальные" level since the supervisor last looked.
     others_peak: Arc<AtomicU32>,
     buffer: Vec<f32>,
+    jump: ClockJump,
 }
 
 impl Recorder {
@@ -713,8 +787,19 @@ impl Recorder {
     }
 
     /// Takes every captured block, fills stalled channels with silence up
-    /// to `until_ns` and writes every frame both channels have.
+    /// to `until_ns` and writes every frame both channels have. A jump of
+    /// the host clock is skipped on both channels first, so the step never
+    /// fills (and encodes) more than a few seconds.
     fn step(&mut self, until_ns: u64) {
+        let skipped = self.jump.skip(until_ns);
+        if skipped > 0 {
+            eprintln!(
+                "grill: the host clock jumped {} ms while recording; that time is left out",
+                skipped / 1_000_000
+            );
+            self.me.timeline.skip(skipped);
+            self.others.timeline.skip(skipped);
+        }
         while let Ok((channel, source)) = self.rings.try_recv() {
             match channel {
                 Channel::Me => self.me.replace_source(source, &mut self.buffer),
@@ -869,6 +954,8 @@ impl Supervisor {
         }
         let (sink, source) = new_ring();
         let breakdown = source.breakdown();
+        // Before opening, as in `begin`.
+        let input = devices.default_input();
         match devices.open(channel.source(), sink) {
             Ok(opened) => {
                 let device = match channel {
@@ -878,7 +965,7 @@ impl Supervisor {
                 device.opened = Some(opened);
                 device.breakdown = breakdown;
                 if channel == Channel::Me {
-                    device.input = devices.default_input();
+                    device.input = input;
                 } else {
                     self.silence = SilenceWatch::new(self.shared.config.silent_for);
                 }

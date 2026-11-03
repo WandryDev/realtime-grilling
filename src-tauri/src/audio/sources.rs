@@ -218,6 +218,9 @@ fn build_input<S: SampleSink>(sink: S) -> CommandResult<cpal::Stream> {
 ///   `callback`.
 /// - Windows: `capture` is `GetBuffer`'s QPC position, as for the loopback.
 /// - Elsewhere: no shared clock; the sink stamps "now − block".
+///
+/// The sink also replaces a zero or implausible stamp
+/// ([`super::clock::block_stamp_ns`]).
 #[allow(clippy::missing_const_for_fn, unused_variables)]
 fn host_time(info: &cpal::InputCallbackInfo) -> Option<u64> {
     #[cfg(target_os = "macos")]

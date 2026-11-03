@@ -58,6 +58,21 @@ pub fn block_start_ns(now_ns: u64, frames: usize, rate: u32) -> u64 {
     now_ns.saturating_sub(frames_to_ns(frames, rate))
 }
 
+/// A device stamp further than this from the callback's "now" is not
+/// believed: device buffers and latency are milliseconds, not seconds.
+pub const STAMP_TOLERANCE_NS: u64 = 2 * NANOS_PER_SECOND as u64;
+
+/// The stamp of a block delivered at `now_ns`: the device's, unless it is
+/// missing, zero (`mHostTime` left unset) or implausibly far from now (a
+/// bogus QPC position, a clock that jumped), then [`block_start_ns`]. One
+/// bad stamp would otherwise cut the channel or pad it with hours of
+/// silence.
+pub fn block_stamp_ns(stamp: Option<u64>, now_ns: u64, frames: usize, rate: u32) -> u64 {
+    stamp
+        .filter(|stamp| *stamp != 0 && stamp.abs_diff(now_ns) <= STAMP_TOLERANCE_NS)
+        .unwrap_or_else(|| block_start_ns(now_ns, frames, rate))
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::sync::OnceLock;
@@ -189,6 +204,34 @@ mod tests {
         assert_eq!(block_start_ns(MS, 48_000, 48_000), 0, "saturates");
         assert_eq!(frames_to_ns(441, 44_100), 10 * MS);
         assert_eq!(frames_to_ns(10, 0), 0);
+    }
+
+    #[test]
+    fn implausible_stamps_fall_back_to_now() {
+        let now = 3_600_000 * MS;
+        let fallback = now - 10 * MS;
+        // A device stamp a few ms back is kept.
+        assert_eq!(
+            block_stamp_ns(Some(now - 25 * MS), now, 480, 48_000),
+            now - 25 * MS
+        );
+        assert_eq!(block_stamp_ns(None, now, 480, 48_000), fallback);
+        // `mHostTime` == 0 (or a zero QPC position).
+        assert_eq!(block_stamp_ns(Some(0), now, 480, 48_000), fallback);
+        // Far in the future or the past.
+        assert_eq!(
+            block_stamp_ns(Some(now + 3_600_000 * MS), now, 480, 48_000),
+            fallback
+        );
+        assert_eq!(
+            block_stamp_ns(Some(now - 60_000 * MS), now, 480, 48_000),
+            fallback
+        );
+        assert_eq!(
+            block_stamp_ns(Some(now + STAMP_TOLERANCE_NS), now, 480, 48_000),
+            now + STAMP_TOLERANCE_NS,
+            "the edge is still believed"
+        );
     }
 
     /// Stamps of each source become timeline positions (16 kHz samples

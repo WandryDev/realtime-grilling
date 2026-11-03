@@ -141,9 +141,12 @@ impl SampleSink for RingSink {
         if len == 0 || channels == 0 {
             return;
         }
-        let host_time_ns = host_time_ns.unwrap_or_else(|| {
-            clock::block_start_ns(clock::now_ns(), len / channels, format.sample_rate)
-        });
+        let host_time_ns = clock::block_stamp_ns(
+            host_time_ns,
+            clock::now_ns(),
+            len / channels,
+            format.sample_rate,
+        );
         if self.blocks.is_full() || self.samples.slots() < len {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return;
@@ -203,20 +206,25 @@ mod tests {
 
     #[test]
     fn blocks_come_out_in_order_with_their_stamps() {
+        let base = clock::now_ns();
         let (mut sink, mut source) = ring(64, 4);
-        sink.push(STEREO_48K, Some(1_000), [0.1, 0.2, 0.3, 0.4].into_iter());
         sink.push(
             STEREO_48K,
-            Some(2_000),
+            Some(base + 1_000),
+            [0.1, 0.2, 0.3, 0.4].into_iter(),
+        );
+        sink.push(
+            STEREO_48K,
+            Some(base + 2_000),
             [0.5_f32, 0.6].iter().map(|sample| sample * 2.0),
         );
         let mut buffer = Vec::new();
         let first = source.pop(&mut buffer).unwrap();
-        assert_eq!(first.host_time_ns, 1_000);
+        assert_eq!(first.host_time_ns, base + 1_000);
         assert_eq!(first.format, STEREO_48K);
         assert_eq!(buffer, [0.1, 0.2, 0.3, 0.4]);
         let second = source.pop(&mut buffer).unwrap();
-        assert_eq!(second.host_time_ns, 2_000);
+        assert_eq!(second.host_time_ns, base + 2_000);
         assert_eq!(buffer, [1.0, 1.2]);
         assert!(source.pop(&mut buffer).is_none());
         assert_eq!(source.dropped(), 0);
@@ -224,20 +232,21 @@ mod tests {
 
     #[test]
     fn a_block_that_does_not_fit_is_dropped_whole_and_counted() {
+        let base = clock::now_ns();
         let (mut sink, mut source) = ring(8, 2);
-        sink.push(STEREO_48K, Some(1), [0.0; 6].into_iter());
-        sink.push(STEREO_48K, Some(2), [0.0; 4].into_iter()); // 10 > 8
-        sink.push(STEREO_48K, Some(3), [0.0; 2].into_iter());
-        sink.push(STEREO_48K, Some(4), [0.0; 2].into_iter()); // no header slot
+        sink.push(STEREO_48K, Some(base + 1), [0.0; 6].into_iter());
+        sink.push(STEREO_48K, Some(base + 2), [0.0; 4].into_iter()); // 10 > 8
+        sink.push(STEREO_48K, Some(base + 3), [0.0; 2].into_iter());
+        sink.push(STEREO_48K, Some(base + 4), [0.0; 2].into_iter()); // no header slot
         assert_eq!(source.dropped(), 2);
         let mut buffer = Vec::new();
         let stamps: Vec<u64> = std::iter::from_fn(|| source.pop(&mut buffer))
-            .map(|header| header.host_time_ns)
+            .map(|header| header.host_time_ns - base)
             .collect();
         assert_eq!(stamps, [1, 3]);
         // Room again once read.
-        sink.push(STEREO_48K, Some(5), [0.0; 8].into_iter());
-        assert_eq!(source.pop(&mut buffer).unwrap().host_time_ns, 5);
+        sink.push(STEREO_48K, Some(base + 5), [0.0; 8].into_iter());
+        assert_eq!(source.pop(&mut buffer).unwrap().host_time_ns, base + 5);
     }
 
     #[test]
@@ -251,6 +260,27 @@ mod tests {
         let ten_ms = 10_000_000;
         assert!(header.host_time_ns >= before - ten_ms);
         assert!(header.host_time_ns <= after - ten_ms);
+    }
+
+    #[test]
+    fn a_zero_or_far_off_stamp_is_replaced_by_now() {
+        let (mut sink, mut source) = ring(4_096, 8);
+        let hour = 3_600 * 1_000_000_000;
+        let before = clock::now_ns();
+        for stamp in [
+            Some(0),
+            Some(before + hour),
+            Some(before.saturating_sub(hour)),
+        ] {
+            sink.push(STEREO_48K, stamp, std::iter::repeat_n(0.0, 960));
+        }
+        let after = clock::now_ns();
+        let ten_ms = 10_000_000;
+        let mut buffer = Vec::new();
+        for _ in 0..3 {
+            let stamp = source.pop(&mut buffer).unwrap().host_time_ns;
+            assert!((before - ten_ms..=after).contains(&stamp), "{stamp}");
+        }
     }
 
     #[test]

@@ -182,6 +182,14 @@ impl Timeline {
         self.stats
     }
 
+    /// Moves `t0` later by `ns`: the host clock jumped (the machine slept)
+    /// and that time is left out of the recording instead of being filled
+    /// with silence. The recorder skips both channels alike, so they stay
+    /// aligned.
+    pub fn skip(&mut self, ns: u64) {
+        self.t0_ns = self.t0_ns.saturating_add(ns);
+    }
+
     /// Where on the timeline a host time falls, in 16 kHz samples (negative
     /// before `t0`).
     pub fn position_of(&self, host_time_ns: u64) -> f64 {
@@ -346,6 +354,27 @@ impl Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_skip_puts_later_blocks_at_the_cursor_without_silence() {
+        let mut timeline = Timeline::new(T0);
+        let block = vec![0.1; 160];
+        let push = |timeline: &mut Timeline, at_ns: u64| {
+            timeline.push(InputBlock {
+                samples: &block,
+                channels: 1,
+                sample_rate: SAMPLE_RATE,
+                host_time_ns: at_ns,
+            });
+        };
+        push(&mut timeline, T0);
+        // The machine sleeps for an hour; the next block is an hour later.
+        let hour = 3_600_000 * MS;
+        timeline.skip(hour - 10 * MS);
+        push(&mut timeline, T0 + hour);
+        assert_eq!(timeline.stats().silence_inserted, 0);
+        assert_eq!(timeline.available(), 320, "no hour of silence");
+    }
 
     const MS: u64 = 1_000_000;
     const T0: u64 = 5_000 * MS;

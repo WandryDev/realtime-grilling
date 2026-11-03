@@ -9,18 +9,21 @@
 
 use std::{
     collections::HashMap,
-    ffi::{c_int, c_void},
+    ffi::c_void,
     ptr::NonNull,
-    sync::{Mutex, OnceLock, PoisonError, mpsc::Sender},
+    sync::{Mutex, PoisonError, mpsc::Sender},
     time::{Duration, Instant},
 };
 
 use objc2_core_audio::{AudioObjectID, AudioObjectPropertyAddress};
 
 use super::{Driver, Signal, Woken, names::outermost_app, state::Holder};
-use crate::audio::mac::hal::{
-    self, HW_PROCESS_OBJECT_LIST, PROC_DEVICES, PROC_IS_RUNNING_INPUT, PROC_PID, SCOPE_GLOBAL,
-    SCOPE_INPUT, SYSTEM,
+use crate::audio::mac::{
+    hal::{
+        self, HW_PROCESS_OBJECT_LIST, PROC_DEVICES, PROC_IS_RUNNING_INPUT, PROC_PID, SCOPE_GLOBAL,
+        SCOPE_INPUT, SYSTEM,
+    },
+    process::responsible_pid,
 };
 
 /// The safety net re-scan.
@@ -189,32 +192,4 @@ fn proc_name(pid: i32) -> Option<String> {
     };
     let length = usize::try_from(length).ok().filter(|length| *length > 0)?;
     Some(String::from_utf8_lossy(&buffer[..length]).into_owned())
-}
-
-/// `pid_t responsibility_get_pid_responsible_for_pid(pid_t)`, private.
-type Responsible = unsafe extern "C" fn(c_int) -> c_int;
-
-fn responsible_function() -> Option<Responsible> {
-    static FUNCTION: OnceLock<Option<usize>> = OnceLock::new();
-    let address = *FUNCTION.get_or_init(|| {
-        // SAFETY: dlsym with a NUL-terminated name over the loaded images.
-        let symbol = unsafe {
-            libc::dlsym(
-                libc::RTLD_DEFAULT,
-                c"responsibility_get_pid_responsible_for_pid".as_ptr(),
-            )
-        };
-        (!symbol.is_null()).then_some(symbol as usize)
-    });
-    // SAFETY: the symbol has this signature.
-    address.map(|address| unsafe { std::mem::transmute::<usize, Responsible>(address) })
-}
-
-/// The process macOS holds responsible for `pid` (Safari for its WebKit
-/// GPU service), if the private SPI exists.
-fn responsible_pid(pid: i32) -> Option<i32> {
-    let function = responsible_function()?;
-    // SAFETY: takes and returns a pid; no other effects.
-    let responsible = unsafe { function(pid) };
-    (responsible > 0).then_some(responsible)
 }

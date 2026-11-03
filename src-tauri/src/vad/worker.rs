@@ -5,9 +5,11 @@
 //! and returns. The worker scores the stream every 256 ms with a sliding pass
 //! (`detector`), feeds the probabilities to the phrase state machine
 //! (`segmenter`), and cuts each closed phrase out of a ring of recent audio
-//! for the `PhraseSink`. More than 30 s of backlog is dropped from the old
-//! end and logged. Without a model the worker reports `Unavailable` and
-//! `push` does nothing.
+//! for the `PhraseSink`. The worker takes the queue in batches of a second,
+//! and more than 30 s of backlog (the batch it scores included) is dropped
+//! from the old end and logged. Without a model the worker reports
+//! `Unavailable` and `push` does nothing; an inference error later does the
+//! same and tells [`VadWorker::on_failure`].
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -25,6 +27,9 @@ use crate::storage::transcript::TranscriptChannel;
 
 /// Queued audio beyond this is dropped from the old end.
 const MAX_BACKLOG_SAMPLES: usize = 30 * SAMPLE_RATE as usize;
+/// The worker takes at most this much of the queue at once, so what it is
+/// scoring stays a small part of the backlog.
+const BATCH_SAMPLES: usize = SAMPLE_RATE as usize;
 /// Recent audio kept to cut phrases: the 15-s cap, a pass and some slack.
 const RING_SAMPLES: usize = 20 * SAMPLE_RATE as usize;
 const STEP_SAMPLES: u64 = (STEP_WINDOWS * WINDOW_SAMPLES) as u64;
@@ -89,20 +94,98 @@ struct Frame {
 struct Queue {
     frames: VecDeque<Frame>,
     queued_samples: usize,
+    /// The batch the worker is scoring: part of the backlog, but no longer
+    /// in `frames`.
+    scoring_samples: usize,
     next_position: u64,
     closed: bool,
 }
+
+impl Queue {
+    /// Queues the next frame and drops the oldest queued ones while the
+    /// backlog (queued plus scoring) is over `max_backlog`.
+    fn push(&mut self, frame: &[f32], max_backlog: usize) {
+        let position = self.next_position;
+        self.next_position += frame.len() as u64;
+        self.queued_samples += frame.len();
+        self.frames.push_back(Frame {
+            position,
+            samples: frame.to_vec(),
+        });
+        // The worker notices the hole in positions and logs it.
+        while self.queued_samples + self.scoring_samples > max_backlog {
+            let Some(old) = self.frames.pop_front() else {
+                break;
+            };
+            self.queued_samples -= old.samples.len();
+        }
+    }
+
+    /// The oldest frames, up to `limit` samples (at least one frame), now
+    /// being scored; and whether they are the last ones.
+    fn take_batch(&mut self, limit: usize) -> (Vec<Frame>, bool) {
+        let mut batch = Vec::new();
+        let mut samples = 0;
+        while let Some(frame) = self.frames.front() {
+            if !batch.is_empty() && samples + frame.samples.len() > limit {
+                break;
+            }
+            samples += frame.samples.len();
+            batch.extend(self.frames.pop_front());
+        }
+        self.queued_samples -= samples;
+        self.scoring_samples = samples;
+        (batch, self.closed && self.frames.is_empty())
+    }
+
+    fn backlog(&self) -> usize {
+        self.queued_samples + self.scoring_samples
+    }
+}
+
+type FailureCallback = Box<dyn FnOnce() + Send>;
 
 struct Shared {
     queue: Mutex<Queue>,
     ready: Condvar,
     available: AtomicBool,
     max_backlog_samples: usize,
+    /// Set (under `on_failure`'s lock) when inference failed.
+    failed: AtomicBool,
+    on_failure: Mutex<Option<FailureCallback>>,
 }
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Inference failed: no more phrases, and whoever asked is told.
+    fn fail(&self) {
+        self.available.store(false, Ordering::Release);
+        let callback = {
+            let mut slot = self
+                .on_failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            self.failed.store(true, Ordering::Release);
+            slot.take()
+        };
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+}
+
+/// Scores 512-sample windows: [`SileroVad`] in the app, fakes in tests.
+pub trait Detector: Send {
+    /// Speech probability of each window of `samples`, from a clean state.
+    fn probabilities(&mut self, samples: &[f32]) -> Result<&[f32], VadError>;
+}
+
+impl Detector for SileroVad {
+    fn probabilities(&mut self, samples: &[f32]) -> Result<&[f32], VadError> {
+        Self::probabilities(self, samples)
     }
 }
 
@@ -131,23 +214,61 @@ impl VadWorker {
         sink: Arc<dyn PhraseSink>,
         max_backlog_samples: usize,
     ) -> Self {
-        let shared = Arc::new(Shared {
+        match SileroVad::load(model) {
+            Ok(vad) => Self::start(
+                Box::new(vad),
+                recording_id.into(),
+                channel,
+                sink,
+                max_backlog_samples,
+            ),
+            Err(error) => {
+                eprintln!("grill: speech segmentation unavailable ({channel:?}): {error}");
+                Self {
+                    shared: Self::shared(max_backlog_samples),
+                    thread: None,
+                }
+            }
+        }
+    }
+
+    /// Starts the thread over a loaded `detector`.
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
+    pub fn with_detector(
+        detector: Box<dyn Detector>,
+        recording_id: impl Into<String>,
+        channel: TranscriptChannel,
+        sink: Arc<dyn PhraseSink>,
+    ) -> Self {
+        Self::start(
+            detector,
+            recording_id.into(),
+            channel,
+            sink,
+            MAX_BACKLOG_SAMPLES,
+        )
+    }
+
+    fn shared(max_backlog_samples: usize) -> Arc<Shared> {
+        Arc::new(Shared {
             queue: Mutex::new(Queue::default()),
             ready: Condvar::new(),
             available: AtomicBool::new(false),
             max_backlog_samples,
-        });
-        let vad = match SileroVad::load(model) {
-            Ok(vad) => vad,
-            Err(error) => {
-                eprintln!("grill: speech segmentation unavailable ({channel:?}): {error}");
-                return Self {
-                    shared,
-                    thread: None,
-                };
-            }
-        };
-        let pipeline = Pipeline::new(vad, recording_id.into(), channel, sink);
+            failed: AtomicBool::new(false),
+            on_failure: Mutex::new(None),
+        })
+    }
+
+    fn start(
+        detector: Box<dyn Detector>,
+        recording_id: String,
+        channel: TranscriptChannel,
+        sink: Arc<dyn PhraseSink>,
+        max_backlog_samples: usize,
+    ) -> Self {
+        let shared = Self::shared(max_backlog_samples);
+        let pipeline = Pipeline::new(detector, recording_id, channel, sink);
         let thread_shared = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name(format!("grill-vad-{channel:?}").to_lowercase())
@@ -167,6 +288,23 @@ impl VadWorker {
                     thread: None,
                 }
             }
+        }
+    }
+
+    /// Calls `callback` once, on the worker thread, when inference fails
+    /// after the start (at once if it already did). A worker that never
+    /// started (no model) never calls it: its status says so from the start.
+    pub fn on_failure(&self, callback: impl FnOnce() + Send + 'static) {
+        let mut slot = self
+            .shared
+            .on_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if self.shared.failed.load(Ordering::Acquire) {
+            drop(slot);
+            callback();
+        } else {
+            *slot = Some(Box::new(callback));
         }
     }
 
@@ -190,28 +328,15 @@ impl VadWorker {
             if queue.closed {
                 return;
             }
-            let position = queue.next_position;
-            queue.next_position += frame.len() as u64;
-            queue.queued_samples += frame.len();
-            queue.frames.push_back(Frame {
-                position,
-                samples: frame.to_vec(),
-            });
-            // The worker notices the hole in positions and logs it.
-            while queue.queued_samples > self.shared.max_backlog_samples {
-                let Some(old) = queue.frames.pop_front() else {
-                    break;
-                };
-                queue.queued_samples -= old.samples.len();
-            }
+            queue.push(frame, self.shared.max_backlog_samples);
         }
         self.shared.ready.notify_one();
     }
 
-    /// Audio waiting for the worker, in milliseconds.
+    /// Audio waiting for the worker or being scored, in milliseconds.
     #[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
     pub fn backlog_ms(&self) -> u64 {
-        self.shared.lock().queued_samples as u64 / SAMPLES_PER_MS
+        self.shared.lock().backlog() as u64 / SAMPLES_PER_MS
     }
 
     /// Ends the channel: scores what is queued, closes the open phrase and
@@ -273,7 +398,7 @@ impl Ring {
 
 /// The worker thread's state.
 struct Pipeline {
-    vad: SileroVad,
+    vad: Box<dyn Detector>,
     recording_id: String,
     channel: TranscriptChannel,
     sink: Arc<dyn PhraseSink>,
@@ -287,7 +412,7 @@ struct Pipeline {
 
 impl Pipeline {
     fn new(
-        vad: SileroVad,
+        vad: Box<dyn Detector>,
         recording_id: String,
         channel: TranscriptChannel,
         sink: Arc<dyn PhraseSink>,
@@ -317,19 +442,27 @@ impl Pipeline {
                         .wait(queue)
                         .unwrap_or_else(PoisonError::into_inner);
                 }
-                queue.queued_samples = 0;
-                (std::mem::take(&mut queue.frames), queue.closed)
+                queue.take_batch(BATCH_SAMPLES)
             };
             let result = frames
                 .into_iter()
                 .try_for_each(|frame| self.feed(frame))
                 .and_then(|()| if closed { self.flush() } else { Ok(()) });
+            {
+                let mut queue = shared.lock();
+                queue.scoring_samples = 0;
+                if result.is_err() {
+                    // Nothing scores it any more.
+                    queue.frames.clear();
+                    queue.queued_samples = 0;
+                }
+            }
             if let Err(error) = result {
                 eprintln!(
                     "grill: speech segmentation stopped ({:?}): {error}",
                     self.channel
                 );
-                shared.available.store(false, Ordering::Release);
+                shared.fail();
                 return;
             }
             if closed {
@@ -550,6 +683,95 @@ mod tests {
             worker.finish();
             assert!(sink.0.lock().unwrap().is_empty());
         }
+    }
+
+    /// A detector whose inference always fails, as a broken runtime would.
+    struct Failing;
+
+    impl Detector for Failing {
+        fn probabilities(&mut self, _samples: &[f32]) -> Result<&[f32], VadError> {
+            Err(VadError::Detect)
+        }
+    }
+
+    #[test]
+    fn an_inference_error_makes_segmentation_unavailable_and_says_so() {
+        let sink = Arc::new(Collect::default());
+        let worker = VadWorker::with_detector(
+            Box::new(Failing),
+            "rec-1",
+            TranscriptChannel::Me,
+            Arc::clone(&sink) as Arc<dyn PhraseSink>,
+        );
+        assert_eq!(worker.status(), SegmentationStatus::Ok, "loaded");
+        let (failed_tx, failed_rx) = mpsc::channel();
+        worker.on_failure(move || failed_tx.send(()).unwrap());
+        for frame in vec![0.0; SAMPLE_RATE as usize].chunks(FRAME) {
+            worker.push(frame);
+        }
+        failed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("told about the failure");
+        assert_eq!(worker.status(), SegmentationStatus::Unavailable);
+        // A late subscriber hears it at once; frames are ignored from now on.
+        let (late_tx, late_rx) = mpsc::channel();
+        worker.on_failure(move || late_tx.send(()).unwrap());
+        late_rx.try_recv().expect("called at once");
+        worker.push(&[0.0; FRAME]);
+        assert_eq!(worker.backlog_ms(), 0);
+        worker.finish();
+        assert!(sink.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_backlog_counts_the_batch_being_scored() {
+        let max = 2 * SAMPLE_RATE as usize;
+        let mut queue = Queue::default();
+        let frame = [0.0; FRAME];
+        let push = |queue: &mut Queue, seconds: usize| {
+            for _ in 0..seconds * SAMPLE_RATE as usize / FRAME {
+                queue.push(&frame, max);
+            }
+        };
+        push(&mut queue, 2);
+        assert_eq!(queue.backlog(), max);
+
+        // The worker takes one batch, not the whole queue.
+        let (batch, last) = queue.take_batch(BATCH_SAMPLES);
+        assert!(!last);
+        let taken: usize = batch.iter().map(|frame| frame.samples.len()).sum();
+        assert_eq!(taken, BATCH_SAMPLES);
+        assert_eq!(batch[0].position, 0);
+
+        // While it scores (slower than real time), more audio comes: the
+        // oldest queued audio goes, and the lag stays within the limit.
+        push(&mut queue, 3);
+        assert_eq!(queue.backlog(), max);
+        let newest = queue.next_position;
+        let oldest_queued = queue.frames.front().unwrap().position;
+        assert_eq!(
+            newest - oldest_queued,
+            (max - BATCH_SAMPLES) as u64,
+            "queued + scoring ≤ 2 s"
+        );
+
+        // The batch is done: the next one starts after the hole.
+        queue.scoring_samples = 0;
+        let (batch, _) = queue.take_batch(BATCH_SAMPLES);
+        assert_eq!(batch[0].position, oldest_queued);
+        assert!(queue.backlog() <= max);
+    }
+
+    #[test]
+    fn the_last_batch_is_marked_once_the_queue_is_closed() {
+        let mut queue = Queue::default();
+        for _ in 0..(3 * BATCH_SAMPLES / 2) / FRAME {
+            queue.push(&[0.0; FRAME], MAX_BACKLOG_SAMPLES);
+        }
+        queue.closed = true;
+        assert!(!queue.take_batch(BATCH_SAMPLES).1, "more is queued");
+        assert!(queue.take_batch(BATCH_SAMPLES).1, "the rest");
+        assert!(queue.frames.is_empty());
     }
 
     /// A sink that holds the worker on its first phrase until released.

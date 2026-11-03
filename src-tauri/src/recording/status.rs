@@ -83,7 +83,7 @@ impl RecordingStatus {
 pub struct RecordingChanged(pub RecordingStatus);
 
 /// The level of both channels (0–1, the meters' dBFS scale), ~10 times a
-/// second to the visible windows while recording. "Я" is after AEC.
+/// second to every window while recording. "Я" is after AEC.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type, Event)]
 pub struct RecordingLevels {
     // Always finite, so a plain `number` rather than specta's `number | null`.
