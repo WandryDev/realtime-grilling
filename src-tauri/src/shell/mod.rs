@@ -80,6 +80,10 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(SettingsLock::default());
     app.manage(crate::audio::levels_for_app(app.handle()));
     app.manage(crate::agent::AgentSessions::default());
+    app.manage(crate::speech::models::ModelManager::for_app(
+        app.handle(),
+        settings::speech_model(&settings),
+    ));
     app.manage(Entry {
         onboarding_completed: AtomicBool::new(settings::flag(
             &settings,

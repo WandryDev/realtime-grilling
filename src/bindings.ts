@@ -183,6 +183,40 @@ export const commands = {
 	 *  during a recording sees it at once.
 	 */
 	recordingStatus: () => typedError<RecordingStatus, CommandError>(__TAURI_INVOKE("recording_status")),
+	/**
+	 *  Both models (turbo, then small) with their download size, state and
+	 *  whether `speechModel` names them. Files deleted by hand are noticed here.
+	 */
+	speechModelsList: () => typedError<SpeechModel[], CommandError>(__TAURI_INVOKE("speech_models_list")),
+	/**
+	 *  "Скачать" / "Продолжить": starts the download in the background, or
+	 *  resumes it from the `.part`, and returns the model at once; progress
+	 *  comes in `SpeechModelChanged`. A ready or downloading model stays as it
+	 *  is. Without room for the rest of the file plus 10 % of the model the
+	 *  model becomes `noSpace` and nothing is downloaded.
+	 */
+	speechModelDownload: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_download", { id })),
+	/**
+	 *  "Пауза": stops the download and keeps what is downloaded. Resolves once
+	 *  it stopped.
+	 */
+	speechModelPause: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_pause", { id })),
+	/**
+	 *  "Отменить": stops the download, also a paused one, and deletes the
+	 *  unfinished file. A ready model stays.
+	 */
+	speechModelCancel: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_cancel", { id })),
+	/**
+	 *  "Удалить": deletes the model's files (a download in progress stops).
+	 *  The selected model can't be removed while recording: `Invalid`.
+	 */
+	speechModelRemove: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_remove", { id })),
+	/**
+	 *  Recognize with this model: stores `speechModel` (`DataChanged` of the
+	 *  settings, `SpeechModelChanged` of both models). Only a ready model
+	 *  (`Invalid` otherwise); while recording only the model already selected.
+	 */
+	speechModelSelect: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_select", { id })),
 };
 
 /** Events */
@@ -197,6 +231,7 @@ export const events = {
 	recordingChanged: makeEvent<RecordingChanged, RecordingChanged>("recording-changed"),
 	recordingLevels: makeEvent<RecordingLevels, RecordingLevels>("recording-levels"),
 	shortcutPressed: makeEvent<ShortcutPressed, ShortcutPressed>("shortcut-pressed"),
+	speechModelChanged: makeEvent<SpeechModelChanged, SpeechModelChanged>("speech-model-changed"),
 };
 
 /* Types */
@@ -397,6 +432,18 @@ export type Entity = "project" | "person" |
 /**  `id` is `"settings"`. */
 "settings";
 
+/**  Why a download ended in `error`. */
+export type ErrorReason = 
+/**
+ *  The file didn't match the SHA-256 (or was longer than the model); it
+ *  was deleted.
+ */
+"checksum" | 
+/**  The disk refused to write, rename or read the file. */
+"io" | 
+/**  The server answered with an error (404, 403…) or a file of another size. */
+"http";
+
 export type InstallStage = "downloading" | "installing" | 
 /**  The installer finished; the app checks the CLI. */
 "verifying";
@@ -416,6 +463,31 @@ export type MicActivityChanged = {
 	/**  Milliseconds since the Unix epoch. */
 	since: number,
 };
+
+/**  The Whisper models the app offers. */
+export type ModelId = 
+/**  large-v3-turbo q5_0: the main one. */
+"turbo" | 
+/**  small: the fallback for machines turbo is too slow on. */
+"small";
+
+export type ModelState = { status: "notDownloaded" } | { status: "downloading"; 
+/**  0–99 while downloading. */
+percent: number; bytesPerSec: number } | 
+/**  A `.part` is on disk; "Продолжить" resumes from it. */
+{ status: "paused"; percent: number } | 
+/**  The download is complete; the sum is being checked. */
+{ status: "checking" } | { status: "ready" } | 
+/**
+ *  The download didn't start: it needs `needBytes` free (the rest of the
+ *  file plus 10 % of the model), the disk has `freeBytes`.
+ */
+{ status: "noSpace"; needBytes: number; freeBytes: number } | 
+/**
+ *  The connection broke at `percent`; the app tries again by itself in
+ *  `retryInSec` seconds (10, 20, then every 30) until paused or cancelled.
+ */
+{ status: "noNetwork"; percent: number; retryInSec: number } | { status: "error"; reason: ErrorReason; message: string };
 
 /**  Tells the main window to open a route, e.g. "Настройки" in the tray menu. */
 export type Navigate = {
@@ -638,6 +710,23 @@ export type ShortcutError = {
 export type ShortcutPressed = {
 	action: string,
 };
+
+/**  A model as the windows see it. */
+export type SpeechModel = {
+	id: ModelId,
+	name: string,
+	/**  Download size. */
+	sizeBytes: number,
+	state: ModelState,
+	/**  The model of the `speechModel` setting (it may be not downloaded). */
+	selected: boolean,
+};
+
+/**
+ *  A model's state or selection changed. To every window; progress at most
+ *  4 times a second per model, other changes at once.
+ */
+export type SpeechModelChanged = SpeechModel;
 
 /**  The task card of a topic. */
 export type TaskCard = {

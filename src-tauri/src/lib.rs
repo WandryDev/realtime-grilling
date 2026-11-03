@@ -7,6 +7,7 @@ mod events;
 mod permissions;
 mod recording;
 mod shell;
+mod speech;
 mod storage;
 mod vad;
 

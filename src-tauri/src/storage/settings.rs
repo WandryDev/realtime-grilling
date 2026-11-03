@@ -14,6 +14,7 @@ use super::json::Json;
 use crate::{
     error::{CommandError, CommandResult},
     events::{Change, DataChanged, Entity},
+    speech::models::ModelId,
 };
 
 pub type SettingsMap = BTreeMap<String, Value>;
@@ -30,6 +31,11 @@ pub const MIC_BUSY_BEHAVIOR: &str = "micBusyBehavior";
 /// Where the agent CLI was found (`null`: not found). Optional, no default;
 /// written by the agent commands.
 pub const AGENT_PATH: &str = "agentPath";
+/// The speech model to recognize with: `turbo` or `small` (speech-recognition
+/// design.md, decision 3). Written by `speech_model_select`.
+pub const SPEECH_MODEL: &str = "speechModel";
+/// The hardware check by model, as the benchmark writes it; stored as given.
+pub const SPEECH_BENCHMARK: &str = "speechBenchmark";
 
 pub const SETTINGS_ID: &str = "settings";
 
@@ -64,6 +70,7 @@ pub fn defaults() -> SettingsMap {
         (LAUNCH_AT_LOGIN.to_owned(), json!(true)),
         (HIDE_ON_SHARE.to_owned(), json!(true)),
         (MIC_BUSY_BEHAVIOR.to_owned(), json!("widget")),
+        (SPEECH_MODEL.to_owned(), json!(ModelId::Turbo.as_str())),
         (
             SHORTCUTS.to_owned(),
             json!({
@@ -89,6 +96,9 @@ pub fn get(connection: &Connection) -> CommandResult<SettingsMap> {
         let (key, value) = row?;
         settings.insert(key, value);
     }
+    // Earlier builds stored `whisper` / `gigaam`: the windows see `turbo`.
+    let model = speech_model(&settings);
+    settings.insert(SPEECH_MODEL.to_owned(), json!(model.as_str()));
     Ok(settings)
 }
 
@@ -102,6 +112,9 @@ pub fn validate(patch: &SettingsMap) -> CommandResult<()> {
             ONBOARDING_COMPLETED | LAUNCH_AT_LOGIN | HIDE_ON_SHARE => value.is_boolean(),
             SHORTCUTS => serde_json::from_value::<Shortcuts>(value.clone()).is_ok(),
             MIC_BUSY_BEHAVIOR => value.as_str().and_then(MicBusyBehavior::parse).is_some(),
+            SPEECH_MODEL => value.as_str().and_then(ModelId::parse).is_some(),
+            // Any JSON: the benchmark owns its shape.
+            SPEECH_BENCHMARK => true,
             // Only a path to the agent CLI: it is what the agent commands run.
             AGENT_PATH => {
                 value.is_null()
@@ -173,4 +186,14 @@ pub fn mic_busy_behavior(settings: &SettingsMap) -> MicBusyBehavior {
         .and_then(Value::as_str)
         .and_then(MicBusyBehavior::parse)
         .unwrap_or(MicBusyBehavior::Widget)
+}
+
+/// `speechModel`; legacy `whisper` / `gigaam`, a missing or unreadable value
+/// are `turbo`.
+pub fn speech_model(settings: &SettingsMap) -> ModelId {
+    settings
+        .get(SPEECH_MODEL)
+        .and_then(Value::as_str)
+        .and_then(ModelId::parse)
+        .unwrap_or(ModelId::Turbo)
 }
