@@ -10,7 +10,10 @@
 //! Nothing here runs in an audio callback; allocations are fine but kept out
 //! of the per-frame paths where it is cheap to do so.
 
+pub mod aec;
+pub mod ogg_opus;
 pub mod store;
+pub mod timeline;
 
 /// Sample rate of everything after the timeline.
 pub const SAMPLE_RATE: u32 = 16_000;
