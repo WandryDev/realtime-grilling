@@ -12,10 +12,11 @@ use crate::{
         people::{self, Person, PersonCreate},
         projects::{self, Project, ProjectCreate, ProjectUpdate},
         questions::{self, QuestionCreate, QuestionStatus, QuestionUpdate},
+        recordings::{self, RecordingFiles, RecordingLinks},
         settings::{self, SettingsMap},
         task_cards::{self, TaskCardCreate},
         topics::{self, TopicCreate},
-        transcript::{self, SegmentInput, TranscriptChannel},
+        transcript::{self, SegmentInput, TranscriptChannel, TranscriptPass, TranscriptSegment},
     },
 };
 
@@ -91,6 +92,52 @@ impl Fixture {
         };
         self.write(move |db| calls::create(db, input)).unwrap()
     }
+
+    /// A recording row (no files) with `links`.
+    fn recording(&self, links: RecordingLinks) -> String {
+        self.write(move |db| {
+            let id = recordings::create(db, &links, 1_000, |id| RecordingFiles {
+                me: format!("recordings/{id}/me.opus"),
+                others: format!("recordings/{id}/others.opus"),
+            })?;
+            Ok((id, Vec::new()))
+        })
+        .unwrap()
+    }
+
+    fn live(&self, recording_id: &str, segment: SegmentInput) -> TranscriptSegment {
+        let id = recording_id.to_owned();
+        self.write(move |db| transcript::append_live(db, &id, segment))
+            .unwrap()
+    }
+
+    fn refined(&self, recording_id: &str, segments: Vec<SegmentInput>) -> Vec<TranscriptSegment> {
+        let id = recording_id.to_owned();
+        self.write(move |db| transcript::replace_refined(db, &id, segments))
+            .unwrap()
+    }
+
+    fn transcript(&self, recording_id: &str) -> Vec<TranscriptSegment> {
+        let id = recording_id.to_owned();
+        self.read(move |db| transcript::for_recording(db, &id))
+            .unwrap()
+    }
+}
+
+fn segment(channel: TranscriptChannel, start_ms: i64, text: &str) -> SegmentInput {
+    SegmentInput {
+        channel,
+        start_ms,
+        end_ms: start_ms + 500,
+        text: text.to_owned(),
+    }
+}
+
+fn texts(segments: &[TranscriptSegment]) -> Vec<&str> {
+    segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect()
 }
 
 fn is_uuid_v7(id: &str) -> bool {
@@ -223,36 +270,39 @@ fn deleting_a_project_removes_everything_of_it_and_nothing_else() {
             ..QuestionCreate::default()
         };
         fx.write(move |db| questions::create(db, input)).unwrap();
-        let call_id = call.id.clone();
-        fx.write(move |db| {
-            transcript::append(
-                db,
-                &call_id,
-                vec![SegmentInput {
-                    channel: TranscriptChannel::Others,
-                    start_ms: 0,
-                    end_ms: 900,
-                    text: "Алло".to_owned(),
-                }],
-            )
-        })
-        .unwrap();
+        let of_call = fx.recording(RecordingLinks::call(&call.id));
+        fx.live(&of_call, segment(TranscriptChannel::Others, 0, "Алло"));
+        // A recording of the project before its call exists.
+        let of_project = fx.recording(RecordingLinks {
+            project_id: Some(project.id.clone()),
+            participant_ids: vec![person.id.clone()],
+            ..RecordingLinks::default()
+        });
+        fx.live(
+            &of_project,
+            segment(TranscriptChannel::Me, 0, "Добрый день"),
+        );
         project
     };
     let doomed = fill("Телемедиа");
     let kept = fill("Лапа");
-    let tables = [
-        "projects",
-        "people",
-        "calls",
-        "call_participants",
-        "topics",
-        "task_cards",
-        "questions",
-        "transcript_segments",
+    // A recording of nothing outlives every delete.
+    let loose = fx.recording(RecordingLinks::default());
+    fx.live(&loose, segment(TranscriptChannel::Me, 0, "Проверка"));
+    // (table, rows before, rows after)
+    let rows = [
+        ("projects", 2, 1),
+        ("people", 2, 1),
+        ("calls", 2, 1),
+        ("call_participants", 2, 1),
+        ("topics", 2, 1),
+        ("task_cards", 2, 1),
+        ("questions", 2, 1),
+        ("recordings", 5, 3),
+        ("transcript_segments", 5, 3),
     ];
-    for table in tables {
-        assert_eq!(fx.count(table), 2, "{table} before");
+    for (table, before, _) in rows {
+        assert_eq!(fx.count(table), before, "{table} before");
     }
     let before = fx.sink.events().len();
     let id = kept.id.clone();
@@ -262,9 +312,10 @@ fn deleting_a_project_removes_everything_of_it_and_nothing_else() {
     let id = doomed.id.clone();
     fx.write(move |db| projects::delete(db, &id)).unwrap();
 
-    for table in tables {
-        assert_eq!(fx.count(table), 1, "{table} after");
+    for (table, _, after) in rows {
+        assert_eq!(fx.count(table), after, "{table} after");
     }
+    assert_eq!(texts(&fx.transcript(&loose)), vec!["Проверка"]);
     let id = kept.id.clone();
     assert_eq!(fx.read(move |db| projects::get(db, &id)).unwrap(), kept);
     let events = fx.sink.events();
@@ -359,39 +410,19 @@ fn transcript_reads_in_time_order_with_channels() {
     let fx = Fixture::new();
     let project = fx.project("Телемедиа");
     let call = fx.call(&project, &[]);
-    let segment = |channel, start_ms, text: &str| SegmentInput {
-        channel,
-        start_ms,
-        end_ms: start_ms + 500,
-        text: text.to_owned(),
-    };
-    let call_id = call.id.clone();
+    let recording = fx.recording(RecordingLinks::call(&call.id));
     let before = fx.sink.events().len();
-    let added = fx
-        .write(move |db| {
-            transcript::append(
-                db,
-                &call_id,
-                vec![
-                    segment(TranscriptChannel::Others, 3000, "три"),
-                    segment(TranscriptChannel::Me, 1000, "один"),
-                ],
-            )
-        })
-        .unwrap();
-    assert_eq!(added.len(), 2);
-    let call_id = call.id.clone();
-    fx.write(move |db| {
-        transcript::append(
-            db,
-            &call_id,
-            vec![segment(TranscriptChannel::Others, 2000, "два")],
-        )
-    })
-    .unwrap();
 
-    let id = call.id.clone();
-    let segments = fx.read(move |db| transcript::list(db, &id)).unwrap();
+    let added = fx.live(&recording, segment(TranscriptChannel::Others, 3000, "три"));
+    fx.live(&recording, segment(TranscriptChannel::Me, 1000, "один"));
+    fx.live(&recording, segment(TranscriptChannel::Others, 2000, "два"));
+
+    assert!(is_uuid_v7(&added.id));
+    assert_eq!(added.recording_id, recording);
+    assert_eq!(added.call_id.as_deref(), Some(call.id.as_str()));
+    assert_eq!(added.pass, TranscriptPass::Live);
+    let segments = fx.transcript(&recording);
+    assert_eq!(segments[2], added);
     let read: Vec<_> = segments
         .iter()
         .map(|segment| (segment.text.as_str(), segment.channel))
@@ -405,69 +436,220 @@ fn transcript_reads_in_time_order_with_channels() {
         ]
     );
     let events = &fx.sink.events()[before..];
-    assert_eq!(events.len(), 2, "one event per batch");
+    assert_eq!(events.len(), 3, "one event per phrase");
     assert_eq!(
         events[0],
         DataChanged::new(
             Entity::Transcript,
-            &call.id,
+            &recording,
             Some(&project.id),
             Change::Created
         )
     );
+}
 
-    let call_id = call.id.clone();
-    let empty = fx
-        .write(move |db| transcript::append(db, &call_id, Vec::new()))
-        .unwrap();
-    assert!(empty.is_empty());
+#[test]
+fn the_refined_pass_replaces_the_live_one_on_read() {
+    let fx = Fixture::new();
+    let recording = fx.recording(RecordingLinks::default());
+    fx.live(&recording, segment(TranscriptChannel::Me, 0, "живой один"));
+    fx.live(
+        &recording,
+        segment(TranscriptChannel::Others, 900, "живой два"),
+    );
+    let before = fx.sink.events().len();
+
+    // Nothing recognized: the live pass stays visible.
+    assert!(fx.refined(&recording, Vec::new()).is_empty());
     assert_eq!(
-        fx.sink.events().len(),
-        before + 2,
-        "an empty batch sends nothing"
+        texts(&fx.transcript(&recording)),
+        vec!["живой один", "живой два"]
+    );
+
+    let refined = fx.refined(
+        &recording,
+        vec![
+            segment(TranscriptChannel::Others, 1000, "второй"),
+            segment(TranscriptChannel::Me, 0, "первый"),
+        ],
+    );
+    assert!(
+        refined
+            .iter()
+            .all(|segment| segment.pass == TranscriptPass::Refined && segment.call_id.is_none())
+    );
+    assert_eq!(texts(&fx.transcript(&recording)), vec!["первый", "второй"]);
+
+    // A rerun replaces the previous refined segments.
+    fx.refined(
+        &recording,
+        vec![segment(TranscriptChannel::Me, 0, "заново")],
+    );
+    assert_eq!(texts(&fx.transcript(&recording)), vec!["заново"]);
+    assert_eq!(fx.count("transcript_segments"), 3, "the live rows stay");
+
+    let id = recording.clone();
+    let state = fx
+        .read(move |db| recordings::get(db, &id))
+        .unwrap()
+        .transcript_state;
+    assert_eq!(state, recordings::TranscriptState::Refined);
+    let events = &fx.sink.events()[before..];
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events[2],
+        DataChanged::new(Entity::Transcript, &recording, None, Change::Updated)
     );
 }
 
 #[test]
-fn a_channel_other_than_me_or_others_is_rejected() {
+fn a_failed_refined_pass_changes_nothing() {
+    let fx = Fixture::new();
+    let recording = fx.recording(RecordingLinks::default());
+    fx.refined(&recording, vec![segment(TranscriptChannel::Me, 0, "было")]);
+    let before = fx.sink.events().len();
+
+    let id = recording.clone();
+    let error = fx
+        .write(move |db| {
+            transcript::replace_refined(
+                db,
+                &id,
+                vec![
+                    segment(TranscriptChannel::Me, 0, "хорошо"),
+                    SegmentInput {
+                        channel: TranscriptChannel::Me,
+                        start_ms: 500,
+                        end_ms: 100,
+                        text: "назад".to_owned(),
+                    },
+                ],
+            )
+        })
+        .unwrap_err();
+    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+    assert_eq!(texts(&fx.transcript(&recording)), vec!["было"]);
+    assert_eq!(fx.sink.events().len(), before);
+
+    // Outside a transaction it is atomic too.
+    let id = recording.clone();
+    fx.read(move |db| {
+        let error = transcript::replace_refined(db, "nope", Vec::new()).unwrap_err();
+        assert!(matches!(error, CommandError::NotFound { .. }));
+        transcript::replace_refined(db, &id, vec![segment(TranscriptChannel::Me, 0, "стало")])?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(texts(&fx.transcript(&recording)), vec!["стало"]);
+}
+
+#[test]
+fn a_call_reads_the_transcripts_of_its_recordings() {
+    let fx = Fixture::new();
+    let project = fx.project("Телемедиа");
+    let call = fx.call(&project, &[]);
+    let other = fx.call(&project, &[]);
+    let first = fx.recording(RecordingLinks::call(&call.id));
+    let second = fx.recording(RecordingLinks::call(&call.id));
+    let elsewhere = fx.recording(RecordingLinks::call(&other.id));
+    fx.live(&second, segment(TranscriptChannel::Me, 0, "вторая запись"));
+    fx.live(&first, segment(TranscriptChannel::Me, 5000, "первая живая"));
+    fx.live(
+        &elsewhere,
+        segment(TranscriptChannel::Me, 0, "другой звонок"),
+    );
+    fx.refined(
+        &first,
+        vec![segment(
+            TranscriptChannel::Others,
+            4000,
+            "первая уточнённая",
+        )],
+    );
+
+    let id = call.id.clone();
+    let segments = fx.read(move |db| transcript::for_call(db, &id)).unwrap();
+    assert_eq!(texts(&segments), vec!["первая уточнённая", "вторая запись"]);
+    assert_eq!(segments[0].recording_id, first);
+    assert_eq!(segments[1].pass, TranscriptPass::Live);
+}
+
+#[test]
+fn transcripts_of_unknown_records_are_not_found() {
+    let fx = Fixture::new();
+    for error in [
+        fx.read(|db| transcript::for_recording(db, "nope"))
+            .unwrap_err(),
+        fx.read(|db| transcript::for_call(db, "nope")).unwrap_err(),
+        fx.write(|db| transcript::append_live(db, "nope", segment(TranscriptChannel::Me, 0, "x")))
+            .unwrap_err(),
+    ] {
+        assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
+    }
+    // A recording without segments has an empty transcript.
+    let recording = fx.recording(RecordingLinks::default());
+    assert!(fx.transcript(&recording).is_empty());
+    assert!(fx.sink.events().is_empty());
+}
+
+#[test]
+fn deleting_a_recording_deletes_its_segments() {
+    let fx = Fixture::new();
+    let doomed = fx.recording(RecordingLinks::default());
+    let kept = fx.recording(RecordingLinks::default());
+    fx.live(&doomed, segment(TranscriptChannel::Me, 0, "уйдёт"));
+    fx.refined(&doomed, vec![segment(TranscriptChannel::Me, 0, "уйдёт")]);
+    fx.live(&kept, segment(TranscriptChannel::Me, 0, "останется"));
+
+    let id = doomed.clone();
+    fx.write(move |db| Ok((recordings::delete(db, &id)?, Vec::new())))
+        .unwrap();
+
+    assert_eq!(fx.count("transcript_segments"), 1);
+    assert_eq!(texts(&fx.transcript(&kept)), vec!["останется"]);
+}
+
+#[test]
+fn a_channel_or_pass_outside_the_list_is_rejected() {
     let parsed: Result<SegmentInput, _> = serde_json::from_value(json!({
         "channel": "both", "startMs": 0, "endMs": 1, "text": "x"
     }));
     assert!(parsed.is_err(), "the command arguments don't deserialize");
 
     let fx = Fixture::new();
-    let project = fx.project("Телемедиа");
-    let call = fx.call(&project, &[]);
-    let error = fx
-        .write(move |db| {
-            db.execute(
-                "INSERT INTO transcript_segments
-                   (id, call_id, channel, start_ms, end_ms, text, created_at, updated_at)
-                 VALUES ('x', ?1, 'both', 0, 1, 'x', 0, 0)",
-                [&call.id],
-            )?;
-            Ok(((), Vec::new()))
-        })
-        .unwrap_err();
-    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+    let recording = fx.recording(RecordingLinks::default());
+    for (channel, pass) in [("both", "live"), ("me", "draft")] {
+        let id = recording.clone();
+        let error = fx
+            .write(move |db| {
+                db.execute(
+                    "INSERT INTO transcript_segments
+                       (id, recording_id, pass, channel, start_ms, end_ms, text, created_at, updated_at)
+                     VALUES ('x', ?1, ?2, ?3, 0, 1, 'x', 0, 0)",
+                    [&id, pass, channel],
+                )?;
+                Ok(((), Vec::new()))
+            })
+            .unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+    }
 }
 
 #[test]
 fn segment_times_are_validated() {
     let fx = Fixture::new();
-    let project = fx.project("Телемедиа");
-    let call = fx.call(&project, &[]);
+    let recording = fx.recording(RecordingLinks::default());
     let error = fx
         .write(move |db| {
-            transcript::append(
+            transcript::append_live(
                 db,
-                &call.id,
-                vec![SegmentInput {
+                &recording,
+                SegmentInput {
                     channel: TranscriptChannel::Me,
                     start_ms: 500,
                     end_ms: 100,
                     text: "назад".to_owned(),
-                }],
+                },
             )
         })
         .unwrap_err();
@@ -1065,6 +1247,10 @@ mod acl {
             ("main", "mic_activity_get"),
             ("widget", "mic_activity_get"),
             ("overlay", "mic_activity_get"),
+            // Every window can show the transcript of a recording.
+            ("main", "transcript_for_recording"),
+            ("widget", "transcript_for_recording"),
+            ("overlay", "transcript_for_recording"),
             // The widget starts a recording, the overlay stops it, every
             // window shows it.
             ("main", "recording_start"),
@@ -1120,6 +1306,7 @@ fn capabilities_match_the_command_list() {
         assert!(all.contains(command), "unknown command {command}");
     }
     for needed in [
+        "transcript_for_recording",
         "mic_activity_get",
         "recording_start",
         "recording_stop",

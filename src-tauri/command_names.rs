@@ -37,7 +37,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "questions_update",
     "questions_delete",
     "transcript_list",
-    "transcript_append",
+    "transcript_for_recording",
     "settings_get",
     "settings_update",
     "onboarding_complete",

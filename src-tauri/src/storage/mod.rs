@@ -18,6 +18,11 @@ pub mod recordings;
 pub mod settings;
 pub mod task_cards;
 pub mod topics;
+#[allow(
+    dead_code,
+    reason = "append_live / replace_refined are for the TranscriptSink and the Refiner \
+              (speech-recognition tasks 5.1–5.2)"
+)]
 pub mod transcript;
 
 use std::{
@@ -44,6 +49,9 @@ const BACKUPS_TO_KEEP: usize = 2;
 const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../migrations/0001_init.sql")),
     M::up(include_str!("../../migrations/0002_recordings.sql")),
+    M::up(include_str!(
+        "../../migrations/0003_transcript_by_recording.sql"
+    )),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
@@ -310,11 +318,45 @@ fn configure(connection: &Connection) -> Result<(), String> {
 }
 
 fn migrate(connection: &mut Connection, migrations: &Migrations) -> Result<(), String> {
+    let dropped = call_transcript_rows(connection);
     // All pending migrations run in one transaction: on failure the database
     // stays on its previous version.
     migrations
         .to_latest(connection)
-        .map_err(|error| format!("Не удалось обновить схему базы: {error}"))
+        .map_err(|error| format!("Не удалось обновить схему базы: {error}"))?;
+    if let Some(count) = dropped.filter(|_| !has_call_transcript(connection)) {
+        eprintln!(
+            "grill: migration 0003 dropped {count} transcript segment(s) without a recording"
+        );
+    }
+    Ok(())
+}
+
+/// Rows of the transcript of 0001 (keyed by call, no recording), which 0003
+/// drops; `None` when the table is not that one.
+fn call_transcript_rows(connection: &Connection) -> Option<i64> {
+    if !has_call_transcript(connection) {
+        return None;
+    }
+    connection
+        .query_row("SELECT count(*) FROM transcript_segments", [], |row| {
+            row.get(0)
+        })
+        .ok()
+}
+
+/// Whether `transcript_segments` exists without a `recording_id` column.
+fn has_call_transcript(connection: &Connection) -> bool {
+    let columns = |name: &str| -> i64 {
+        connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('transcript_segments') WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+    };
+    columns("call_id") == 1 && columns("recording_id") == 0
 }
 
 /// `grill.db.bak-v<version>` next to the database.
@@ -410,8 +452,12 @@ mod tests {
             let store = storage.recording_store().unwrap();
             storage
                 .read_now(|connection| {
-                    let crashed =
-                        recordings::create(connection, None, 1_000, |id| store.files(id))?;
+                    let crashed = recordings::create(
+                        connection,
+                        &recordings::RecordingLinks::default(),
+                        1_000,
+                        |id| store.files(id),
+                    )?;
                     drop(store.create(&crashed).unwrap());
                     let orphan = "0190d1a0-0000-7000-8000-00000000000f";
                     drop(store.create(orphan).unwrap());

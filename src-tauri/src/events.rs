@@ -14,7 +14,8 @@ pub enum Entity {
     Topic,
     TaskCard,
     Question,
-    /// A batch of transcript segments; `id` is the call id.
+    /// Transcript segments of a recording were written; `id` is the
+    /// recording id, `projectId` the recording's project (if any).
     Transcript,
     /// `id` is `"settings"`.
     Settings,

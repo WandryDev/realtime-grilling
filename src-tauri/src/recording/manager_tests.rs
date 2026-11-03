@@ -344,7 +344,7 @@ fn a_jump_of_the_host_clock_is_skipped_but_steps_are_not() {
 #[test]
 fn start_and_stop_write_a_row_and_both_files() {
     let fx = Fixture::new();
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     assert!(uuid::Uuid::parse_str(&id).is_ok_and(|uuid| uuid.get_version_num() == 7));
     assert!(fx.manager.is_recording());
     let status = fx.manager.status();
@@ -396,7 +396,7 @@ fn a_second_start_returns_the_same_id_and_opens_nothing() {
     let fx = Fixture::new();
     let starts: Vec<String> = thread::scope(|scope| {
         let handles: Vec<_> = (0..2)
-            .map(|_| scope.spawn(|| fx.manager.start(None).unwrap()))
+            .map(|_| scope.spawn(|| fx.manager.start(&RecordingLinks::default()).unwrap()))
             .collect();
         handles
             .into_iter()
@@ -404,14 +404,14 @@ fn a_second_start_returns_the_same_id_and_opens_nothing() {
             .collect()
     });
     assert_eq!(starts[0], starts[1], "two windows at once");
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     assert_eq!(id, starts[0]);
     assert_eq!(fx.rig.open_count(), 2, "microphone and system audio once");
     assert_eq!(fx.recording_ids(), std::slice::from_ref(&id));
     fx.manager.stop(&id).unwrap();
 
     // The next start is a new recording.
-    let next = fx.manager.start(None).unwrap();
+    let next = fx.manager.start(&RecordingLinks::default()).unwrap();
     assert_ne!(next, id);
     fx.manager.stop(&next).unwrap();
 }
@@ -419,7 +419,7 @@ fn a_second_start_returns_the_same_id_and_opens_nothing() {
 #[test]
 fn no_microphone_access_is_an_error_and_stores_nothing() {
     let fx = Fixture::with(|rig| rig.permit(PermissionKind::Microphone, PermissionState::Denied));
-    let error = fx.manager.start(None).unwrap_err();
+    let error = fx.manager.start(&RecordingLinks::default()).unwrap_err();
     assert!(
         matches!(
             error,
@@ -439,20 +439,20 @@ fn no_microphone_access_is_an_error_and_stores_nothing() {
     // Not asked yet is no access either: never prompts by itself.
     fx.rig
         .permit(PermissionKind::Microphone, PermissionState::NotDetermined);
-    assert!(fx.manager.start(None).is_err());
+    assert!(fx.manager.start(&RecordingLinks::default()).is_err());
 }
 
 #[test]
 fn a_microphone_that_does_not_open_stores_nothing() {
     let fx = Fixture::with(|rig| rig.mic_gone.store(true, Ordering::SeqCst));
-    assert!(fx.manager.start(None).is_err());
+    assert!(fx.manager.start(&RecordingLinks::default()).is_err());
     assert!(fx.recording_ids().is_empty());
 }
 
 #[test]
 fn without_system_audio_only_me_is_live() {
     let fx = Fixture::with(|rig| rig.permit(PermissionKind::SystemAudio, PermissionState::Denied));
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     assert_eq!(
         fx.manager.status().channels,
         RecordingChannels {
@@ -489,7 +489,7 @@ fn stop_of_an_unknown_recording_is_not_found_and_a_second_stop_does_nothing() {
         fx.manager.stop(missing),
         Err(CommandError::NotFound { .. })
     ));
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     assert!(matches!(
         fx.manager.stop(missing),
         Err(CommandError::NotFound { .. })
@@ -508,7 +508,9 @@ fn a_recording_of_a_call_and_of_an_unknown_call() {
     let fx = Fixture::new();
     let error = fx
         .manager
-        .start(Some("0190d1a0-0000-7000-8000-000000000009"))
+        .start(&RecordingLinks::call(
+            "0190d1a0-0000-7000-8000-000000000009",
+        ))
         .unwrap_err();
     assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
     assert!(fx.recording_ids().is_empty());
@@ -538,7 +540,7 @@ fn a_recording_of_a_call_and_of_an_unknown_call() {
             Ok(call)
         })
         .unwrap();
-    let id = fx.manager.start(Some(&call.id)).unwrap();
+    let id = fx.manager.start(&RecordingLinks::call(&call.id)).unwrap();
     assert_eq!(fx.recording(&id).call_id.as_deref(), Some(call.id.as_str()));
 
     // The call is deleted while recording: the stop removes the files too.
@@ -553,7 +555,7 @@ fn a_recording_of_a_call_and_of_an_unknown_call() {
 #[test]
 fn an_unplugged_microphone_reconnects_and_system_audio_has_no_gap() {
     let fx = Fixture::new();
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     thread::sleep(Duration::from_millis(300));
 
     fx.rig.unplug_mic();
@@ -602,7 +604,7 @@ fn an_unplugged_microphone_reconnects_and_system_audio_has_no_gap() {
 #[test]
 fn a_new_default_input_is_opened() {
     let fx = Fixture::new();
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     thread::sleep(Duration::from_millis(100));
     *fx.rig.default_input.lock().unwrap() = Some("airpods".to_owned());
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -626,7 +628,7 @@ fn a_default_input_switched_while_opening_is_noticed() {
     let fx = Fixture::with(|rig| {
         *rig.switch_on_open.lock().unwrap() = Some("airpods".to_owned());
     });
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while fx.rig.opened(AudioSource::Microphone) < 2 {
         assert!(Instant::now() < deadline, "the new default is never opened");
@@ -644,7 +646,7 @@ fn silent_system_audio_with_unknown_access_is_flagged() {
         rig.system_silent.store(true, Ordering::SeqCst);
         rig.playing.store(true, Ordering::SeqCst);
     });
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     assert_eq!(fx.manager.status().channels.others, ChannelState::Ok);
     fx.wait_for("silent", |status| {
         status.channels.others == ChannelState::SilentUnknownAccess
@@ -661,7 +663,7 @@ fn sound_with_unknown_access_is_fine() {
         rig.permit(PermissionKind::SystemAudio, PermissionState::Unknown);
         rig.playing.store(true, Ordering::SeqCst);
     });
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     thread::sleep(Duration::from_millis(500));
     assert!(
         fx.changes()
@@ -674,7 +676,7 @@ fn sound_with_unknown_access_is_fine() {
 #[test]
 fn stop_running_closes_the_files() {
     let fx = Fixture::new();
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     thread::sleep(Duration::from_millis(200));
     fx.manager.stop_running();
     assert!(!fx.manager.is_recording());
@@ -708,7 +710,7 @@ fn an_inference_error_while_recording_reports_segmentation_unavailable() {
             };
         },
     );
-    let id = fx.manager.start(None).unwrap();
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
     fx.wait_for("unavailable", |status| {
         status.segmentation == SegmentationStatus::Unavailable
     });
@@ -744,7 +746,7 @@ fn segmentation_is_ok_with_the_model() {
             crate::vad::worker::default_sink(),
         ),
     );
-    let id = manager.start(None).unwrap();
+    let id = manager.start(&RecordingLinks::default()).unwrap();
     assert_eq!(manager.status().segmentation, SegmentationStatus::Ok);
     thread::sleep(Duration::from_millis(100));
     manager.stop(&id).unwrap();

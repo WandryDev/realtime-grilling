@@ -61,7 +61,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::questions_update,
             commands::questions_delete,
             commands::transcript_list,
-            commands::transcript_append,
+            commands::transcript_for_recording,
             commands::settings_get,
             commands::settings_update,
             commands::onboarding_complete,
