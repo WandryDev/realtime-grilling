@@ -56,4 +56,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "audio_level_stop",
     "app_restart",
     "mic_activity_get",
+    "recording_start",
+    "recording_stop",
+    "recording_status",
 ];

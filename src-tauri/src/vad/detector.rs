@@ -79,6 +79,7 @@ pub fn pass_start(origin: u64, step_end: u64, pass_windows: usize) -> u64 {
 /// The worker's sliding detection replayed over a whole buffer: one pass of
 /// `pass_windows` per step of `STEP_WINDOWS`, the new windows kept. Returns
 /// one probability per complete window.
+#[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
 pub fn sliding_probabilities(
     vad: &mut SileroVad,
     samples: &[f32],

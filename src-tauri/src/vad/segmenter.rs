@@ -60,6 +60,7 @@ impl Span {
         self.end / SAMPLES_PER_MS
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
     pub fn len_ms(self) -> u64 {
         (self.end - self.start) / SAMPLES_PER_MS
     }

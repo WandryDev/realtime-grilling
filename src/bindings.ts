@@ -155,6 +155,23 @@ export const commands = {
 	 *  `MicActivityChanged` said: a window opened during a call sees "busy".
 	 */
 	micActivityGet: () => typedError<MicActivityChanged, CommandError>(__TAURI_INVOKE("mic_activity_get")),
+	/**
+	 *  Starts recording both channels and returns the recording's id (UUID v7).
+	 *  While a recording runs, returns its id and opens nothing. Without
+	 *  microphone access: `External` with `reason: noAccess`, nothing stored.
+	 *  Without system audio access the recording goes on with "Я" only.
+	 */
+	recordingStart: (input: RecordingStart) => typedError<string, CommandError>(__TAURI_INVOKE("recording_start", { input })),
+	/**
+	 *  Stops the recording `id`: the files are closed and the devices released.
+	 *  An already stopped recording stays as it is; an unknown id is `NotFound`.
+	 */
+	recordingStop: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("recording_stop", { id })),
+	/**
+	 *  The recording now, as the last `RecordingChanged` said: a window opened
+	 *  during a recording sees it at once.
+	 */
+	recordingStatus: () => typedError<RecordingStatus, CommandError>(__TAURI_INVOKE("recording_status")),
 };
 
 /** Events */
@@ -166,6 +183,8 @@ export const events = {
 	dataChanged: makeEvent<DataChanged, DataChanged>("data-changed"),
 	micActivityChanged: makeEvent<MicActivityChanged, MicActivityChanged>("mic-activity-changed"),
 	navigate: makeEvent<Navigate, Navigate>("navigate"),
+	recordingChanged: makeEvent<RecordingChanged, RecordingChanged>("recording-changed"),
+	recordingLevels: makeEvent<RecordingLevels, RecordingLevels>("recording-levels"),
 	shortcutPressed: makeEvent<ShortcutPressed, ShortcutPressed>("shortcut-pressed"),
 };
 
@@ -308,6 +327,23 @@ export type CaptureFailure =
 "busy";
 
 export type Change = "created" | "updated" | "deleted";
+
+/**  How a channel of the running recording captures. */
+export type ChannelState = "ok" | 
+/**  The OS denies the access: the channel's file is silence. */
+"noAccess" | 
+/**  There is no device to capture from; retried every 500 ms. */
+"noDevice" | 
+/**
+ *  The device broke or changed; the default one is being opened again
+ *  and the file gets silence meanwhile.
+ */
+"reconnecting" | 
+/**
+ *  System audio gives only zeros for seconds while another app plays
+ *  and the OS doesn't tell whether the access is there (macOS).
+ */
+"silentUnknownAccess";
 
 /**  Error of every command. The frontend narrows on `kind`. */
 export type CommandError = 
@@ -503,12 +539,60 @@ export type QuestionUpdate = {
 	cardId?: string | null,
 };
 
+/**
+ *  Sent to every window on every change of [`RecordingStatus`]: start,
+ *  stop, a channel's state.
+ */
+export type RecordingChanged = RecordingStatus;
+
+export type RecordingChannels = {
+	/**  The default input ("Я"). */
+	me: ChannelState,
+	/**  What the other apps play ("Остальные"). */
+	others: ChannelState,
+};
+
+/**
+ *  The level of both channels (0–1, the meters' dBFS scale), ~10 times a
+ *  second to the visible windows while recording. "Я" is after AEC.
+ */
+export type RecordingLevels = {
+	me: number,
+	others: number,
+};
+
+export type RecordingStart = {
+	/**  The call being recorded; a recording without a call is fine. */
+	callId?: string | null,
+};
+
+/**
+ *  The recording now. Without `id` nothing is recorded (the channels are
+ *  `ok` and segmentation `ok` then).
+ */
+export type RecordingStatus = {
+	id?: string | null,
+	/**  When the recording started, milliseconds since the Unix epoch. */
+	startedAt?: number | null,
+	channels: RecordingChannels,
+	/**  Whether phrases come out of both channels. */
+	segmentation: SegmentationStatus,
+};
+
 export type SegmentInput = {
 	channel: TranscriptChannel,
 	startMs: number,
 	endMs: number,
 	text: string,
 };
+
+/**  Whether phrases come out of a channel; part of the recording status. */
+export type SegmentationStatus = "ok" | 
+/**
+ *  The model did not load (or inference failed): recording goes on
+ *  without phrases.
+ */
+"unavailable";
 
 export type SettingsUpdateResult = {
 	/**  All preferences after the update, as `settings_get` returns them. */

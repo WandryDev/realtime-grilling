@@ -1065,6 +1065,17 @@ mod acl {
             ("main", "mic_activity_get"),
             ("widget", "mic_activity_get"),
             ("overlay", "mic_activity_get"),
+            // The widget starts a recording, the overlay stops it, every
+            // window shows it.
+            ("main", "recording_start"),
+            ("main", "recording_stop"),
+            ("main", "recording_status"),
+            ("widget", "recording_start"),
+            ("widget", "recording_stop"),
+            ("widget", "recording_status"),
+            ("overlay", "recording_start"),
+            ("overlay", "recording_stop"),
+            ("overlay", "recording_status"),
         ] {
             let result = invoke(label, command);
             assert!(!denied(&result), "{label} → {command}: {result:?}");
@@ -1107,6 +1118,17 @@ fn capabilities_match_the_command_list() {
     let floating = read("floating");
     for command in &floating {
         assert!(all.contains(command), "unknown command {command}");
+    }
+    for needed in [
+        "mic_activity_get",
+        "recording_start",
+        "recording_stop",
+        "recording_status",
+    ] {
+        assert!(
+            floating.iter().any(|command| command == needed),
+            "floating windows need {needed}"
+        );
     }
     for forbidden in [
         "projects_create",

@@ -27,6 +27,7 @@ use crate::{
     error::{CommandError, CommandResult},
     events::Navigate,
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
+    recording::{RecordingManager, status::RecordingStatus},
     shell::{self, SettingsLock, shortcuts::ShortcutError, windows},
     storage::{
         Storage,
@@ -830,4 +831,48 @@ pub async fn audio_level_stop(
 #[specta::specta]
 pub fn mic_activity_get(watch: State<'_, MicWatch>) -> CommandResult<MicActivityChanged> {
     Ok(watch.current())
+}
+
+/* Recording */
+
+#[derive(Debug, Clone, Default, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingStart {
+    /// The call being recorded; a recording without a call is fine.
+    #[specta(optional)]
+    pub call_id: Option<String>,
+}
+
+/// Starts recording both channels and returns the recording's id (UUID v7).
+/// While a recording runs, returns its id and opens nothing. Without
+/// microphone access: `External` with `reason: noAccess`, nothing stored.
+/// Without system audio access the recording goes on with "Я" only.
+#[tauri::command]
+#[specta::specta]
+pub async fn recording_start(
+    recorder: State<'_, RecordingManager>,
+    input: RecordingStart,
+) -> CommandResult<String> {
+    let recorder = recorder.inner().clone();
+    permissions::blocking(move || recorder.start(input.call_id.as_deref())).await?
+}
+
+/// Stops the recording `id`: the files are closed and the devices released.
+/// An already stopped recording stays as it is; an unknown id is `NotFound`.
+#[tauri::command]
+#[specta::specta]
+pub async fn recording_stop(
+    recorder: State<'_, RecordingManager>,
+    id: String,
+) -> CommandResult<()> {
+    let recorder = recorder.inner().clone();
+    permissions::blocking(move || recorder.stop(&id)).await?
+}
+
+/// The recording now, as the last `RecordingChanged` said: a window opened
+/// during a recording sees it at once.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_status(recorder: State<'_, RecordingManager>) -> CommandResult<RecordingStatus> {
+    Ok(recorder.status())
 }

@@ -166,7 +166,6 @@ impl MicWatch {
     }
 
     /// The seam for the recorder: "is a recording running" from now on.
-    #[allow(dead_code, reason = "the recorder (RecordingManager) will call it")]
     pub fn set_recording_probe(&self, probe: impl RecordingProbe) {
         *self
             .0

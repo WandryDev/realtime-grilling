@@ -178,10 +178,6 @@ impl Storage {
     /// The store of the recordings' files, shared with the recorder so a
     /// sweep never removes a recording being written. `None` without a data
     /// folder.
-    #[allow(
-        dead_code,
-        reason = "for the RecordingManager (audio-capture task 4.5)"
-    )]
     pub fn recording_store(&self) -> Option<Arc<LocalStore>> {
         self.recordings.clone()
     }

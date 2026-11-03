@@ -88,6 +88,10 @@ impl<W: ChannelSink> OggOpusWriter<W> {
     }
 
     /// Encoder delay at 48 kHz, as written in `OpusHead`.
+    #[allow(
+        dead_code,
+        reason = "the OpusHead value, for readers of the writer; nothing needs it yet"
+    )]
     pub fn pre_skip(&self) -> u16 {
         self.pre_skip
     }

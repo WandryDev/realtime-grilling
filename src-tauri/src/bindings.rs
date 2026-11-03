@@ -13,6 +13,7 @@ use crate::{
     audio::{AudioLevel, AudioLevelStopped, mic_watch::MicActivityChanged},
     commands,
     events::{CallSessionChanged, DataChanged, Navigate, ShortcutPressed},
+    recording::status::{RecordingChanged, RecordingLevels},
 };
 
 pub fn builder() -> Builder<tauri::Wry> {
@@ -79,6 +80,9 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::audio_level_stop,
             commands::app_restart,
             commands::mic_activity_get,
+            commands::recording_start,
+            commands::recording_stop,
+            commands::recording_status,
         ])
         .events(collect_events![
             AgentInstallProgress,
@@ -88,6 +92,8 @@ pub fn builder() -> Builder<tauri::Wry> {
             DataChanged,
             MicActivityChanged,
             Navigate,
+            RecordingChanged,
+            RecordingLevels,
             ShortcutPressed
         ])
 }

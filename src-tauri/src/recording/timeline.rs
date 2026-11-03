@@ -161,6 +161,7 @@ impl Timeline {
     }
 
     /// Where the next input sample goes, in 16 kHz samples from `t0`.
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
     pub fn cursor(&self) -> f64 {
         self.cursor
     }
