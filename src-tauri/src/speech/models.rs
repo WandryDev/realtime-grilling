@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_specta::Event;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use super::download::{self, Control, Source};
 use crate::error::{CommandError, CommandResult};
@@ -288,6 +288,8 @@ pub fn should_emit(
 struct Task {
     id: u64,
     control: watch::Sender<Control>,
+    /// Ends the wait for the next try after a broken connection.
+    retry: Arc<Notify>,
     /// `true` once the task is over.
     done: watch::Receiver<bool>,
 }
@@ -415,17 +417,32 @@ impl ModelManager {
     }
 
     /// Starts (or resumes) the download in the background. A model that is
-    /// ready or already downloading stays as it is.
+    /// ready or already downloading stays as it is; one waiting to retry
+    /// after a broken connection (`noNetwork`) retries at once.
     pub fn download(&self, id: ModelId) -> SpeechModel {
         let mut shared = self.0.lock();
         self.0.refresh(&mut shared, id);
         let slot = &shared.slots[&id];
+        if let (Some(task), ModelState::NoNetwork { percent, .. }) = (&slot.task, &slot.state) {
+            task.retry.notify_one();
+            let percent = *percent;
+            self.0.set_state(
+                &mut shared,
+                id,
+                ModelState::Downloading {
+                    percent,
+                    bytes_per_sec: 0,
+                },
+            );
+            return self.0.model(&shared, id);
+        }
         if slot.task.is_some() || slot.state == ModelState::Ready {
             return self.0.model(&shared, id);
         }
         let task_id = shared.next_task;
         shared.next_task += 1;
         let (control, control_rx) = watch::channel(Control::Run);
+        let retry = Arc::new(Notify::new());
         let (done_tx, done) = watch::channel(false);
         let source = (self.0.catalog)(id);
         let file = model_file(&self.0.dir, id);
@@ -437,6 +454,7 @@ impl ModelManager {
             slot.task = Some(Task {
                 id: task_id,
                 control,
+                retry: Arc::clone(&retry),
                 done,
             });
         }
@@ -470,7 +488,7 @@ impl ModelManager {
                 );
                 return;
             }
-            let end = download::run(&source, &file, &inner.config, control_rx, |state| {
+            let end = download::run(&source, &file, &inner.config, control_rx, &retry, |state| {
                 inner.report(id, task_id, state);
             })
             .await;
@@ -490,18 +508,35 @@ impl ModelManager {
     /// "Отменить": stops the download (or drops a paused one) and deletes
     /// the `.part`. A ready model stays.
     pub async fn cancel(&self, id: ModelId) -> CommandResult<SpeechModel> {
-        if !self.stop(id, Control::Cancel).await {
-            let file = model_file(&self.0.dir, id);
+        let file = model_file(&self.0.dir, id);
+        self.stop_and(id, |inner, shared| {
             remove_file(&download::part_path(&file)).map_err(|error| {
                 CommandError::storage(format!("Не удалось удалить недокачанный файл: {error}"))
             })?;
+            let state = detect(&inner.dir, id, (inner.catalog)(id).size);
+            inner.set_state(shared, id, state);
+            Ok(())
+        })
+        .await?;
+        Ok(self.get(id))
+    }
+
+    /// Stops the download of `id` (a cancel: the task deletes its `.part`),
+    /// then runs `idle` with no download running. Under the lock, so a
+    /// download started meanwhile is stopped first and none starts during
+    /// `idle`: deleting files never races a running download.
+    async fn stop_and(
+        &self,
+        id: ModelId,
+        idle: impl FnOnce(&Inner, &mut Shared) -> CommandResult<()>,
+    ) -> CommandResult<()> {
+        loop {
+            self.stop(id, Control::Cancel).await;
             let mut shared = self.0.lock();
             if shared.slots[&id].task.is_none() {
-                let state = detect(&self.0.dir, id, (self.0.catalog)(id).size);
-                self.0.set_state(&mut shared, id, state);
+                return idle(&self.0, &mut shared);
             }
         }
-        Ok(self.get(id))
     }
 
     /// "Удалить": stops a download and deletes the model's files. The
@@ -512,18 +547,18 @@ impl ModelManager {
                 "Нельзя удалить выбранную модель во время записи",
             ));
         }
-        self.stop(id, Control::Cancel).await;
         let file = model_file(&self.0.dir, id);
-        for path in [download::part_path(&file), file] {
-            remove_file(&path).map_err(|error| {
-                CommandError::storage(format!("Не удалось удалить модель: {error}"))
-            })?;
-        }
-        let mut shared = self.0.lock();
-        if shared.slots[&id].task.is_none() {
-            self.0.set_state(&mut shared, id, ModelState::NotDownloaded);
-        }
-        Ok(self.0.model(&shared, id))
+        self.stop_and(id, |inner, shared| {
+            for path in [download::part_path(&file), file] {
+                remove_file(&path).map_err(|error| {
+                    CommandError::storage(format!("Не удалось удалить модель: {error}"))
+                })?;
+            }
+            inner.set_state(shared, id, ModelState::NotDownloaded);
+            Ok(())
+        })
+        .await?;
+        Ok(self.get(id))
     }
 
     /// Whether `id` may become the selected model: it must be ready, and

@@ -4,8 +4,8 @@
 //! keeps up with the model.
 //!
 //! One warm-up phrase loads the model; then every phrase is submitted when
-//! the audio before it would have been spoken, as the VAD hands phrases
-//! over during a call. A phrase's latency is from its submission to its
+//! its own audio would have ended, as the VAD hands a phrase over at its
+//! end during a call. A phrase's latency is from its submission to its
 //! text, queueing included.
 
 use std::time::{Duration, Instant};
@@ -56,6 +56,15 @@ pub struct BenchmarkResult {
 }
 
 impl BenchmarkResult {
+    /// Whether the phrases were recognized (passed or failed on the
+    /// measures): not [`Self::not_run`].
+    pub fn ran(&self) -> bool {
+        !matches!(
+            self.reason,
+            Some(BenchmarkFailure::NoModel | BenchmarkFailure::ModelFailed)
+        )
+    }
+
     /// Nothing measured: the model is missing or broken.
     pub fn not_run(reason: BenchmarkFailure) -> Self {
         Self {
@@ -223,8 +232,8 @@ pub async fn run(
     let mut offset = Duration::ZERO;
     let mut tasks = JoinSet::new();
     for (index, phrase) in set.phrases.iter().enumerate() {
-        let at = start + offset.mul_f64(pace);
         offset += phrase.duration();
+        let at = start + offset.mul_f64(pace);
         let job = job(phrase, set);
         let recognizer = recognizer.clone();
         tasks.spawn(async move {

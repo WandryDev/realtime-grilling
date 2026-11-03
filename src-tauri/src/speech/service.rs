@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -36,7 +36,8 @@ const UNLOAD_WAIT: Duration = Duration::from_secs(5);
 struct Models {
     /// The selected model's file when it is installed.
     selected: Option<PathBuf>,
-    /// The model of the hardware check while it runs; wins over `selected`.
+    /// The model of the hardware check while it runs; wins over `selected`
+    /// until a recording interrupts the check.
     checking: Option<PathBuf>,
     /// What the recognizer was last told.
     applied: Option<Option<PathBuf>>,
@@ -47,6 +48,7 @@ struct Check {
     model: ModelId,
     window: String,
     cancel: watch::Sender<bool>,
+    interrupted: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -120,11 +122,13 @@ impl Speech {
         }
         let run = self.0.next_run.fetch_add(1, Ordering::SeqCst);
         let (cancel, cancelled) = watch::channel(false);
+        let interrupted = Arc::new(AtomicBool::new(false));
         *check = Some(Check {
             run,
             model,
             window: window.to_owned(),
             cancel,
+            interrupted: Arc::clone(&interrupted),
         });
         drop(check);
         if let Some(path) = path {
@@ -136,7 +140,25 @@ impl Speech {
             speech: self.clone(),
             run,
             cancelled,
+            interrupted,
         })
+    }
+
+    /// A recording starts: the hardware check, if one runs, is cancelled and
+    /// the recognizer goes back to the selected model at once, so the live
+    /// pass never runs on the check's model.
+    pub fn interrupt_check(&self) {
+        {
+            let check = lock(&self.0.check);
+            let Some(check) = check.as_ref() else {
+                return;
+            };
+            check.interrupted.store(true, Ordering::SeqCst);
+            let _ = check.cancel.send(true);
+        }
+        let mut models = lock(&self.0.models);
+        models.checking = None;
+        self.apply(&mut models);
     }
 
     /// Cancels the hardware check of `window` (any window: `None`) or of
@@ -163,6 +185,18 @@ pub struct CheckGuard {
     speech: Speech,
     run: u64,
     pub cancelled: watch::Receiver<bool>,
+    interrupted: Arc<AtomicBool>,
+}
+
+impl CheckGuard {
+    /// A recording started during the check (see [`Speech::interrupt_check`]).
+    pub fn interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::SeqCst)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
 }
 
 impl Drop for CheckGuard {
@@ -288,6 +322,34 @@ mod tests {
         speech.cancel_check(None, Some(ModelId::Small));
         assert!(*guard.cancelled.borrow());
 
+        drop(guard);
+        assert!(!speech.checking());
+        assert_eq!(
+            lock(&speech.0.models).applied,
+            Some(Some("turbo.bin".into()))
+        );
+    }
+
+    #[test]
+    fn a_recording_interrupts_the_check_and_gets_the_selected_model() {
+        let script = Script::saying("текст");
+        let speech = Speech::new(script.recognizer());
+        speech.set_selected_model(Some("turbo.bin".into()));
+        // Nothing runs: nothing happens.
+        speech.interrupt_check();
+        let guard = speech
+            .begin_check(ModelId::Small, Some("small.bin".into()), "onboarding")
+            .unwrap();
+        assert!(!guard.interrupted());
+
+        speech.interrupt_check();
+        assert!(guard.interrupted());
+        assert!(guard.is_cancelled());
+        // Before the check notices: the live pass already runs on turbo.
+        assert_eq!(
+            lock(&speech.0.models).applied,
+            Some(Some("turbo.bin".into()))
+        );
         drop(guard);
         assert!(!speech.checking());
         assert_eq!(

@@ -32,7 +32,8 @@ use crate::{
     speech::{
         benchmark::{self, BenchmarkFailure, BenchmarkResult, Thresholds},
         check, mic_check,
-        models::{ErrorReason, ModelId, ModelManager, SpeechModel},
+        models::{ErrorReason, ModelId, ModelManager, ModelState, SpeechModel},
+        refiner::Refiner,
         service::Speech,
     },
     storage::{
@@ -41,7 +42,7 @@ use crate::{
         people::{self, Person, PersonCreate, PersonUpdate},
         projects::{self, Project, ProjectCreate, ProjectUpdate},
         questions::{self, Question, QuestionCreate, QuestionUpdate},
-        recordings::RecordingLinks,
+        recordings::{self, RecordingLinks, TranscriptState},
         settings::{self, SettingsMap},
         task_cards::{self, TaskCard, TaskCardCreate, TaskCardUpdate},
         topics::{self, Topic, TopicCreate, TopicUpdate},
@@ -463,6 +464,21 @@ pub async fn transcript_for_recording(
         .await
 }
 
+/// Where the second pass over a recording is: `live` (not started yet),
+/// `refining`, `refined`, `failed`, or `skipped` (recorded before speech
+/// recognition). A window that comes late to a pass reads it here first.
+/// `NotFound` for an unknown recording.
+#[tauri::command]
+#[specta::specta]
+pub async fn transcript_state(
+    storage: State<'_, Storage>,
+    recording_id: String,
+) -> CommandResult<TranscriptState> {
+    storage
+        .read(move |db| Ok(recordings::get(db, &recording_id)?.transcript_state))
+        .await
+}
+
 /* Settings */
 
 /// Stored preferences over the defaults of the keys Rust acts on
@@ -618,7 +634,8 @@ pub fn windows_show(
 
 /// "Повторить" on the storage error screen: opens and migrates the database
 /// again if it failed at start. `Storage` with the reason when it still
-/// fails. On success its settings take effect as at a normal start.
+/// fails. On success its settings take effect as at a normal start, and the
+/// recordings a previous run left unrefined are queued for the second pass.
 #[tauri::command]
 #[specta::specta]
 pub async fn storage_reopen(
@@ -626,6 +643,7 @@ pub async fn storage_reopen(
     storage: State<'_, Storage>,
     lock: State<'_, SettingsLock>,
     models: State<'_, ModelManager>,
+    refiner: State<'_, Refiner>,
 ) -> CommandResult<()> {
     let _one_at_a_time = lock.0.lock().await;
     if storage.error().is_none() {
@@ -634,6 +652,7 @@ pub async fn storage_reopen(
     storage.reopen().await?;
     let settings = storage.read(settings::get).await?;
     models.set_selected(settings::speech_model(&settings));
+    refiner.queue_unrefined().await;
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || shell::storage_opened(&handle, &settings))
         .await
@@ -890,17 +909,27 @@ impl From<RecordingStart> for RecordingLinks {
 /// microphone access: `External` with `reason: noAccess`, nothing stored.
 /// Without system audio access the recording goes on with "Я" only.
 ///
-/// Unknown call, project or person: `NotFound`. A participant of another
-/// project, participants without a project, or a project other than the
-/// call's: `Invalid`.
+/// Unknown call: `NotFound`. The project and the people only feed the
+/// glossary: a deleted project or person, a participant of another project,
+/// participants without a project, or a project other than the call's (the
+/// call's wins) are dropped and the recording starts.
+///
+/// A running hardware check is interrupted (its window gets `Invalid`,
+/// nothing is stored): the live pass needs the recognizer and the selected
+/// model.
 #[tauri::command]
 #[specta::specta]
 pub async fn recording_start(
     recorder: State<'_, RecordingManager>,
+    speech: State<'_, Speech>,
     input: RecordingStart,
 ) -> CommandResult<String> {
+    speech.interrupt_check();
     let recorder = recorder.inner().clone();
-    permissions::blocking(move || recorder.start(&input.into())).await?
+    let started = permissions::blocking(move || recorder.start(&input.into())).await?;
+    // A check that began while the devices opened.
+    speech.interrupt_check();
+    started
 }
 
 /// Stops the recording `id`: the files are closed and the devices released.
@@ -938,15 +967,23 @@ pub async fn speech_models_list(
 /// "Скачать" / "Продолжить": starts the download in the background, or
 /// resumes it from the `.part`, and returns the model at once; progress
 /// comes in `SpeechModelChanged`. A ready or downloading model stays as it
-/// is. Without room for the rest of the file plus 10 % of the model the
-/// model becomes `noSpace` and nothing is downloaded.
+/// is, except one waiting to retry after a broken connection: it retries
+/// at once. Without room for the rest of the file plus 10 % of the model the
+/// model becomes `noSpace` and nothing is downloaded. A new file forgets the
+/// stored hardware check of the model.
 #[tauri::command]
 #[specta::specta]
 pub async fn speech_model_download(
+    app: AppHandle,
     models: State<'_, ModelManager>,
     id: ModelId,
 ) -> CommandResult<SpeechModel> {
-    Ok(models.download(id))
+    let was_ready = models.get(id).state == ModelState::Ready;
+    let model = models.download(id);
+    if !was_ready {
+        forget_benchmark(&app, id).await?;
+    }
+    Ok(model)
 }
 
 /// "Пауза": stops the download and keeps what is downloaded. Resolves once
@@ -972,11 +1009,13 @@ pub async fn speech_model_cancel(
 }
 
 /// "Удалить": deletes the model's files (a download in progress stops, a
-/// hardware check of it is cancelled, the recognizer lets go of it first).
-/// The selected model can't be removed while recording: `Invalid`.
+/// hardware check of it is cancelled, the recognizer lets go of it first)
+/// and its stored hardware check. The selected model can't be removed while
+/// recording: `Invalid`.
 #[tauri::command]
 #[specta::specta]
 pub async fn speech_model_remove(
+    app: AppHandle,
     models: State<'_, ModelManager>,
     recorder: State<'_, RecordingManager>,
     speech: State<'_, Speech>,
@@ -992,7 +1031,9 @@ pub async fn speech_model_remove(
     // A failed removal leaves the model installed: the recognizer gets it
     // back.
     speech.set_selected_model(models.selected_path());
-    removed
+    let removed = removed?;
+    forget_benchmark(&app, id).await?;
+    Ok(removed)
 }
 
 /// Recognize with this model: stores `speechModel` (`DataChanged` of the
@@ -1026,9 +1067,11 @@ pub async fn speech_model_select(
 /// The hardware check of an installed model (speech-recognition design.md
 /// decision 14): the bundled phrases at the pace of a call. The result is
 /// also stored in `speechBenchmark[model]` with `checkedAt` (`DataChanged`
-/// of the settings); a model that is not installed is `noModel` and nothing
-/// is stored. One check at a time, never while recording (`Invalid`).
-/// `speech_benchmark_cancel` or closing the window ends it with `Invalid`.
+/// of the settings); a model that is not installed is `noModel`, one that
+/// does not load `modelFailed`, and nothing is stored for them. One check at
+/// a time, never while recording (`Invalid`). `speech_benchmark_cancel`,
+/// closing the window or a recording starting ends it with `Invalid` and
+/// nothing stored.
 #[tauri::command]
 #[specta::specta]
 pub async fn speech_benchmark(
@@ -1052,6 +1095,10 @@ pub async fn speech_benchmark(
         .await?
         .map_err(|error| CommandError::storage(error.to_string()))?;
     let guard = speech.begin_check(model, Some(path), window.label())?;
+    if recorder.is_recording() {
+        // A recording started meanwhile; it may have missed this check.
+        speech.interrupt_check();
+    }
     let outcome = benchmark::run(
         &speech.recognizer(),
         &set,
@@ -1060,12 +1107,21 @@ pub async fn speech_benchmark(
         guard.cancelled.clone(),
     )
     .await;
+    let (interrupted, cancelled) = (guard.interrupted(), guard.is_cancelled());
     drop(guard);
-    let Ok(result) = outcome else {
-        return Err(CommandError::invalid("Проверка отменена"));
+    if interrupted {
+        return Err(CommandError::invalid("Проверка прервана: началась запись"));
+    }
+    let result = match outcome {
+        Ok(result) if !cancelled => result,
+        _ => return Err(CommandError::invalid("Проверка отменена")),
     };
     if result.reason == Some(BenchmarkFailure::ModelFailed) {
         models.set_error(model, ErrorReason::Load, "Модель не загрузилась");
+    }
+    if !result.ran() {
+        // Nothing measured: the next look at the model checks it again.
+        return Ok(result);
     }
     let mut entry = serde_json::to_value(result)?;
     entry["checkedAt"] = Value::from(crate::storage::now_ms());
@@ -1083,6 +1139,28 @@ pub async fn speech_benchmark(
         })
         .await?;
     Ok(result)
+}
+
+/// Forgets the hardware check of `model` (`speechBenchmark[model]`): its file
+/// was removed or is downloaded again. Writes only when there is one.
+async fn forget_benchmark(app: &AppHandle, model: ModelId) -> CommandResult<()> {
+    let lock = app.state::<SettingsLock>();
+    let _one_at_a_time = lock.0.lock().await;
+    app.state::<Storage>()
+        .write(app, move |db| {
+            let Some(Value::Object(mut checks)) =
+                settings::get(db)?.remove(settings::SPEECH_BENCHMARK)
+            else {
+                return Ok(((), Vec::new()));
+            };
+            if checks.remove(model.as_str()).is_none() {
+                return Ok(((), Vec::new()));
+            }
+            let patch =
+                SettingsMap::from([(settings::SPEECH_BENCHMARK.to_owned(), Value::Object(checks))]);
+            Ok(((), settings::put(db, &patch)?))
+        })
+        .await
 }
 
 /// Cancels the calling window's hardware check; nothing when none runs.

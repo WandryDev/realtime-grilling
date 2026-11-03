@@ -79,6 +79,7 @@ const { WelcomePage } = await import(
   "@/features/onboarding/pages/welcome-page"
 );
 const { SpeechPage } = await import("@/features/onboarding/pages/speech-page");
+const { refreshSettings } = await import("@/data/settings");
 
 const LOGIN_URL = "https://claude.ai/oauth/authorize?code=true";
 const INSTALL_LOG_LINE = /Could not resolve host/u;
@@ -563,6 +564,11 @@ describe("SpeechPage in Tauri", () => {
     answer("speech_mic_check", "");
   });
 
+  afterEach(async () => {
+    fake.db.settings = { onboardingCompleted: true };
+    await act(() => refreshSettings());
+  });
+
   it("follows the download through its states to a checked, ready model", async () => {
     showsModels(NOT_DOWNLOADED);
     answer(
@@ -659,6 +665,65 @@ describe("SpeechPage in Tauri", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Повторить сейчас" }));
     await waitFor(() => expect(calls("speech_model_download")).toHaveLength(1));
+  });
+
+  it("shows the backend's answer to «Повторить сейчас», also the same state", async () => {
+    const offline: ModelState = {
+      percent: 60,
+      retryInSec: 20,
+      status: "noNetwork",
+    };
+    showsModels(offline);
+    // Still waiting: Rust answers with the state the step already had.
+    answer("speech_model_download", model("turbo", offline));
+    render(<SpeechPage />);
+    expect(await screen.findByText("Загрузка прервалась на 60%")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Повторить сейчас" }));
+    await waitFor(() => expect(calls("speech_model_download")).toHaveLength(1));
+    // Not stuck on the optimistic "downloading".
+    expect(await screen.findByText("Загрузка прервалась на 60%")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Повторить сейчас" })
+    ).toBeTruthy();
+  });
+
+  it("checks a ready model again when the stored check did not run", async () => {
+    fake.db.settings = {
+      onboardingCompleted: false,
+      speechBenchmark: {
+        turbo: {
+          checkedAt: 1,
+          p95Ms: 0,
+          passed: false,
+          reason: "modelFailed",
+          rtf: 0,
+          wer: 0,
+        },
+      },
+    };
+    await act(() => refreshSettings());
+    showsModels(MODEL_READY);
+    answer("speech_benchmark", PASSED);
+    render(<SpeechPage />);
+
+    expect(await screen.findByText("Модель готова")).toBeTruthy();
+    expect(calls("speech_benchmark")).toEqual([
+      { args: { model: "turbo" }, command: "speech_benchmark" },
+    ]);
+  });
+
+  it("takes a check that ran from the settings without running it again", async () => {
+    fake.db.settings = {
+      onboardingCompleted: false,
+      speechBenchmark: { turbo: { ...PASSED, checkedAt: 1 } },
+    };
+    await act(() => refreshSettings());
+    showsModels(MODEL_READY);
+    render(<SpeechPage />);
+
+    expect(await screen.findByText("Модель готова")).toBeTruthy();
+    expect(calls("speech_benchmark")).toEqual([]);
   });
 
   it("offers the small model when turbo is too slow, then checks it", async () => {

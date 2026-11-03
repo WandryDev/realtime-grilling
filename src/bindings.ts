@@ -59,6 +59,13 @@ export const commands = {
 	 */
 	transcriptForRecording: (recordingId: string) => typedError<TranscriptSegment[], CommandError>(__TAURI_INVOKE("transcript_for_recording", { recordingId })),
 	/**
+	 *  Where the second pass over a recording is: `live` (not started yet),
+	 *  `refining`, `refined`, `failed`, or `skipped` (recorded before speech
+	 *  recognition). A window that comes late to a pass reads it here first.
+	 *  `NotFound` for an unknown recording.
+	 */
+	transcriptState: (recordingId: string) => typedError<TranscriptState, CommandError>(__TAURI_INVOKE("transcript_state", { recordingId })),
+	/**
 	 *  Stored preferences over the defaults of the keys Rust acts on
 	 *  (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`,
 	 *  `micBusyBehavior`).
@@ -90,7 +97,8 @@ export const commands = {
 	/**
 	 *  "Повторить" on the storage error screen: opens and migrates the database
 	 *  again if it failed at start. `Storage` with the reason when it still
-	 *  fails. On success its settings take effect as at a normal start.
+	 *  fails. On success its settings take effect as at a normal start, and the
+	 *  recordings a previous run left unrefined are queued for the second pass.
 	 */
 	storageReopen: () => typedError<null, CommandError>(__TAURI_INVOKE("storage_reopen")),
 	/**  The microphone and system audio access, without any prompt. */
@@ -168,9 +176,14 @@ export const commands = {
 	 *  microphone access: `External` with `reason: noAccess`, nothing stored.
 	 *  Without system audio access the recording goes on with "Я" only.
 	 * 
-	 *  Unknown call, project or person: `NotFound`. A participant of another
-	 *  project, participants without a project, or a project other than the
-	 *  call's: `Invalid`.
+	 *  Unknown call: `NotFound`. The project and the people only feed the
+	 *  glossary: a deleted project or person, a participant of another project,
+	 *  participants without a project, or a project other than the call's (the
+	 *  call's wins) are dropped and the recording starts.
+	 * 
+	 *  A running hardware check is interrupted (its window gets `Invalid`,
+	 *  nothing is stored): the live pass needs the recognizer and the selected
+	 *  model.
 	 */
 	recordingStart: (input: RecordingStart) => typedError<string, CommandError>(__TAURI_INVOKE("recording_start", { input })),
 	/**
@@ -192,8 +205,10 @@ export const commands = {
 	 *  "Скачать" / "Продолжить": starts the download in the background, or
 	 *  resumes it from the `.part`, and returns the model at once; progress
 	 *  comes in `SpeechModelChanged`. A ready or downloading model stays as it
-	 *  is. Without room for the rest of the file plus 10 % of the model the
-	 *  model becomes `noSpace` and nothing is downloaded.
+	 *  is, except one waiting to retry after a broken connection: it retries
+	 *  at once. Without room for the rest of the file plus 10 % of the model the
+	 *  model becomes `noSpace` and nothing is downloaded. A new file forgets the
+	 *  stored hardware check of the model.
 	 */
 	speechModelDownload: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_download", { id })),
 	/**
@@ -208,8 +223,9 @@ export const commands = {
 	speechModelCancel: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_cancel", { id })),
 	/**
 	 *  "Удалить": deletes the model's files (a download in progress stops, a
-	 *  hardware check of it is cancelled, the recognizer lets go of it first).
-	 *  The selected model can't be removed while recording: `Invalid`.
+	 *  hardware check of it is cancelled, the recognizer lets go of it first)
+	 *  and its stored hardware check. The selected model can't be removed while
+	 *  recording: `Invalid`.
 	 */
 	speechModelRemove: (id: ModelId) => typedError<SpeechModel, CommandError>(__TAURI_INVOKE("speech_model_remove", { id })),
 	/**
@@ -222,9 +238,11 @@ export const commands = {
 	 *  The hardware check of an installed model (speech-recognition design.md
 	 *  decision 14): the bundled phrases at the pace of a call. The result is
 	 *  also stored in `speechBenchmark[model]` with `checkedAt` (`DataChanged`
-	 *  of the settings); a model that is not installed is `noModel` and nothing
-	 *  is stored. One check at a time, never while recording (`Invalid`).
-	 *  `speech_benchmark_cancel` or closing the window ends it with `Invalid`.
+	 *  of the settings); a model that is not installed is `noModel`, one that
+	 *  does not load `modelFailed`, and nothing is stored for them. One check at
+	 *  a time, never while recording (`Invalid`). `speech_benchmark_cancel`,
+	 *  closing the window or a recording starting ends it with `Invalid` and
+	 *  nothing stored.
 	 */
 	speechBenchmark: (model: ModelId) => typedError<BenchmarkResult, CommandError>(__TAURI_INVOKE("speech_benchmark", { model })),
 	/**  Cancels the calling window's hardware check; nothing when none runs. */
@@ -939,6 +957,20 @@ export type TranscriptSkipped = {
 	startMs: number,
 	endMs: number,
 };
+
+/**
+ *  Where the second pass over a recording is (speech-recognition design.md,
+ *  decision 12).
+ */
+export type TranscriptState = 
+/**  Only the live pass, the second has not started. */
+"live" | 
+/**  The second pass runs (or ran when the app stopped). */
+"refining" | 
+/**  The refined segments are stored. */
+"refined" | "failed" | 
+/**  Recorded before speech recognition (migration 0003): never refined. */
+"skipped";
 
 export type TranscriptionState = "ok" | 
 /**  The selected model is not installed: recording goes on without text. */

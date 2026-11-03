@@ -4,7 +4,12 @@ import { RecordingBackend } from "@/features/recording/backend";
 import { SpeechBackend } from "@/features/speech/backend";
 
 import { CALL_SCRIPT, type FeedStep } from "./feed-script";
-import { transcriptFeedEvents } from "./transcript-feed";
+import {
+  abandonedPhrases,
+  type PendingPhrase,
+  trackPending,
+  transcriptFeedEvents,
+} from "./transcript-feed";
 import type { CallFeedEvent } from "./types";
 
 /*
@@ -119,21 +124,44 @@ export class CallBackend extends Context.Service<
 
       // The recording running now: what is stored, then its events. A new
       // recording ("Отменить завершение") takes over; a stopped one keeps
-      // its last phrases coming until the next starts.
-      const transcript = recorder.watchStatus.pipe(
-        Stream.map((status) => status.id),
-        Stream.filter((id): id is string => id !== null),
-        Stream.changes,
-        Stream.switchMap((recordingId) =>
-          speech.transcriptFeed(recordingId).pipe(
-            Stream.map(
-              (event): FeedUpdate => ({
-                events: transcriptFeedEvents(recordingId, event),
+      // its last phrases coming until the next starts. Its phrases still
+      // "расшифровываю" then become "пропущено": their text won't come here.
+      const transcript = Stream.suspend(() => {
+        let followed: {
+          pending: Map<string, PendingPhrase>;
+          recordingId: string;
+        } | null = null;
+        const follow = (recordingId: string) =>
+          Stream.suspend(() => {
+            const left = followed;
+            const mine = {
+              pending: new Map<string, PendingPhrase>(),
+              recordingId,
+            };
+            followed = mine;
+            const feed = speech.transcriptFeed(recordingId).pipe(
+              Stream.map((event): FeedUpdate => {
+                if (followed === mine) {
+                  trackPending(mine.pending, recordingId, event);
+                }
+                return { events: transcriptFeedEvents(recordingId, event) };
               })
-            )
-          )
-        )
-      );
+            );
+            if (!left || left.pending.size === 0) {
+              return feed;
+            }
+            const abandoned: FeedUpdate = {
+              events: abandonedPhrases(left.recordingId, left.pending.values()),
+            };
+            return Stream.concat(Stream.succeed(abandoned), feed);
+          });
+        return recorder.watchStatus.pipe(
+          Stream.map((status) => status.id),
+          Stream.filter((id): id is string => id !== null),
+          Stream.changes,
+          Stream.switchMap(follow)
+        );
+      });
 
       const live = Stream.merge(transcription, transcript).pipe(
         // A failed read or listen leaves the feed to the script.

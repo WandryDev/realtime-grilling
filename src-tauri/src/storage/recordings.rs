@@ -53,7 +53,8 @@ impl RecordingState {
 
 /// Where the second pass over a recording is (speech-recognition design.md,
 /// decision 12).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub enum TranscriptState {
     /// Only the live pass, the second has not started.
     Live,
@@ -62,6 +63,8 @@ pub enum TranscriptState {
     /// The refined segments are stored.
     Refined,
     Failed,
+    /// Recorded before speech recognition (migration 0003): never refined.
+    Skipped,
 }
 
 impl TranscriptState {
@@ -71,6 +74,7 @@ impl TranscriptState {
             Self::Refining => "refining",
             Self::Refined => "refined",
             Self::Failed => "failed",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -80,6 +84,7 @@ impl TranscriptState {
             "refining" => Ok(Self::Refining),
             "refined" => Ok(Self::Refined),
             "failed" => Ok(Self::Failed),
+            "skipped" => Ok(Self::Skipped),
             other => Err(rusqlite::Error::FromSqlConversionFailure(
                 11,
                 rusqlite::types::Type::Text,
@@ -172,9 +177,11 @@ pub(super) fn not_found(id: &str) -> CommandError {
 /// `files` names the channel files for that id (see
 /// [`RecordingStore::files`]).
 ///
-/// `NotFound` when the call, the project or a participant doesn't exist;
-/// `Invalid` when the project is not the call's, a participant is not of
-/// the project, or there are participants without a project. A participant
+/// `NotFound` when the call doesn't exist. The project and the
+/// participants only feed the glossary, which is best-effort: a project or
+/// person deleted meanwhile, a project other than the call's (the call's
+/// wins), a participant of another project or participants without a
+/// project are dropped and logged, and the recording starts. A participant
 /// given twice is stored once.
 ///
 /// Insert the row before creating the files: a sweep deletes every folder
@@ -209,38 +216,51 @@ pub fn create(
     Ok(id)
 }
 
-/// The project (given or the call's) and the participants without repeats.
+/// The project (given or the call's) and the participants without repeats;
+/// links that don't fit are dropped (see [`create`]).
 fn checked_links(
     connection: &Connection,
     links: &RecordingLinks,
 ) -> CommandResult<(Option<String>, Vec<String>)> {
-    if let Some(project_id) = &links.project_id {
-        projects::exists(connection, project_id)?;
-    }
     let call_project = match &links.call_id {
         Some(call_id) => Some(calls::project_of(connection, call_id)?),
         None => None,
     };
-    let project_id = match (&links.project_id, call_project) {
-        (Some(given), Some(of_call)) if *given != of_call => {
-            return Err(CommandError::invalid("Звонок записи из другого проекта"));
+    let given = match &links.project_id {
+        Some(project_id) => match projects::exists(connection, project_id) {
+            Ok(()) => Some(project_id.clone()),
+            Err(CommandError::NotFound { .. }) => {
+                eprintln!("grill: recording without the unknown project {project_id}");
+                None
+            }
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    let project_id = match (given, call_project) {
+        (Some(given), Some(of_call)) if given != of_call => {
+            eprintln!("grill: recording of a call of {of_call}, not of the project {given}");
+            Some(of_call)
         }
-        (Some(given), _) => Some(given.clone()),
-        (None, of_call) => of_call,
+        (given, of_call) => given.or(of_call),
     };
     let mut participant_ids: Vec<String> = Vec::with_capacity(links.participant_ids.len());
     for person_id in &links.participant_ids {
         let Some(project_id) = &project_id else {
-            return Err(CommandError::invalid(
-                "Участники записи указываются вместе с проектом",
-            ));
+            eprintln!("grill: recording without project: participants dropped");
+            break;
         };
-        let person = people::get(connection, person_id)?;
+        let person = match people::get(connection, person_id) {
+            Ok(person) => person,
+            Err(CommandError::NotFound { .. }) => {
+                eprintln!("grill: recording without the unknown participant {person_id}");
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if person.project_id != *project_id {
-            return Err(CommandError::invalid(format!(
-                "{} из другого проекта и не может быть участником этой записи",
-                person.name
-            )));
+            eprintln!("grill: recording without {person_id}, a person of another project");
+            continue;
         }
         if !participant_ids.contains(person_id) {
             participant_ids.push(person_id.clone());
@@ -476,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_links_that_dont_fit() {
+    fn links_that_dont_fit_are_dropped_and_the_recording_starts() {
         let connection = open_in_memory().unwrap();
         let acme = project(&connection, "Acme");
         let globex = project(&connection, "Globex");
@@ -485,37 +505,34 @@ mod tests {
         let globex_call = call(&connection, &globex);
         let missing = "0190d1a0-0000-7000-8000-000000000000";
 
-        let not_found = [links(Some(missing), &[]), links(Some(&acme), &[missing])];
-        for links in not_found {
-            let error = create(&connection, &links, 0, files).unwrap_err();
-            assert!(
-                matches!(error, CommandError::NotFound { .. }),
-                "{links:?}: {error:?}"
-            );
-        }
-        let invalid = [
-            // A person of another project.
-            links(Some(&acme), &[&olga, &marina]),
-            // People without a project.
-            links(None, &[&olga]),
-            // A project other than the call's.
-            RecordingLinks {
+        let stored = |links: RecordingLinks| {
+            let id = create(&connection, &links, 0, files).unwrap();
+            let recording = get(&connection, &id).unwrap();
+            (recording.project_id, recording.participant_ids)
+        };
+        // A project deleted meanwhile, and its people with it.
+        assert_eq!(stored(links(Some(missing), &[missing])), (None, Vec::new()));
+        // A person deleted meanwhile, a person of another project.
+        assert_eq!(
+            stored(links(Some(&acme), &[missing, &olga, &marina])),
+            (Some(acme.clone()), vec![olga.clone()])
+        );
+        // People without a project.
+        assert_eq!(stored(links(None, &[&olga])), (None, Vec::new()));
+        // A project other than the call's: the call's wins.
+        assert_eq!(
+            stored(RecordingLinks {
                 project_id: Some(acme.clone()),
+                participant_ids: vec![olga.clone(), marina.clone()],
                 ..RecordingLinks::call(&globex_call)
-            },
-            RecordingLinks {
-                participant_ids: vec![olga.clone()],
-                ..RecordingLinks::call(&globex_call)
-            },
-        ];
-        for links in invalid {
-            let error = create(&connection, &links, 0, files).unwrap_err();
-            assert!(
-                matches!(error, CommandError::Invalid { .. }),
-                "{links:?}: {error:?}"
-            );
-        }
-        assert!(list_ids(&connection).unwrap().is_empty(), "nothing stored");
+            }),
+            (Some(globex.clone()), vec![marina.clone()])
+        );
+
+        // The call itself is still checked.
+        let error = create(&connection, &RecordingLinks::call(missing), 0, files).unwrap_err();
+        assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
+        assert_eq!(list_ids(&connection).unwrap().len(), 4);
     }
 
     #[test]
@@ -728,7 +745,11 @@ mod tests {
             "from the call"
         );
         assert!(recording.participant_ids.is_empty());
-        assert_eq!(recording.transcript_state, TranscriptState::Live);
+        assert_eq!(
+            recording.transcript_state,
+            TranscriptState::Skipped,
+            "recorded before speech recognition: no second pass"
+        );
         assert_eq!(recording.status, RecordingState::Finished);
         let loose = get(&connection, &loose).unwrap();
         assert_eq!(loose.project_id, None);

@@ -33,10 +33,15 @@ ALTER TABLE recordings
 ALTER TABLE recordings
   ADD COLUMN participant_ids TEXT NOT NULL DEFAULT '[]'
     CHECK (json_valid(participant_ids) AND json_type(participant_ids) = 'array');
--- Where the second pass is: `live` (not started), `refining`, `refined`, `failed`.
+-- Where the second pass is: `live` (not started), `refining`, `refined`,
+-- `failed`, or `skipped`: recorded before speech recognition, never refined.
 ALTER TABLE recordings
   ADD COLUMN transcript_state TEXT NOT NULL DEFAULT 'live'
-    CHECK (transcript_state IN ('live', 'refining', 'refined', 'failed'));
+    CHECK (transcript_state IN ('live', 'refining', 'refined', 'failed', 'skipped'));
+
+-- The recordings so far have no live pass to refine: queueing hours of them
+-- would hold up the second pass of every new call.
+UPDATE recordings SET transcript_state = 'skipped';
 
 -- A recording of a call belongs to the call's project.
 UPDATE recordings

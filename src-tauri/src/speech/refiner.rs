@@ -3,14 +3,21 @@
 //! and every phrase is recognized with beam search and the full glossary.
 //! The segments are stored at once as the refined pass.
 //!
-//! One background task works through a queue of recordings. It waits
-//! between phrases while a recording (or the hardware check) runs, and it
-//! starts a recording over after a restart: nothing refined is kept until
-//! the end. `recordings.transcript_state` says where each recording is.
+//! One background task works through a queue of recordings, the most
+//! recent first: a call that just ended does not wait behind older ones. It
+//! waits between phrases while a recording (or the hardware check) runs,
+//! and it starts a recording over after a restart: nothing refined is kept
+//! until the end. `recordings.transcript_state` says where each recording
+//! is.
+//!
+//! One channel is in memory at a time (2 h of audio is ~460 MB of
+//! samples); a phrase's samples are copied only when it goes to the
+//! recognizer.
 
 use std::{
     collections::VecDeque,
-    path::Path,
+    future::Future,
+    ops::Range,
     sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
     time::{Duration, Instant},
 };
@@ -42,6 +49,10 @@ use crate::{
 pub struct RefinerConfig {
     /// At most one progress event this often.
     pub progress_every: Duration,
+    /// At least one progress event this often while the pass runs, also
+    /// while a long file decodes or a phrase waits for the recognizer: the
+    /// windows tell a slow pass from a stalled one.
+    pub heartbeat: Duration,
     /// How often a paused second pass looks again.
     pub pause_poll: Duration,
     /// Without a working model, how long until the queue is tried again.
@@ -52,6 +63,7 @@ impl Default for RefinerConfig {
     fn default() -> Self {
         Self {
             progress_every: Duration::from_secs(1),
+            heartbeat: Duration::from_secs(5),
             pause_poll: Duration::from_millis(500),
             retry_after: Duration::from_secs(30),
         }
@@ -86,7 +98,7 @@ pub struct Refiner(Arc<Inner>);
 
 impl Refiner {
     /// Starts the task. It first queues the recordings a previous run left
-    /// unrefined (stopped, `live` or `refining`, with files).
+    /// unrefined (see [`Self::queue_unrefined`]).
     pub fn start(host: Arc<dyn SpeechHost>, recognizer: Recognizer, config: RefinerConfig) -> Self {
         let wake = Arc::new(Notify::new());
         let inner = Arc::new(Inner {
@@ -100,16 +112,34 @@ impl Refiner {
         Self(inner)
     }
 
-    /// Queues a stopped recording (once).
+    /// Queues a recording that just stopped, before every other one.
     pub fn enqueue(&self, recording_id: &str) {
         {
             let mut queue = self.0.queue();
-            if queue.iter().any(|queued| queued == recording_id) {
-                return;
-            }
-            queue.push_back(recording_id.to_owned());
+            queue.retain(|queued| queued != recording_id);
+            queue.push_front(recording_id.to_owned());
         }
         self.0.wake.notify_one();
+    }
+
+    /// Queues the stopped recordings whose second pass has not finished
+    /// (`live` or `refining`), behind what is queued, the most recent first.
+    /// At the start, and again once the storage opens late ("Повторить").
+    pub async fn queue_unrefined(&self) {
+        match database(&self.0.host, unrefined).await {
+            Ok(ids) => {
+                {
+                    let mut queue = self.0.queue();
+                    for id in ids.into_iter().rev() {
+                        if !queue.contains(&id) {
+                            queue.push_back(id);
+                        }
+                    }
+                }
+                self.0.wake.notify_one();
+            }
+            Err(error) => eprintln!("grill: unrefined recordings not read: {error}"),
+        }
     }
 }
 
@@ -124,14 +154,7 @@ enum Outcome {
 
 async fn run(inner: Weak<Inner>, wake: Arc<Notify>) {
     if let Some(inner) = inner.upgrade() {
-        match database(&inner.host, unrefined).await {
-            Ok(ids) => {
-                for id in ids {
-                    Refiner(Arc::clone(&inner)).enqueue(&id);
-                }
-            }
-            Err(error) => eprintln!("grill: unrefined recordings not read: {error}"),
-        }
+        Refiner(inner).queue_unrefined().await;
     }
     loop {
         let Some(inner) = inner.upgrade() else {
@@ -174,59 +197,58 @@ fn needs_refining(recording: &Recording) -> bool {
         )
 }
 
-/// A phrase of the files.
-struct Piece {
-    channel: TranscriptChannel,
+/// A phrase of a channel.
+struct Phrase {
     start_ms: u64,
     end_ms: u64,
-    samples: Vec<f32>,
+    /// Its samples in the channel's.
+    samples: Range<usize>,
 }
 
-/// Decodes both files and cuts them into phrases, in time order.
-fn split(me: &Path, others: &Path, vad_model: &Path) -> Result<Vec<Piece>, String> {
-    let mut vad = SileroVad::load(vad_model).map_err(|error| error.to_string())?;
-    let mut pieces = Vec::new();
-    for (channel, path) in [
-        (TranscriptChannel::Me, me),
-        (TranscriptChannel::Others, others),
-    ] {
-        let samples =
-            ogg_opus::read_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let probabilities = vad
-            .probabilities(&samples)
-            .map_err(|error| error.to_string())?
-            .to_vec();
-        let mut segmenter = Segmenter::new(SegmenterParams::default(), 0);
-        let mut spans: Vec<_> = probabilities
-            .into_iter()
-            .filter_map(|probability| segmenter.push(probability))
-            .collect();
-        spans.extend(segmenter.finish(samples.len() as u64));
-        for span in spans {
+/// Cuts a channel into phrases, in time order.
+fn segment(vad: &mut SileroVad, samples: &[f32]) -> Result<Vec<Phrase>, String> {
+    let probabilities = vad
+        .probabilities(samples)
+        .map_err(|error| error.to_string())?
+        .to_vec();
+    let mut segmenter = Segmenter::new(SegmenterParams::default(), 0);
+    let mut spans: Vec<_> = probabilities
+        .into_iter()
+        .filter_map(|probability| segmenter.push(probability))
+        .collect();
+    spans.extend(segmenter.finish(samples.len() as u64));
+    Ok(spans
+        .into_iter()
+        .filter_map(|span| {
             let to = usize::try_from(span.end)
                 .unwrap_or(usize::MAX)
                 .min(samples.len());
             let from = usize::try_from(span.start).unwrap_or(to).min(to);
-            if from == to {
-                continue;
-            }
-            pieces.push(Piece {
-                channel,
+            (from < to).then(|| Phrase {
                 start_ms: span.start_ms(),
                 end_ms: span.end_ms(),
-                samples: samples[from..to].to_vec(),
-            });
-        }
-    }
-    pieces.sort_by_key(|piece| (piece.start_ms, piece.channel == TranscriptChannel::Others));
-    Ok(pieces)
+                samples: from..to,
+            })
+        })
+        .collect())
 }
 
-fn slot(channel: TranscriptChannel) -> usize {
-    match channel {
-        TranscriptChannel::Me => 0,
-        TranscriptChannel::Others => 1,
-    }
+/// Runs blocking work off the async workers.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()))
+}
+
+/// The share of the pass done at `at_ms` of channel `index` (of two), in
+/// seconds of audio; 100 only once stored.
+fn share(index: u64, at_ms: u64, channel_ms: u64) -> u8 {
+    let within = at_ms.min(channel_ms) * 100 / channel_ms.max(1);
+    u8::try_from((index * 100 + within) / 2)
+        .unwrap_or(100)
+        .min(99)
 }
 
 /// One run over a recording.
@@ -250,13 +272,46 @@ impl Run<'_> {
             }));
     }
 
-    /// Progress during the run, at most every `progress_every`.
+    fn quiet_for(&self, period: Duration) -> bool {
+        self.reported_at.is_none_or(|at| at.elapsed() >= period)
+    }
+
+    /// Progress during the run: a new value at most every `progress_every`,
+    /// the same one again after `heartbeat` without news.
     fn report(&mut self, progress: u8) {
-        let due = self
-            .reported_at
-            .is_none_or(|at| at.elapsed() >= self.inner.config.progress_every);
-        if due && progress != self.progress {
+        let config = self.inner.config;
+        let changed = progress != self.progress && self.quiet_for(config.progress_every);
+        if changed || self.quiet_for(config.heartbeat) {
             self.emit(progress, RefineState::Refining);
+        }
+    }
+
+    /// A step is over (a channel decoded or segmented): news, unless some
+    /// went out within `progress_every`.
+    fn step_done(&mut self) {
+        if self.quiet_for(self.inner.config.progress_every) {
+            self.emit(self.progress, RefineState::Refining);
+        }
+    }
+
+    /// Awaits `work`, with the progress again every `heartbeat` meanwhile.
+    async fn alive<T>(&mut self, work: impl Future<Output = T>) -> T {
+        let mut work = std::pin::pin!(work);
+        loop {
+            let since = self.reported_at.map_or(Duration::ZERO, |at| at.elapsed());
+            let wait = self.inner.config.heartbeat.saturating_sub(since);
+            tokio::select! {
+                output = &mut work => return output,
+                () = tokio::time::sleep(wait) => self.report(self.progress),
+            }
+        }
+    }
+
+    /// Waits while a recording or the hardware check runs.
+    async fn wait_while_paused(&mut self) {
+        while self.inner.host.refine_paused() {
+            tokio::time::sleep(self.inner.config.pause_poll).await;
+            self.report(self.progress);
         }
     }
 
@@ -327,69 +382,90 @@ async fn refine(inner: &Inner, recording_id: &str) -> Outcome {
         return run.fail(&error.to_string()).await;
     }
     run.emit(0, RefineState::Refining);
+    let host_vad_model = host.vad_model();
 
-    let (me, others, vad_model) = (
-        dir.join(&recording.files.me),
-        dir.join(&recording.files.others),
-        host.vad_model(),
-    );
-    let pieces =
-        match tauri::async_runtime::spawn_blocking(move || split(&me, &others, &vad_model)).await {
-            Ok(Ok(pieces)) => pieces,
-            Ok(Err(error)) => return run.fail(&error).await,
-            Err(error) => return run.fail(&error.to_string()).await,
+    let mut vad =
+        match blocking(move || SileroVad::load(&host_vad_model).map_err(|error| error.to_string()))
+            .await
+        {
+            Ok(vad) => vad,
+            Err(error) => return run.fail(&error).await,
         };
-
-    let total_ms: u64 = pieces
-        .iter()
-        .map(|piece| piece.end_ms - piece.start_ms)
-        .sum();
-    let mut done_ms = 0;
     let mut languages = LanguageCache::new(language);
-    let mut recent: [VecDeque<String>; 2] = [VecDeque::new(), VecDeque::new()];
     let mut segments = Vec::new();
-    for piece in pieces {
-        while host.refine_paused() {
-            tokio::time::sleep(inner.config.pause_poll).await;
-        }
-        let choice = languages.choice(piece.channel, Instant::now());
-        let reply = inner.recognizer.submit(Job {
-            samples: piece.samples,
-            language: choice,
-            prompt: glossary.full().to_owned(),
-            decode: Decode::Beam5,
-            priority: Priority::Refine,
-        });
-        let transcript = match reply.await.unwrap_or(Err(RecognizerError::Stopped)) {
-            Ok(transcript) => transcript,
-            Err(RecognizerError::NoModel) => return Outcome::NoModel,
-            Err(RecognizerError::ModelFailed(message)) => {
-                host.model_failed(host.selected_model().0, &message);
-                return Outcome::NoModel;
-            }
-            Err(error) => return run.fail(&error.to_string()).await,
+    let channels = [
+        (TranscriptChannel::Me, recording.files.me),
+        (TranscriptChannel::Others, recording.files.others),
+    ];
+    for (index, (channel, file)) in (0_u64..).zip(channels) {
+        let path = dir.join(file);
+        let decoded = run
+            .alive(blocking(move || {
+                ogg_opus::read_file(&path).map_err(|error| format!("{}: {error}", path.display()))
+            }))
+            .await;
+        let samples = match decoded {
+            Ok(samples) => Arc::new(samples),
+            Err(error) => return run.fail(&error).await,
         };
-        if choice == LanguageChoice::Detect {
-            languages.remember(piece.channel, transcript.language, Instant::now());
-        }
-        let neighbours = &mut recent[slot(piece.channel)];
-        let texts: Vec<&str> = neighbours.iter().map(String::as_str).collect();
-        if let Some(text) = filters::filter(&transcript.segments, &glossary, &texts) {
-            neighbours.push_back(text.clone());
-            if neighbours.len() > 2 {
-                neighbours.pop_front();
+        run.step_done();
+        let (back, phrases) = {
+            let samples = Arc::clone(&samples);
+            match run
+                .alive(blocking(move || {
+                    let phrases = segment(&mut vad, &samples)?;
+                    Ok((vad, phrases))
+                }))
+                .await
+            {
+                Ok(done) => done,
+                Err(error) => return run.fail(&error).await,
             }
-            segments.push(SegmentInput {
-                channel: piece.channel,
-                start_ms: i64::try_from(piece.start_ms).unwrap_or(i64::MAX),
-                end_ms: i64::try_from(piece.end_ms).unwrap_or(i64::MAX),
-                text,
+        };
+        vad = back;
+        run.step_done();
+
+        let channel_ms = samples.len() as u64 * 1_000 / u64::from(crate::recording::SAMPLE_RATE);
+        let mut recent: VecDeque<String> = VecDeque::new();
+        for phrase in phrases {
+            run.wait_while_paused().await;
+            let choice = languages.choice(channel, Instant::now());
+            let reply = inner.recognizer.submit(Job {
+                samples: samples[phrase.samples.clone()].to_vec(),
+                language: choice,
+                prompt: glossary.full().to_owned(),
+                decode: Decode::Beam5,
+                priority: Priority::Refine,
             });
+            let answer = run.alive(reply).await;
+            let transcript = match answer.unwrap_or(Err(RecognizerError::Stopped)) {
+                Ok(transcript) => transcript,
+                Err(RecognizerError::NoModel) => return Outcome::NoModel,
+                Err(RecognizerError::ModelFailed(message)) => {
+                    host.model_failed(host.selected_model().0, &message);
+                    return Outcome::NoModel;
+                }
+                Err(error) => return run.fail(&error.to_string()).await,
+            };
+            if choice == LanguageChoice::Detect {
+                languages.remember(channel, transcript.language, Instant::now());
+            }
+            let texts: Vec<&str> = recent.iter().map(String::as_str).collect();
+            if let Some(text) = filters::filter(&transcript.segments, &glossary, &texts) {
+                recent.push_back(text.clone());
+                if recent.len() > 2 {
+                    recent.pop_front();
+                }
+                segments.push(SegmentInput {
+                    channel,
+                    start_ms: i64::try_from(phrase.start_ms).unwrap_or(i64::MAX),
+                    end_ms: i64::try_from(phrase.end_ms).unwrap_or(i64::MAX),
+                    text,
+                });
+            }
+            run.report(share(index, phrase.end_ms, channel_ms));
         }
-        done_ms += piece.end_ms - piece.start_ms;
-        let progress = u8::try_from(done_ms * 100 / total_ms.max(1)).unwrap_or(100);
-        // 100 only once stored.
-        run.report(progress.min(99));
+        run.report(share(index + 1, 0, channel_ms));
     }
 
     let id = recording_id.to_owned();

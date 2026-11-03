@@ -1342,6 +1342,7 @@ mod acl {
             ("main", "transcript_for_recording"),
             ("widget", "transcript_for_recording"),
             ("overlay", "transcript_for_recording"),
+            ("main", "transcript_state"),
             // The widget starts a recording, the overlay stops it, every
             // window shows it.
             ("main", "recording_start"),

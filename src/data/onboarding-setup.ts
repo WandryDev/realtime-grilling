@@ -544,6 +544,11 @@ export function followSpeechModels() {
 /** The followed model's last state, so a change of the other one is no news. */
 let lastModel: SpeechModel | null = null;
 
+/**
+ * Applies the backend's state of the followed model. The same state again
+ * is no news only while the step shows it: an optimistic state the backend
+ * did not take ("Повторить сейчас" while it waits to retry) is corrected.
+ */
 function applyModels(models: readonly SpeechModel[]) {
   if (!modelChosen) {
     modelChosen = true;
@@ -555,11 +560,16 @@ function applyModels(models: readonly SpeechModel[]) {
   const followed = models.find(
     (model) => model.id === setupStore.get().speech.model
   );
-  if (!followed || isSameModel(followed, lastModel)) {
+  if (!followed) {
+    return;
+  }
+  const next = fromModelState(followed);
+  const shown = setupStore.get().speech.status === next.status;
+  if (isSameModel(followed, lastModel) && shown) {
     return;
   }
   lastModel = followed;
-  setSpeech(fromModelState(followed));
+  setSpeech(next);
   const { check } = setupStore.get().speech;
   if (followed.state.status === "ready") {
     onModelReady(followed);
@@ -584,12 +594,18 @@ function onModelReady(model: SpeechModel) {
   if (check.status !== "idle" || runs.has("speechCheck")) {
     return;
   }
+  // Rust forgets the result when the file is removed or downloaded again;
+  // a check that did not run (no model, not loaded) is no result.
   const stored = getSettings().speechBenchmark[model.id];
-  if (stored) {
+  if (stored && checkRan(stored)) {
     setSpeech({ check: { result: stored, status: "done" } });
     return;
   }
   runSpeechCheck(model);
+}
+
+function checkRan({ reason }: BenchmarkResult) {
+  return reason !== "noModel" && reason !== "modelFailed";
 }
 
 function runSpeechCheck(model: Pick<SpeechModel, "id" | "selected">) {

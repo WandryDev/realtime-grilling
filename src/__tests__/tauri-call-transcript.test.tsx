@@ -253,6 +253,46 @@ describe("call transcript in Tauri", () => {
     );
   });
 
+  it("leaves the last recording's unfinished phrases «пропущено» when a new one takes over", async () => {
+    await openCall();
+    await emit("transcript-pending", {
+      channel: "others",
+      recordingId: RECORDING,
+      startMs: 4000,
+    });
+    await emit("transcript-pending", {
+      channel: "me",
+      recordingId: RECORDING,
+      startMs: 6000,
+    });
+    await emit("transcript-phrase", {
+      channel: "me",
+      endMs: 7000,
+      id: "segment-1",
+      pass: "live",
+      recordingId: RECORDING,
+      startMs: 6000,
+      text: "Успел до конца",
+    });
+    expect(await screen.findByText("Успел до конца")).toBeTruthy();
+
+    // "Отменить завершение": the next recording's events from now on.
+    await emit("recording-changed", {
+      ...RECORDING_NOW,
+      id: OTHER_RECORDING,
+    });
+    expect(
+      await screen.findByText("Пропущено, расшифрую после звонка")
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(transcript().textContent).not.toContain("расшифровываю")
+    );
+    expect(screen.getByText("Успел до конца")).toBeTruthy();
+    expect(
+      screen.queryByText("Ваша фраза пропущена, расшифрую после звонка")
+    ).toBeNull();
+  });
+
   it("says how far the transcript lags, until it catches up", async () => {
     await openCall();
 

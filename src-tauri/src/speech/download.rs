@@ -14,7 +14,10 @@ use std::{
 
 use reqwest::{StatusCode, header};
 use sha2::{Digest as _, Sha256};
-use tokio::{io::AsyncWriteExt as _, sync::watch};
+use tokio::{
+    io::AsyncWriteExt as _,
+    sync::{Notify, watch},
+};
 
 use super::models::{ErrorReason, ModelState, percent};
 
@@ -102,12 +105,14 @@ pub fn part_path(file: &Path) -> PathBuf {
 
 /// Downloads `source` to `file` until it is ready, fails, is paused or
 /// cancelled, or the disk is too full; returns that state. Intermediate
-/// states (`downloading`, `noNetwork`, `checking`) go to `report`.
+/// states (`downloading`, `noNetwork`, `checking`) go to `report`. `retry`
+/// ends the wait after a broken connection ("Повторить сейчас").
 pub async fn run(
     source: &Source,
     file: &Path,
     config: &Config,
     mut control: watch::Receiver<Control>,
+    retry: &Notify,
     mut report: impl FnMut(ModelState),
 ) -> ModelState {
     let part = part_path(file);
@@ -139,6 +144,7 @@ pub async fn run(
                 });
                 tokio::select! {
                     () = tokio::time::sleep(delay) => {}
+                    () = retry.notified() => {}
                     stop = stop_requested(&mut control) => {
                         return stopped_state(stop, &part, source.size);
                     }
@@ -363,6 +369,19 @@ async fn check(
     report: &mut impl FnMut(ModelState),
 ) -> ModelState {
     report(ModelState::Checking);
+    // The sum covers what was sent; the file must hold all of it too (a
+    // `.part` deleted under a running download is started again empty).
+    let written = part_len(part);
+    if written != source.size {
+        let _ = remove_part(part);
+        return ModelState::error(
+            ErrorReason::Io,
+            format!(
+                "Файл модели записан не полностью: {written} байт из {}. Скачайте его заново",
+                source.size
+            ),
+        );
+    }
     if hex(&hasher.finalize()) != source.sha256.to_ascii_lowercase() {
         let _ = remove_part(part);
         return ModelState::error(

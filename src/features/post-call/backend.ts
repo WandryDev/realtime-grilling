@@ -51,27 +51,15 @@ type Refined = NonNullable<SummaryProgress["transcript"]> | "done";
 
 /**
  * The second pass of `recordingId`: its progress, then how it ended. A
- * pass that is already over (its refined segments are stored) is done at
- * once; one without news for `REFINE_SILENCE_MS` goes on in the background.
+ * pass that is already over (refined, also without a phrase, or failed) ends
+ * at once; one without news for `REFINE_SILENCE_MS` goes on in the
+ * background. A running pass sends news at least every few seconds.
  */
 function refineOf(
   speech: SpeechBackend["Service"],
   recordingId: string
 ): Stream.Stream<RefineProgress | Refined> {
-  const already = speech.transcript(recordingId).pipe(
-    Effect.map((segments) =>
-      segments.some((segment) => segment.pass === "refined")
-    ),
-    Effect.catch(() => Effect.succeed(false))
-  );
-  const events = Stream.merge(
-    speech.refine(recordingId),
-    Stream.fromEffect(already).pipe(
-      Stream.filter(Boolean),
-      Stream.map((): RefineProgress => ({ progress: 100, state: "done" }))
-    )
-  ).pipe(
-    Stream.takeUntil((event) => event.state !== "refining"),
+  const events = speech.refine(recordingId).pipe(
     Stream.map((event): RefineProgress | Refined => {
       if (event.state === "refining") {
         return event;

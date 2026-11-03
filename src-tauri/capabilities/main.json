@@ -52,6 +52,7 @@
     "allow-questions-delete",
     "allow-transcript-list",
     "allow-transcript-for-recording",
+    "allow-transcript-state",
     "allow-settings-get",
     "allow-settings-update",
     "allow-onboarding-complete",

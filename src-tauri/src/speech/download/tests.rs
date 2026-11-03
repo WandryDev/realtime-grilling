@@ -359,6 +359,76 @@ fn a_dropped_connection_retries_by_itself_from_where_it_stopped() {
 }
 
 #[test]
+fn retry_now_ends_the_wait_after_a_broken_connection() {
+    let data = data();
+    let cut = 120_000;
+    let server = serve(
+        Arc::clone(&data),
+        Behavior {
+            drop_at: Some(cut),
+            ..Behavior::default()
+        },
+    );
+    // The automatic retry would come long after the test gave up.
+    let mut slow = config(u64::MAX);
+    slow.retry_delays = vec![Duration::from_secs(600)];
+    let fx = fixture_with(&server.url, data.len() as u64, sha(&data), slow);
+    let id = ModelId::Small;
+
+    fx.manager.download(id);
+    let waiting = fx.wait_for(id, |state| matches!(state, ModelState::NoNetwork { .. }));
+    assert_eq!(
+        waiting,
+        ModelState::NoNetwork {
+            percent: 40,
+            retry_in_sec: 600
+        }
+    );
+    // "Повторить сейчас": the reply already says it downloads.
+    assert_eq!(
+        fx.manager.download(id).state,
+        ModelState::Downloading {
+            percent: 40,
+            bytes_per_sec: 0
+        }
+    );
+    assert_eq!(fx.wait_idle(id), ModelState::Ready);
+    assert_eq!(server.requests(), vec![None, Some(cut)]);
+    assert_eq!(std::fs::read(fx.file(id)).unwrap(), *data);
+}
+
+#[test]
+fn a_part_shorter_than_the_model_is_never_renamed() {
+    let data = data();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("ggml-test.bin");
+    let part = part_path(&file);
+    // The sum of every byte, the file with the end only: what a `.part`
+    // deleted under a running download leaves.
+    std::fs::write(&part, &data[200_000..]).unwrap();
+    let source = Source {
+        url: String::new(),
+        size: data.len() as u64,
+        sha256: sha(&data),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&*data);
+    let state = block_on(super::check(hasher, &source, &part, &file, &mut |_| {}));
+    assert!(
+        matches!(
+            state,
+            ModelState::Error {
+                reason: ErrorReason::Io,
+                ..
+            }
+        ),
+        "{state:?}"
+    );
+    assert!(!part.exists());
+    assert!(!file.exists());
+}
+
+#[test]
 fn a_server_without_range_starts_over() {
     let data = data();
     let server = serve(

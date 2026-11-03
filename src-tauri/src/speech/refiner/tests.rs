@@ -20,6 +20,7 @@ use crate::{
 fn config() -> RefinerConfig {
     RefinerConfig {
         progress_every: Duration::ZERO,
+        heartbeat: Duration::from_secs(60),
         pause_poll: Duration::from_millis(5),
         retry_after: Duration::from_millis(20),
     }
@@ -209,4 +210,118 @@ fn without_a_model_the_recording_waits() {
 
     host.model.lock().unwrap().1 = true;
     eventually("refined", || state(&host, &id) == TranscriptState::Refined);
+}
+
+/// The recording ids in the order their second pass started.
+fn started(host: &FakeHost) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for event in refine_events(host) {
+        if !ids.contains(&event.recording_id) {
+            ids.push(event.recording_id);
+        }
+    }
+    ids
+}
+
+#[test]
+fn a_call_that_just_ended_goes_before_older_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(Some(dir.path()));
+    let older = recording(&host, dir.path());
+    let old = recording(&host, dir.path());
+    let script = numbered();
+    host.paused.store(true, Ordering::SeqCst);
+    let refiner = Refiner::start(host.as_host(), script.recognizer(), config());
+    // The most recent of those left unrefined is taken (and waits, paused).
+    eventually("the left ones queued", || {
+        refiner.0.queue().iter().eq([&older])
+    });
+
+    let fresh = recording(&host, dir.path());
+    refiner.enqueue(&fresh);
+    assert!(refiner.0.queue().iter().eq([&fresh, &older]));
+    host.paused.store(false, Ordering::SeqCst);
+    eventually("all refined", || {
+        [&older, &old, &fresh]
+            .iter()
+            .all(|id| state(&host, id) == TranscriptState::Refined)
+    });
+    assert_eq!(started(&host), [old, fresh, older]);
+}
+
+#[test]
+fn recordings_of_before_speech_recognition_are_not_queued() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(Some(dir.path()));
+    let skipped = recording(&host, dir.path());
+    host.db(|connection| {
+        recordings::set_transcript_state(connection, &skipped, TranscriptState::Skipped).unwrap();
+    });
+    let fresh = recording(&host, dir.path());
+    let script = numbered();
+    let _refiner = Refiner::start(host.as_host(), script.recognizer(), config());
+    eventually("refined", || {
+        state(&host, &fresh) == TranscriptState::Refined
+    });
+    assert_eq!(state(&host, &skipped), TranscriptState::Skipped);
+    assert_eq!(started(&host), [fresh]);
+}
+
+#[test]
+fn a_slow_phrase_still_sends_news() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(Some(dir.path()));
+    let id = recording(&host, dir.path());
+    let script = numbered();
+    *script.delay.lock().unwrap() = Duration::from_millis(300);
+    let refiner = Refiner::start(
+        host.as_host(),
+        script.recognizer(),
+        RefinerConfig {
+            heartbeat: Duration::from_millis(20),
+            ..config()
+        },
+    );
+
+    refiner.enqueue(&id);
+    // The state is stored before `done` goes out: wait for the event.
+    eventually("done", || {
+        refine_events(&host)
+            .last()
+            .is_some_and(|event| event.state == RefineState::Done)
+    });
+    let events = refine_events(&host);
+    // While the first phrase is recognized the progress stays, the events
+    // go on.
+    let repeats = events
+        .windows(2)
+        .filter(|pair| {
+            pair[0].progress == pair[1].progress && pair[1].state == RefineState::Refining
+        })
+        .count();
+    assert!(repeats >= 3, "{events:?}");
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0].progress <= pair[1].progress)
+    );
+    assert_eq!(events.last().map(|e| e.state), Some(RefineState::Done));
+}
+
+#[test]
+fn a_storage_opened_late_queues_what_was_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(Some(dir.path()));
+    let left = recording(&host, dir.path());
+    host.db_down.store(true, Ordering::SeqCst);
+    let script = numbered();
+    let refiner = Refiner::start(host.as_host(), script.recognizer(), config());
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(refine_events(&host).is_empty());
+
+    host.db_down.store(false, Ordering::SeqCst);
+    tauri::async_runtime::block_on(refiner.queue_unrefined());
+    eventually("refined", || {
+        state(&host, &left) == TranscriptState::Refined
+    });
 }

@@ -223,10 +223,16 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
 }
 
-/// Decodes a mono Ogg Opus stream to 16 kHz. Reads up to the end or the
-/// first broken page, so a file cut by a crash gives everything up to its
-/// last complete page.
+/// [`read_into`] a new buffer.
+#[cfg(test)]
 pub fn read<R: Read + Seek>(reader: R) -> io::Result<Decoded> {
+    read_into(reader, Vec::new())
+}
+
+/// Decodes a mono Ogg Opus stream to 16 kHz into `pcm` (reserved by the
+/// caller). Reads up to the end or the first broken page, so a file cut by a
+/// crash gives everything up to its last complete page.
+fn read_into<R: Read + Seek>(reader: R, mut pcm: Vec<f32>) -> io::Result<Decoded> {
     let mut pages = PacketReader::new(reader);
     let head = pages
         .read_packet()
@@ -250,7 +256,6 @@ pub fn read<R: Read + Seek>(reader: R) -> io::Result<Decoded> {
     }
 
     let mut decoder = Decoder::new(SAMPLE_RATE, Channels::Mono).map_err(codec_error)?;
-    let mut pcm = Vec::new();
     let mut frame = vec![0.0; MAX_FRAME];
     let mut last_granule = 0;
     let mut eos = false;
@@ -279,10 +284,47 @@ pub fn read<R: Read + Seek>(reader: R) -> io::Result<Decoded> {
     })
 }
 
-/// A channel file as 16 kHz mono samples (see [`read`]).
+/// A channel file as 16 kHz mono samples (see [`read_into`]). The buffer is
+/// reserved from the last page's granule position up front: growing it by
+/// doubling would hold up to twice a long call's samples.
 pub fn read_file(path: &Path) -> io::Result<Vec<f32>> {
-    let file = std::fs::File::open(path)?;
-    Ok(read(io::BufReader::new(file))?.samples)
+    let mut file = std::fs::File::open(path)?;
+    let samples = last_granule(&mut file)?.map_or(0, |granule| {
+        usize::try_from(granule / GRANULE_PER_SAMPLE).unwrap_or(0) + MAX_FRAME
+    });
+    // A broken page can't ask for more than this much audio per byte.
+    let len = file.seek(io::SeekFrom::End(0))?;
+    let bound = usize::try_from(len.saturating_mul(MAX_SAMPLES_PER_BYTE)).unwrap_or(usize::MAX);
+    file.seek(io::SeekFrom::Start(0))?;
+    let pcm = Vec::with_capacity(samples.min(bound));
+    Ok(read_into(io::BufReader::new(file), pcm)?.samples)
+}
+
+/// An Ogg page header is at most this far from the end (255 segments of
+/// 255 bytes after a 27 + 255 byte header).
+const LAST_PAGE_SPAN: u64 = 27 + 255 + 255 * 255;
+/// More 16 kHz samples than one byte of an Opus stream ever decodes to: a
+/// 20 ms packet (320 samples) is never under 1 byte plus its lacing.
+const MAX_SAMPLES_PER_BYTE: u64 = 320;
+
+/// The granule position of the last page header in the file's tail.
+fn last_granule(file: &mut std::fs::File) -> io::Result<Option<u64>> {
+    let len = file.seek(io::SeekFrom::End(0))?;
+    let from = len.saturating_sub(LAST_PAGE_SPAN);
+    file.seek(io::SeekFrom::Start(from))?;
+    let mut tail = Vec::new();
+    file.take(LAST_PAGE_SPAN).read_to_end(&mut tail)?;
+    let granule = (0..tail.len().saturating_sub(13))
+        .rev()
+        .find(|&at| tail[at..].starts_with(b"OggS\0"))
+        .map(|at| {
+            let mut bytes = [0; 8];
+            bytes.copy_from_slice(&tail[at + 6..at + 14]);
+            u64::from_le_bytes(bytes)
+        })
+        // -1: no packet ends on that page.
+        .filter(|&granule| granule != u64::MAX);
+    Ok(granule)
 }
 
 #[cfg(test)]
@@ -344,6 +386,32 @@ mod tests {
     fn rms(samples: &[f32]) -> f64 {
         let sum: f64 = samples.iter().map(|v| f64::from(*v).powi(2)).sum();
         (sum / samples.len().max(1) as f64).sqrt()
+    }
+
+    #[test]
+    fn a_file_decodes_into_a_buffer_reserved_once() {
+        let input = sine(30.0);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("me.opus");
+        std::fs::write(&path, write_all(&input).bytes).unwrap();
+
+        let samples = read_file(&path).unwrap();
+        assert!(
+            samples.len().abs_diff(input.len()) <= 320,
+            "{}",
+            samples.len()
+        );
+        // Reserved from the last granule: no doubling on the way.
+        assert!(
+            samples.capacity() <= samples.len() + 2 * MAX_FRAME,
+            "{} for {}",
+            samples.capacity(),
+            samples.len()
+        );
+        assert_eq!(
+            last_granule(&mut std::fs::File::open(&path).unwrap()).unwrap(),
+            Some(decode(std::fs::read(&path).unwrap()).last_granule)
+        );
     }
 
     #[test]

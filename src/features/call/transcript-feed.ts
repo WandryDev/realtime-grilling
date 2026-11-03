@@ -43,6 +43,63 @@ function phraseItem(
     : { id, kind: "client", text: phrase.text };
 }
 
+function missingLabel(channel: TranscriptChannel) {
+  return channel === "me"
+    ? "Ваша фраза пропущена, расшифрую после звонка"
+    : "Пропущено, расшифрую после звонка";
+}
+
+/** A phrase still "расшифровываю" when the feed stops following it. */
+export interface PendingPhrase {
+  readonly channel: TranscriptChannel;
+  readonly startMs: number;
+}
+
+/**
+ * The phrases of `recordingId` the feed stops following before their text
+ * came (another recording took over): "пропущено", as the second pass
+ * refines them. How long each was is not known yet.
+ */
+export function abandonedPhrases(
+  recordingId: string,
+  phrases: Iterable<PendingPhrase>
+): CallFeedEvent[] {
+  return [...phrases].map(({ channel, startMs }) => ({
+    item: {
+      duration: "",
+      id: phraseItemId(recordingId, channel, startMs),
+      kind: "missing",
+      label: missingLabel(channel),
+    },
+    type: "transcript",
+  }));
+}
+
+/**
+ * Keeps `pending` up to date with `event`: the phrases shown as
+ * "расшифровываю", by item id.
+ */
+export function trackPending(
+  pending: Map<string, PendingPhrase>,
+  recordingId: string,
+  event: TranscriptEvent
+) {
+  switch (event.type) {
+    case "pending":
+      pending.set(phraseItemId(recordingId, event.channel, event.startMs), {
+        channel: event.channel,
+        startMs: event.startMs,
+      });
+      return;
+    case "phrase":
+    case "dropped":
+    case "skipped":
+      pending.delete(phraseItemId(recordingId, event.channel, event.startMs));
+      return;
+    default:
+  }
+}
+
 /** What `event` of the recording `recordingId` changes in the feed. */
 export function transcriptFeedEvents(
   recordingId: string,
@@ -82,10 +139,7 @@ export function transcriptFeedEvents(
             duration: duration(event.endMs - event.startMs),
             id: phraseItemId(recordingId, event.channel, event.startMs),
             kind: "missing",
-            label:
-              event.channel === "me"
-                ? "Ваша фраза пропущена, расшифрую после звонка"
-                : "Пропущено, расшифрую после звонка",
+            label: missingLabel(event.channel),
           },
           type: "transcript",
         },

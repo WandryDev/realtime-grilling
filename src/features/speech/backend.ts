@@ -19,6 +19,7 @@ import {
   type TranscriptChannel,
   type TranscriptPass,
   type TranscriptSegment,
+  type TranscriptState,
 } from "@/bindings";
 import { BackendError, call, listen, subscribe } from "@/effect/tauri";
 import { mockRecordingId } from "@/features/recording/backend";
@@ -155,7 +156,10 @@ export class SpeechBackend extends Context.Service<
     readonly transcriptFeed: (
       recordingId: string
     ) => Stream.Stream<TranscriptEvent, BackendError>;
-    /** The second pass of a recording; ends with `done` or `failed`. */
+    /**
+     * The second pass of a recording; ends with `done` or `failed`. A pass
+     * already over (also before the stream listened) ends it at once.
+     */
     readonly refine: (
       recordingId: string
     ) => Stream.Stream<RefineProgress, BackendError>;
@@ -175,13 +179,26 @@ export class SpeechBackend extends Context.Service<
     models: call(() => commands.speechModelsList()),
     pause: (id: ModelId) => call(() => commands.speechModelPause(id)),
     refine: (recordingId: string) =>
-      listen(events.transcriptRefine).pipe(
-        Stream.filter((event) => event.recordingId === recordingId),
-        Stream.map(
-          ({ progress, state }): RefineProgress => ({ progress, state })
-        ),
-        Stream.takeUntil((event) => event.state !== "refining")
-      ),
+      Stream.callback<RefineProgress, BackendError>((queue) =>
+        Effect.gen(function* () {
+          yield* subscribe(events.transcriptRefine, (event) => {
+            if (event.recordingId === recordingId) {
+              Queue.offerUnsafe(queue, {
+                progress: event.progress,
+                state: event.state,
+              });
+            }
+          });
+          // Read after listening: a pass that ended before is not missed.
+          const stored = yield* call(() =>
+            commands.transcriptState(recordingId)
+          );
+          const over = refineOver(stored);
+          if (over) {
+            Queue.offerUnsafe(queue, over);
+          }
+        })
+      ).pipe(Stream.takeUntil((event) => event.state !== "refining")),
     remove: (id: ModelId) => call(() => commands.speechModelRemove(id)),
     select: (id: ModelId) => call(() => commands.speechModelSelect(id)),
     transcript: (recordingId: string) =>
@@ -350,6 +367,20 @@ export class SpeechBackend extends Context.Service<
         })
     ),
   });
+}
+
+/** How a second pass that is over ended; `null` while it may still run. */
+function refineOver(state: TranscriptState): RefineProgress | null {
+  switch (state) {
+    case "refined":
+      return { progress: 100, state: "done" };
+    // Never refined: the live transcript is what there is.
+    case "failed":
+    case "skipped":
+      return { progress: 0, state: "failed" };
+    default:
+      return null;
+  }
 }
 
 /** `list` with `model` in place of the one with its id. */

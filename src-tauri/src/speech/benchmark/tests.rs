@@ -188,8 +188,9 @@ fn the_phrases_come_at_the_pace_of_speech() {
         never(),
     ))
     .unwrap();
-    // The last phrase starts after the five before it were "spoken".
-    assert!(started.elapsed() >= ms(1_000), "{:?}", started.elapsed());
+    // Each phrase goes once its own audio was "spoken", as the VAD hands
+    // it over: the last one after all six.
+    assert!(started.elapsed() >= ms(1_200), "{:?}", started.elapsed());
 }
 
 #[test]

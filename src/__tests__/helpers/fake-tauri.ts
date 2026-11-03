@@ -180,6 +180,9 @@ export function createFakeTauri(): FakeTauri {
           fake.recording = IDLE_RECORDING;
         }
         return null;
+      // The second pass has not started.
+      case "transcript_state":
+        return "live";
       default:
         throw new Error(`Нет команды ${command} в фейке`);
     }

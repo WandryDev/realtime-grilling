@@ -37,6 +37,8 @@ pub struct FakeHost {
     pub statuses: Mutex<Vec<(String, TranscriptionStatus)>>,
     pub finished: Mutex<Vec<String>>,
     pub paused: AtomicBool,
+    /// The storage is not open: every `database` fails.
+    pub db_down: AtomicBool,
     pub dir: Option<PathBuf>,
 }
 
@@ -51,6 +53,7 @@ impl FakeHost {
             statuses: Mutex::default(),
             finished: Mutex::default(),
             paused: AtomicBool::new(false),
+            db_down: AtomicBool::new(false),
             dir: dir.map(Path::to_path_buf),
         })
     }
@@ -102,6 +105,11 @@ impl SpeechHost for FakeHost {
     }
 
     fn database(&self, work: DbWork<'_>) -> CommandResult<()> {
+        if self.db_down.load(Ordering::SeqCst) {
+            return Err(crate::error::CommandError::storage(
+                "Хранилище ещё не открыто",
+            ));
+        }
         work(&self.db.lock().unwrap())
     }
 
