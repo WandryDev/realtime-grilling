@@ -59,4 +59,10 @@ pub const APP_COMMANDS: &[&str] = &[
     "recording_start",
     "recording_stop",
     "recording_status",
+    "speech_models_list",
+    "speech_model_download",
+    "speech_model_pause",
+    "speech_model_cancel",
+    "speech_model_remove",
+    "speech_model_select",
 ];

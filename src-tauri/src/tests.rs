@@ -884,6 +884,69 @@ fn mic_busy_behavior_is_widget_record_or_nothing() {
 }
 
 #[test]
+fn speech_model_is_turbo_or_small_and_legacy_values_read_as_turbo() {
+    use crate::speech::models::ModelId;
+
+    let fx = Fixture::new();
+    let stored = fx.read(settings::get).unwrap();
+    assert_eq!(stored[settings::SPEECH_MODEL], json!("turbo"), "default");
+    assert_eq!(settings::speech_model(&SettingsMap::new()), ModelId::Turbo);
+
+    let patch = SettingsMap::from([(settings::SPEECH_MODEL.to_owned(), json!("small"))]);
+    fx.write(move |db| Ok(((), settings::put(db, &patch)?)))
+        .unwrap();
+    let stored = fx.read(settings::get).unwrap();
+    assert_eq!(stored[settings::SPEECH_MODEL], json!("small"));
+    assert_eq!(settings::speech_model(&stored), ModelId::Small);
+
+    for bad in [
+        json!("whisper"),
+        json!("gigaam"),
+        json!(""),
+        json!(1),
+        json!(null),
+    ] {
+        let patch = SettingsMap::from([(settings::SPEECH_MODEL.to_owned(), bad.clone())]);
+        assert!(
+            matches!(
+                settings::validate(&patch),
+                Err(CommandError::Invalid { .. })
+            ),
+            "{bad}"
+        );
+    }
+
+    // Values of earlier builds, written before the key was validated.
+    for legacy in ["whisper", "gigaam"] {
+        fx.read(move |db| {
+            db.execute(
+                "INSERT INTO settings (key, value) VALUES ('speechModel', ?1)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                [json!(legacy).to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let stored = fx.read(settings::get).unwrap();
+        assert_eq!(stored[settings::SPEECH_MODEL], json!("turbo"), "{legacy}");
+        assert_eq!(settings::speech_model(&stored), ModelId::Turbo);
+    }
+}
+
+#[test]
+fn speech_benchmark_is_stored_as_given() {
+    let fx = Fixture::new();
+    let benchmark = json!({
+        "turbo": { "passed": true, "p95Ms": 1300, "rtf": 0.2, "wer": 0.04 }
+    });
+    let patch = SettingsMap::from([(settings::SPEECH_BENCHMARK.to_owned(), benchmark.clone())]);
+    fx.write(move |db| Ok(((), settings::put(db, &patch)?)))
+        .unwrap();
+    let stored = fx.read(settings::get).unwrap();
+    assert_eq!(stored[settings::SPEECH_BENCHMARK], benchmark);
+}
+
+#[test]
 fn agent_path_is_only_a_path_to_the_cli() {
     let good = if cfg!(windows) {
         [
@@ -1049,6 +1112,30 @@ mod acl {
         }
     }
 
+    const SPEECH_MODEL_COMMANDS: [&str; 6] = [
+        "speech_models_list",
+        "speech_model_download",
+        "speech_model_pause",
+        "speech_model_cancel",
+        "speech_model_remove",
+        "speech_model_select",
+    ];
+
+    /// The speech models are for the main and onboarding windows only.
+    #[test]
+    fn speech_models_are_for_main_and_onboarding_only() {
+        for command in SPEECH_MODEL_COMMANDS {
+            for label in ["overlay", "widget"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+            for label in ["main", "onboarding"] {
+                let result = invoke(label, command);
+                assert!(!denied(&result), "{label} → {command}: {result:?}");
+            }
+        }
+    }
+
     #[test]
     fn allowed_commands_pass_the_acl() {
         // The mock app has no command handlers: an allowed command gets past
@@ -1152,6 +1239,12 @@ fn capabilities_match_the_command_list() {
         "audio_level_start",
         "audio_level_stop",
         "app_restart",
+        "speech_models_list",
+        "speech_model_download",
+        "speech_model_pause",
+        "speech_model_cancel",
+        "speech_model_remove",
+        "speech_model_select",
     ] {
         assert!(
             !floating.iter().any(|command| command == forbidden),

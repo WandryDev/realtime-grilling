@@ -30,8 +30,9 @@ specta = { version = "=2.0.0-rc.26", features = ["derive", "serde_json"] }
 specta-typescript = "=0.0.13"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 thiserror = "2"
-# Child processes of the agent CLI (timeouts, stdin), on Tauri's runtime.
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+# Child processes of the agent CLI (timeouts, stdin), on Tauri's runtime;
+# the speech model files.
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 # Microphone level (CoreAudio / WASAPI).
 cpal = "0.18"
 which = "8"
@@ -87,6 +88,8 @@ windows-core = "0.62"
 
 [dev-dependencies]
 tempfile = "3"
+# The local HTTP server of the model download tests.
+tokio = { version = "1", features = ["net"] }
 # Speech fixtures for the VAD tests (tests/fixtures/*.wav).
 hound = "3.5"
 # Mock runtime: capability (ACL) checks against the real config in tests.

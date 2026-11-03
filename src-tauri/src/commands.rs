@@ -29,6 +29,7 @@ use crate::{
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
     recording::{RecordingManager, status::RecordingStatus},
     shell::{self, SettingsLock, shortcuts::ShortcutError, windows},
+    speech::models::{ModelId, ModelManager, SpeechModel},
     storage::{
         Storage,
         calls::{self, Call, CallCreate, CallUpdate},
@@ -489,10 +490,19 @@ pub async fn settings_update(
     app: AppHandle,
     storage: State<'_, Storage>,
     lock: State<'_, SettingsLock>,
+    models: State<'_, ModelManager>,
+    recorder: State<'_, RecordingManager>,
     patch: SettingsMap,
 ) -> CommandResult<SettingsUpdateResult> {
     settings::validate(&patch)?;
     let _one_at_a_time = lock.0.lock().await;
+    // As `speech_model_select`: a ready model, not changed while recording.
+    let model = patch
+        .contains_key(settings::SPEECH_MODEL)
+        .then(|| settings::speech_model(&patch));
+    if let Some(model) = model {
+        models.check_select(model, recorder.is_recording())?;
+    }
     let (before, stored) = storage
         .write(&app, move |db| {
             let before = settings::get(db)?;
@@ -518,6 +528,9 @@ pub async fn settings_update(
         &app,
         settings::flag(&settings, settings::ONBOARDING_COMPLETED),
     );
+    if model.is_some() {
+        models.set_selected(settings::speech_model(&settings));
+    }
     Ok(SettingsUpdateResult {
         settings,
         shortcut_errors: effects.shortcut_errors,
@@ -601,6 +614,7 @@ pub async fn storage_reopen(
     app: AppHandle,
     storage: State<'_, Storage>,
     lock: State<'_, SettingsLock>,
+    models: State<'_, ModelManager>,
 ) -> CommandResult<()> {
     let _one_at_a_time = lock.0.lock().await;
     if storage.error().is_none() {
@@ -608,6 +622,7 @@ pub async fn storage_reopen(
     }
     storage.reopen().await?;
     let settings = storage.read(settings::get).await?;
+    models.set_selected(settings::speech_model(&settings));
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || shell::storage_opened(&handle, &settings))
         .await
@@ -875,4 +890,90 @@ pub async fn recording_stop(
 #[specta::specta]
 pub fn recording_status(recorder: State<'_, RecordingManager>) -> CommandResult<RecordingStatus> {
     Ok(recorder.status())
+}
+
+/* Speech models */
+
+/// Both models (turbo, then small) with their download size, state and
+/// whether `speechModel` names them. Files deleted by hand are noticed here.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_models_list(
+    models: State<'_, ModelManager>,
+) -> CommandResult<Vec<SpeechModel>> {
+    Ok(models.list())
+}
+
+/// "Скачать" / "Продолжить": starts the download in the background, or
+/// resumes it from the `.part`, and returns the model at once; progress
+/// comes in `SpeechModelChanged`. A ready or downloading model stays as it
+/// is. Without room for the rest of the file plus 10 % of the model the
+/// model becomes `noSpace` and nothing is downloaded.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_model_download(
+    models: State<'_, ModelManager>,
+    id: ModelId,
+) -> CommandResult<SpeechModel> {
+    Ok(models.download(id))
+}
+
+/// "Пауза": stops the download and keeps what is downloaded. Resolves once
+/// it stopped.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_model_pause(
+    models: State<'_, ModelManager>,
+    id: ModelId,
+) -> CommandResult<SpeechModel> {
+    Ok(models.pause(id).await)
+}
+
+/// "Отменить": stops the download, also a paused one, and deletes the
+/// unfinished file. A ready model stays.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_model_cancel(
+    models: State<'_, ModelManager>,
+    id: ModelId,
+) -> CommandResult<SpeechModel> {
+    models.cancel(id).await
+}
+
+/// "Удалить": deletes the model's files (a download in progress stops).
+/// The selected model can't be removed while recording: `Invalid`.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_model_remove(
+    models: State<'_, ModelManager>,
+    recorder: State<'_, RecordingManager>,
+    id: ModelId,
+) -> CommandResult<SpeechModel> {
+    models.remove(id, recorder.is_recording()).await
+}
+
+/// Recognize with this model: stores `speechModel` (`DataChanged` of the
+/// settings, `SpeechModelChanged` of both models). Only a ready model
+/// (`Invalid` otherwise); while recording only the model already selected.
+#[tauri::command]
+#[specta::specta]
+pub async fn speech_model_select(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    lock: State<'_, SettingsLock>,
+    models: State<'_, ModelManager>,
+    recorder: State<'_, RecordingManager>,
+    id: ModelId,
+) -> CommandResult<SpeechModel> {
+    let _one_at_a_time = lock.0.lock().await;
+    models.check_select(id, recorder.is_recording())?;
+    let patch = SettingsMap::from([(
+        settings::SPEECH_MODEL.to_owned(),
+        Value::String(id.as_str().to_owned()),
+    )]);
+    storage
+        .write(&app, move |db| Ok(((), settings::put(db, &patch)?)))
+        .await?;
+    models.set_selected(id);
+    Ok(models.get(id))
 }
