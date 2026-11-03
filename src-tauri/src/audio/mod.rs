@@ -1,14 +1,18 @@
-//! Live input level for the checks before a call (`specs/audio-check`,
-//! design.md decisions 12–14). Nothing is recorded or leaves the machine:
-//! samples only feed a meter. `mic_watch`: whether another app uses the
-//! microphone (`specs/mic-activity`).
+//! Audio capture. The meters for the checks before a call
+//! (`specs/audio-check`, design.md decisions 12–14) and the recorder
+//! (`crate::recording`, audio-capture decisions 7–9) open the same devices
+//! (`sources`) into different sinks (`sink`): an RMS feed or a timestamped
+//! ring. `mic_watch`: whether another app uses the microphone
+//! (`specs/mic-activity`).
 
+pub mod clock;
 pub mod level;
 pub mod levels;
 #[cfg(target_os = "macos")]
 pub mod mac;
 pub mod mic_watch;
-mod sources;
+pub mod sink;
+pub mod sources;
 #[cfg(windows)]
 mod win;
 

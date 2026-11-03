@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use super::sink::Breakdown;
 use crate::error::CaptureFailure;
 
 /// Level 0 is this quiet or quieter.
@@ -64,7 +65,7 @@ pub struct Failure {
 #[derive(Debug, Default)]
 struct Shared {
     levels: Mutex<Accumulator>,
-    failure: Mutex<Option<Failure>>,
+    failure: Breakdown,
 }
 
 /// Where a capture callback puts its samples; the meter reads it every
@@ -89,26 +90,18 @@ impl Feed {
     }
 
     /// The capture broke; the first failure is kept until the meter reads it.
+    #[cfg(test)]
     pub fn fail(&self, reason: CaptureFailure, message: impl Into<String>) {
-        let mut failure = self
-            .0
-            .failure
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if failure.is_none() {
-            *failure = Some(Failure {
-                reason,
-                message: message.into(),
-            });
-        }
+        self.0.failure.fail(reason, message);
     }
 
     pub fn take_failure(&self) -> Option<Failure> {
-        self.0
-            .failure
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
+        self.0.failure.take()
+    }
+
+    /// The failure slot, for the capture's error callback.
+    pub fn breakdown_handle(&self) -> Breakdown {
+        self.0.failure.clone()
     }
 }
 

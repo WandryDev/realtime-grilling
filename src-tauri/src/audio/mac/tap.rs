@@ -9,10 +9,7 @@
 use std::{
     ffi::c_void,
     ptr::NonNull,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use objc2::{AllocAnyThread, rc::Retained, runtime::AnyObject};
@@ -29,65 +26,93 @@ use objc2_core_foundation::CFDictionary;
 use objc2_foundation::{NSArray, NSMutableDictionary, NSNumber, NSString};
 
 use super::hal::{self, check};
-use crate::audio::level::Feed;
+use crate::audio::{
+    clock,
+    sink::{BlockFormat, SampleSink},
+};
 
 /// `kAudioFormatFlagIsFloat`.
 const FORMAT_FLAG_IS_FLOAT: u32 = 1;
 /// `kAudioObjectUnknown`.
 const UNKNOWN_OBJECT: AudioObjectID = 0;
+/// `kAudioTimeStampHostTimeValid`.
+const HOST_TIME_VALID: u32 = 1 << 1;
 
 fn any<T: objc2::Message>(object: &T) -> &AnyObject {
     // SAFETY: every Objective-C object is an AnyObject.
     unsafe { &*(std::ptr::from_ref(object).cast::<AnyObject>()) }
 }
 
+/// What the IOProc gets as its context: the sink and the IO's rate.
+struct Context<S> {
+    sink: S,
+    sample_rate: u32,
+}
+
 /// A running tap; dropping it stops the IO and destroys the aggregate
 /// device and the tap.
-pub struct SystemTap {
+pub struct SystemTap<S: SampleSink> {
     tap: AudioObjectID,
     aggregate: AudioObjectID,
     io_proc: AudioDeviceIOProcID,
-    /// The IOProc's context; lives as long as the IOProc.
-    feed: Arc<Feed>,
+    /// The IOProc's context (`Box::into_raw`); freed after the IOProc is
+    /// destroyed.
+    context: *mut Context<S>,
 }
 
-unsafe extern "C-unwind" fn io_proc(
+// SAFETY: the context is only touched by the IOProc (one HAL thread) while
+// it runs, and by `Drop` after it stopped; `S` itself is `Send`.
+unsafe impl<S: SampleSink> Send for SystemTap<S> {}
+
+/// The host time of the input's first frame, when the HAL set it.
+fn host_time(stamp: &AudioTimeStamp) -> Option<u64> {
+    (stamp.mFlags.0 & HOST_TIME_VALID != 0).then(|| clock::host_ticks_to_ns(stamp.mHostTime))
+}
+
+unsafe extern "C-unwind" fn io_proc<S: SampleSink>(
     _device: AudioObjectID,
     _now: NonNull<AudioTimeStamp>,
     input: NonNull<AudioBufferList>,
-    _input_time: NonNull<AudioTimeStamp>,
+    input_time: NonNull<AudioTimeStamp>,
     _output: NonNull<AudioBufferList>,
     _output_time: NonNull<AudioTimeStamp>,
     context: *mut c_void,
 ) -> i32 {
-    // SAFETY: `context` is the `Arc<Feed>` the `SystemTap` keeps alive until
-    // the IOProc is destroyed.
-    let feed = unsafe { &*context.cast::<Feed>() };
-    // SAFETY: Core Audio passes a valid buffer list for the callback's duration.
-    let list = unsafe { input.as_ref() };
+    // SAFETY: `context` is the `Context<S>` the `SystemTap` keeps alive
+    // until the IOProc is destroyed; the HAL calls an IOProc on one thread.
+    let context = unsafe { &mut *context.cast::<Context<S>>() };
+    // SAFETY: Core Audio passes valid structures for the callback's duration.
+    let (list, stamp) = unsafe { (input.as_ref(), input_time.as_ref()) };
+    let host_time = host_time(stamp);
     let count = list.mNumberBuffers as usize;
     // SAFETY: `mBuffers` is a variable-length array of `mNumberBuffers`.
     let buffers: &[AudioBuffer] =
         unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), count) };
-    for buffer in buffers {
-        if buffer.mData.is_null() {
-            continue;
-        }
+    // The tap is interleaved: one buffer. A non-interleaved one gives a
+    // buffer per channel at the same time; the first stands for them all
+    // (two blocks with one stamp would double the duration).
+    if let Some(buffer) = buffers.iter().find(|buffer| !buffer.mData.is_null()) {
         let samples = buffer.mDataByteSize as usize / size_of::<f32>();
         // SAFETY: the tap's format is checked to be 32-bit float.
         let samples = unsafe { std::slice::from_raw_parts(buffer.mData.cast::<f32>(), samples) };
-        feed.push(samples.iter().copied());
+        let format = BlockFormat {
+            channels: u16::try_from(buffer.mNumberChannels.max(1)).unwrap_or(1),
+            sample_rate: context.sample_rate,
+        };
+        context
+            .sink
+            .push(format, host_time, samples.iter().copied());
     }
     0
 }
 
 static NEXT_AGGREGATE: AtomicU32 = AtomicU32::new(0);
 
-impl SystemTap {
+impl<S: SampleSink> SystemTap<S> {
     /// Starts a tap of everything that plays except this process. On the
     /// first tap macOS asks for "Запись системного аудио"; without the
     /// access the tap gives silence.
-    pub fn start(feed: Feed) -> Result<Self, String> {
+    pub fn start(sink: S) -> Result<Self, String> {
         let own_object =
             hal::process_object_for_pid(i32::try_from(std::process::id()).unwrap_or(0));
         let exclude: Vec<Retained<NSNumber>> = if own_object == 0 {
@@ -119,7 +144,10 @@ impl SystemTap {
             tap,
             aggregate: UNKNOWN_OBJECT,
             io_proc: None,
-            feed: Arc::new(feed),
+            context: Box::into_raw(Box::new(Context {
+                sink,
+                sample_rate: 48_000,
+            })),
         };
 
         let format: AudioStreamBasicDescription =
@@ -130,6 +158,7 @@ impl SystemTap {
                 format.mFormatFlags, format.mBitsPerChannel
             ));
         }
+
         let tap_uid = hal::get_string(tap, hal::TAP_UID, hal::SCOPE_GLOBAL)?;
 
         let key = NSString::from_str;
@@ -160,13 +189,27 @@ impl SystemTap {
             },
             "AudioHardwareCreateAggregateDevice",
         )?;
-        // SAFETY: the context (`feed`) outlives the IOProc: both live in `Self`.
+        // The IO runs at the aggregate's rate (the tap's when it can't tell).
+        let rate = hal::get::<f64>(
+            running.aggregate,
+            hal::NOMINAL_SAMPLE_RATE,
+            hal::SCOPE_GLOBAL,
+        )
+        .ok()
+        .filter(|rate| *rate > 0.0)
+        .unwrap_or(format.mSampleRate);
+        // SAFETY: the IOProc does not exist yet.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        unsafe {
+            (*running.context).sample_rate = rate.round() as u32;
+        }
+        // SAFETY: the context outlives the IOProc: `Drop` frees it last.
         check(
             unsafe {
                 AudioDeviceCreateIOProcID(
                     running.aggregate,
-                    Some(io_proc),
-                    Arc::as_ptr(&running.feed).cast_mut().cast(),
+                    Some(io_proc::<S>),
+                    running.context.cast(),
                     NonNull::from(&mut running.io_proc),
                 )
             },
@@ -181,7 +224,7 @@ impl SystemTap {
     }
 }
 
-impl Drop for SystemTap {
+impl<S: SampleSink> Drop for SystemTap<S> {
     fn drop(&mut self) {
         // SAFETY: the ids belong to this tap and are destroyed once, in the
         // reverse order of creation; the unset ones are skipped.
@@ -194,6 +237,8 @@ impl Drop for SystemTap {
                 AudioHardwareDestroyAggregateDevice(self.aggregate);
             }
             AudioHardwareDestroyProcessTap(self.tap);
+            // The IOProc is gone: nothing else points at the context.
+            drop(Box::from_raw(self.context));
         }
     }
 }

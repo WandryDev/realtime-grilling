@@ -17,6 +17,7 @@ use super::{
     AudioSource,
     level::Feed,
     levels::{Opened, Opener},
+    sink::{BlockFormat, SampleSink},
 };
 use crate::{
     error::{CaptureFailure, CommandError, CommandResult},
@@ -33,12 +34,16 @@ impl Opener for DeviceOpener {
                     &permissions::status(PermissionKind::Microphone),
                     "микрофону",
                 )?;
-                Ok(Opened {
-                    capture: Box::new(Microphone::open(feed)?),
-                    playing: None,
-                })
+                open_microphone(feed)
             }
-            AudioSource::System => system(feed),
+            AudioSource::System => {
+                #[cfg(target_os = "macos")]
+                ensure_access(
+                    &permissions::status(PermissionKind::SystemAudio),
+                    "записи системного звука",
+                )?;
+                open_system(feed)
+            }
         }
     }
 }
@@ -62,15 +67,21 @@ pub fn ensure_access(status: &PermissionStatus, what: &str) -> CommandResult<()>
     }
 }
 
+/// The default input into `sink`. The caller checks the access first.
+pub fn open_microphone(sink: impl SampleSink) -> CommandResult<Opened> {
+    Ok(Opened {
+        capture: Box::new(Microphone::open(sink)?),
+        playing: None,
+    })
+}
+
+/// What the other apps play, into `sink`. The caller checks the access
+/// first (macOS).
 #[cfg(target_os = "macos")]
-fn system(feed: Feed) -> CommandResult<Opened> {
+pub fn open_system(sink: impl SampleSink) -> CommandResult<Opened> {
     use super::mac::{hal, tap::SystemTap};
 
-    ensure_access(
-        &permissions::status(PermissionKind::SystemAudio),
-        "записи системного звука",
-    )?;
-    let tap = SystemTap::start(feed).map_err(|error| {
+    let tap = SystemTap::start(sink).map_err(|error| {
         CommandError::capture(
             CaptureFailure::Busy,
             format!("Не удалось начать запись системного звука: {error}"),
@@ -83,8 +94,8 @@ fn system(feed: Feed) -> CommandResult<Opened> {
 }
 
 #[cfg(windows)]
-fn system(feed: Feed) -> CommandResult<Opened> {
-    let loopback = super::win::Loopback::start(feed).map_err(|error| {
+pub fn open_system(sink: impl SampleSink) -> CommandResult<Opened> {
+    let loopback = super::win::Loopback::start(sink).map_err(|error| {
         CommandError::capture(
             CaptureFailure::Busy,
             format!("Не удалось начать запись системного звука: {error}"),
@@ -97,11 +108,18 @@ fn system(feed: Feed) -> CommandResult<Opened> {
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-fn system(_feed: Feed) -> CommandResult<Opened> {
+pub fn open_system(_sink: impl SampleSink) -> CommandResult<Opened> {
     Err(CommandError::capture(
         CaptureFailure::NoDevice,
         "Запись системного звука на этой ОС не поддерживается",
     ))
+}
+
+/// An id of the default input device now, to notice that it changed;
+/// `None` without one.
+pub fn default_input_id() -> Option<String> {
+    let device = cpal::default_host().default_input_device()?;
+    device.id().ok().map(|id| id.to_string())
 }
 
 /// The default input device. `cpal::Stream` must stay on the thread that
@@ -112,12 +130,12 @@ struct Microphone {
 }
 
 impl Microphone {
-    fn open(feed: Feed) -> CommandResult<Self> {
+    fn open(sink: impl SampleSink) -> CommandResult<Self> {
         let (ready_sender, ready) = mpsc::channel();
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = thread::Builder::new()
-            .name("grill-mic-level".to_owned())
-            .spawn(move || match build_input(feed) {
+            .name("grill-mic".to_owned())
+            .spawn(move || match build_input(sink) {
                 Ok(stream) => {
                     let _ = ready_sender.send(Ok(()));
                     // Returns when `stop` is dropped.
@@ -162,7 +180,7 @@ fn cpal_error(error: &cpal::Error) -> CommandError {
     CommandError::capture(reason, format!("Не удалось открыть микрофон: {error}"))
 }
 
-fn build_input(feed: Feed) -> CommandResult<cpal::Stream> {
+fn build_input<S: SampleSink>(sink: S) -> CommandResult<cpal::Stream> {
     let device = cpal::default_host().default_input_device().ok_or_else(|| {
         CommandError::capture(CaptureFailure::NoDevice, "Нет ни одного микрофона")
     })?;
@@ -171,14 +189,14 @@ fn build_input(feed: Feed) -> CommandResult<cpal::Stream> {
         .map_err(|error| cpal_error(&error))?;
     let config = supported.config();
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => input::<f32>(&device, config, feed),
-        SampleFormat::F64 => input::<f64>(&device, config, feed),
-        SampleFormat::I8 => input::<i8>(&device, config, feed),
-        SampleFormat::I16 => input::<i16>(&device, config, feed),
-        SampleFormat::I32 => input::<i32>(&device, config, feed),
-        SampleFormat::U8 => input::<u8>(&device, config, feed),
-        SampleFormat::U16 => input::<u16>(&device, config, feed),
-        SampleFormat::U32 => input::<u32>(&device, config, feed),
+        SampleFormat::F32 => input::<f32, S>(&device, config, sink),
+        SampleFormat::F64 => input::<f64, S>(&device, config, sink),
+        SampleFormat::I8 => input::<i8, S>(&device, config, sink),
+        SampleFormat::I16 => input::<i16, S>(&device, config, sink),
+        SampleFormat::I32 => input::<i32, S>(&device, config, sink),
+        SampleFormat::U8 => input::<u8, S>(&device, config, sink),
+        SampleFormat::U16 => input::<u16, S>(&device, config, sink),
+        SampleFormat::U32 => input::<u32, S>(&device, config, sink),
         other => {
             return Err(CommandError::capture(
                 CaptureFailure::Busy,
@@ -191,19 +209,57 @@ fn build_input(feed: Feed) -> CommandResult<cpal::Stream> {
     Ok(stream)
 }
 
-fn input<T>(
+/// The host time of a `cpal` input block's first frame on [`super::clock`].
+///
+/// - macOS: `callback` is the AUHAL input `mHostTime`, the same "input
+///   time" the tap's IOProc gets. `capture` would be that minus the device
+///   buffer, latency and safety offset, i.e. ~a buffer earlier than the tap
+///   on the same audio, so the tap and the microphone are compared on
+///   `callback`.
+/// - Windows: `capture` is `GetBuffer`'s QPC position, as for the loopback.
+/// - Elsewhere: no shared clock; the sink stamps "now − block".
+#[allow(clippy::missing_const_for_fn, unused_variables)]
+fn host_time(info: &cpal::InputCallbackInfo) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        u64::try_from(info.timestamp().callback.as_nanos()).ok()
+    }
+    #[cfg(windows)]
+    {
+        u64::try_from(info.timestamp().capture.as_nanos())
+            .ok()
+            .filter(|nanos| *nanos > 0)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        None
+    }
+}
+
+fn input<T, S>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    feed: Feed,
+    mut sink: S,
 ) -> Result<cpal::Stream, cpal::Error>
 where
     T: SizedSample,
     f32: FromSample<T>,
+    S: SampleSink,
 {
-    let errors = feed.clone();
+    let errors = sink.breakdown();
+    let format = BlockFormat {
+        channels: config.channels,
+        sample_rate: config.sample_rate,
+    };
     device.build_input_stream::<T, _, _>(
         config,
-        move |data: &[T], _| feed.push(data.iter().map(|sample| f32::from_sample_(*sample))),
+        move |data: &[T], info| {
+            sink.push(
+                format,
+                host_time(info),
+                data.iter().map(|sample| f32::from_sample_(*sample)),
+            );
+        },
         move |error| match stream_failure(error.kind()) {
             Some(reason) => errors.fail(reason, format!("Микрофон перестал работать: {error}")),
             None => eprintln!("grill: microphone stream: {error}"),

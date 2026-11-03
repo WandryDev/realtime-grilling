@@ -43,7 +43,10 @@ use windows::{
     core::{HRESULT, IUnknown, Interface, implement},
 };
 
-use super::level::Feed;
+use super::{
+    clock,
+    sink::{BlockFormat, SampleSink},
+};
 use crate::error::CaptureFailure;
 
 const WAVE_FORMAT_PCM: u16 = 1;
@@ -228,13 +231,15 @@ fn endpoint_loopback() -> Result<(IAudioClient, WAVEFORMATEX), String> {
     }
 }
 
-/// Reads the captured packets into the meter.
-fn drain(
+/// Reads the captured packets into the sink, stamped with the QPC time of
+/// their first frame.
+fn drain<S: SampleSink>(
     capture: &IAudioCaptureClient,
     kind: SampleKind,
-    channels: usize,
-    feed: &Feed,
+    format: BlockFormat,
+    sink: &mut S,
 ) -> windows::core::Result<()> {
+    let channels = usize::from(format.channels);
     // SAFETY: each buffer is read before it is released.
     unsafe {
         loop {
@@ -244,21 +249,34 @@ fn drain(
             let mut data: *mut u8 = std::ptr::null_mut();
             let mut frames = 0u32;
             let mut flags = 0u32;
-            capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+            let mut qpc_position = 0u64;
+            capture.GetBuffer(
+                &mut data,
+                &mut frames,
+                &mut flags,
+                None,
+                Some(&raw mut qpc_position),
+            )?;
+            // 100-ns units; 0 when the endpoint gives none.
+            let host_time = (qpc_position != 0).then(|| clock::hundred_ns_to_ns(qpc_position));
             let count = frames as usize * channels;
             #[allow(clippy::cast_sign_loss)]
             let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
             if silent || data.is_null() {
-                feed.push(std::iter::repeat_n(0.0, count));
+                sink.push(format, host_time, std::iter::repeat_n(0.0, count));
             } else {
                 match kind {
                     SampleKind::I16 => {
                         let samples = std::slice::from_raw_parts(data.cast::<i16>(), count);
-                        feed.push(samples.iter().map(|sample| f32::from(*sample) / 32_768.0));
+                        sink.push(
+                            format,
+                            host_time,
+                            samples.iter().map(|sample| f32::from(*sample) / 32_768.0),
+                        );
                     }
                     SampleKind::F32 => {
                         let samples = std::slice::from_raw_parts(data.cast::<f32>(), count);
-                        feed.push(samples.iter().copied());
+                        sink.push(format, host_time, samples.iter().copied());
                     }
                 }
             }
@@ -267,8 +285,8 @@ fn drain(
     }
 }
 
-fn run(
-    feed: &Feed,
+fn run<S: SampleSink>(
+    sink: &mut S,
     stop: &AtomicBool,
     ready: &mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -277,7 +295,12 @@ fn run(
         endpoint_loopback()
     })?;
     let kind = kind_of(&format)?;
-    let channels = usize::from(format.nChannels);
+    // Copies: `WAVEFORMATEX` is packed.
+    let (channels, sample_rate) = (format.nChannels, format.nSamplesPerSec);
+    let block_format = BlockFormat {
+        channels: channels.max(1),
+        sample_rate,
+    };
     // SAFETY: the client is initialized.
     let capture: IAudioCaptureClient =
         unsafe { client.GetService() }.map_err(|error| text(&error))?;
@@ -287,9 +310,10 @@ fn run(
     let mut result = Ok(());
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(POLL);
-        if let Err(error) = drain(&capture, kind, channels, feed) {
-            // Reaches the subscribers as `AudioLevelStopped`, not as zeros.
-            feed.fail(
+        if let Err(error) = drain(&capture, kind, block_format, sink) {
+            // Reaches the meters as `AudioLevelStopped`, the recorder as a
+            // reconnect, not as zeros.
+            sink.breakdown().fail(
                 CaptureFailure::Busy,
                 format!("Запись системного звука прервалась: {}", text(&error)),
             );
@@ -309,7 +333,7 @@ pub struct Loopback {
 }
 
 impl Loopback {
-    pub fn start(feed: Feed) -> Result<Self, String> {
+    pub fn start<S: SampleSink>(mut sink: S) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_sender, ready) = mpsc::channel();
         let thread_stop = Arc::clone(&stop);
@@ -318,7 +342,7 @@ impl Loopback {
             .spawn(move || {
                 // SAFETY: COM for this thread only, released below.
                 let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-                if let Err(error) = run(&feed, &thread_stop, &ready_sender) {
+                if let Err(error) = run(&mut sink, &thread_stop, &ready_sender) {
                     eprintln!("grill: system audio loopback stopped: {error}");
                     let _ = ready_sender.send(Err(error));
                 }

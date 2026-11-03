@@ -34,6 +34,7 @@ pub const PROC_IS_RUNNING_INPUT: u32 = fourcc(b"piri"); // kAudioProcessProperty
 const DEV_IS_RUNNING_SOMEWHERE: u32 = fourcc(b"gone"); // kAudioDevicePropertyDeviceIsRunningSomewhere
 pub const TAP_UID: u32 = fourcc(b"tuid"); // kAudioTapPropertyUID
 pub const TAP_FORMAT: u32 = fourcc(b"tfmt"); // kAudioTapPropertyFormat
+pub const NOMINAL_SAMPLE_RATE: u32 = fourcc(b"nsrt"); // kAudioDevicePropertyNominalSampleRate
 
 fn address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress {
