@@ -84,7 +84,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/models/ggml-silero-v5.1.2.bin": "models/ggml-silero-v5.1.2.bin"
+      "resources/models/ggml-silero-v5.1.2.bin": "models/ggml-silero-v5.1.2.bin",
+      "resources/speech-check/*": "speech-check/"
     },
     "macOS": {
       "signingIdentity": "-"

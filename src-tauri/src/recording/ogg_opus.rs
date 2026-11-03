@@ -8,12 +8,13 @@
 //! with the exact length in its last granule position.
 
 use std::{
-    io,
+    io::{self, Read, Seek},
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ogg::{PacketWriteEndInfo, PacketWriter};
-use opus::{Application, Bitrate, Channels, Encoder};
+use ogg::{PacketReader, PacketWriteEndInfo, PacketWriter};
+use opus::{Application, Bitrate, Channels, Decoder, Encoder};
 
 use super::{SAMPLE_RATE, store::ChannelSink};
 
@@ -30,6 +31,8 @@ const PAGES_PER_SYNC: u32 = 5;
 /// Opus never needs more for one packet (RFC 6716 §3.2.1).
 const MAX_PACKET: usize = 1_275;
 const VENDOR: &str = "Grill (libopus)";
+/// The largest Opus frame: 120 ms at 48 kHz.
+const MAX_FRAME: usize = 5_760;
 
 fn codec_error(error: opus::Error) -> io::Error {
     io::Error::other(error)
@@ -197,12 +200,94 @@ impl<W: ChannelSink> OggOpusWriter<W> {
     }
 }
 
+/// A channel file read back (see [`read`]).
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the stream fields are checked by the tests")
+)]
+pub struct Decoded {
+    /// Encoder delay at 48 kHz, from `OpusHead`.
+    pub pre_skip: u16,
+    /// The `OpusHead` input sample rate.
+    pub input_rate: u32,
+    /// Granule position of the last complete page read.
+    pub last_granule: u64,
+    /// Whether the stream's EOS page was reached.
+    pub eos: bool,
+    /// 16 kHz mono samples after the pre-skip, trimmed to the last granule.
+    pub samples: Vec<f32>,
+}
+
+fn invalid(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
+}
+
+/// Decodes a mono Ogg Opus stream to 16 kHz. Reads up to the end or the
+/// first broken page, so a file cut by a crash gives everything up to its
+/// last complete page.
+pub fn read<R: Read + Seek>(reader: R) -> io::Result<Decoded> {
+    let mut pages = PacketReader::new(reader);
+    let head = pages
+        .read_packet()
+        .map_err(io::Error::other)?
+        .ok_or_else(|| invalid("empty Ogg stream"))?;
+    if head.data.len() < 19 || &head.data[..8] != b"OpusHead" {
+        return Err(invalid("not an Opus stream"));
+    }
+    if head.data[9] != 1 {
+        return Err(invalid("not a mono Opus stream"));
+    }
+    let pre_skip = u16::from_le_bytes([head.data[10], head.data[11]]);
+    let input_rate =
+        u32::from_le_bytes([head.data[12], head.data[13], head.data[14], head.data[15]]);
+    let tags = pages
+        .read_packet()
+        .map_err(io::Error::other)?
+        .ok_or_else(|| invalid("no OpusTags"))?;
+    if !tags.data.starts_with(b"OpusTags") {
+        return Err(invalid("no OpusTags"));
+    }
+
+    let mut decoder = Decoder::new(SAMPLE_RATE, Channels::Mono).map_err(codec_error)?;
+    let mut pcm = Vec::new();
+    let mut frame = vec![0.0; MAX_FRAME];
+    let mut last_granule = 0;
+    let mut eos = false;
+    while let Ok(Some(packet)) = pages.read_packet() {
+        let count = decoder
+            .decode_float(&packet.data, &mut frame, false)
+            .map_err(codec_error)?;
+        pcm.extend_from_slice(&frame[..count]);
+        if packet.last_in_page() {
+            last_granule = packet.absgp_page();
+        }
+        eos |= packet.last_in_stream();
+    }
+    let to_samples =
+        |granule: u64| usize::try_from(granule / GRANULE_PER_SAMPLE).unwrap_or(usize::MAX);
+    let end = to_samples(last_granule).min(pcm.len());
+    let skip = to_samples(u64::from(pre_skip)).min(end);
+    pcm.truncate(end);
+    pcm.drain(..skip);
+    Ok(Decoded {
+        pre_skip,
+        input_rate,
+        last_granule,
+        eos,
+        samples: pcm,
+    })
+}
+
+/// A channel file as 16 kHz mono samples (see [`read`]).
+pub fn read_file(path: &Path) -> io::Result<Vec<f32>> {
+    let file = std::fs::File::open(path)?;
+    Ok(read(io::BufReader::new(file))?.samples)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, Write};
-
-    use ogg::PacketReader;
-    use opus::Decoder;
 
     use super::*;
 
@@ -250,53 +335,10 @@ mod tests {
         writer.finish().unwrap()
     }
 
-    struct Decoded {
-        pre_skip: usize,
-        input_rate: u32,
-        /// Granule position of the last complete page read.
-        last_granule: u64,
-        eos: bool,
-        /// 16 kHz samples after the pre-skip, trimmed to the last granule.
-        samples: Vec<f32>,
-    }
-
-    /// Reads packets until the end or the first broken page.
     fn decode(bytes: Vec<u8>) -> Decoded {
-        let mut reader = PacketReader::new(Cursor::new(bytes));
-        let head = reader.read_packet_expected().unwrap();
-        assert_eq!(&head.data[..8], b"OpusHead");
-        assert_eq!(head.data[8], 1);
-        assert_eq!(head.data[9], 1);
-        assert!(head.first_in_stream());
-        let pre_skip = usize::from(u16::from_le_bytes([head.data[10], head.data[11]]));
-        let input_rate = u32::from_le_bytes(head.data[12..16].try_into().unwrap());
-        let tags = reader.read_packet_expected().unwrap();
-        assert_eq!(&tags.data[..8], b"OpusTags");
-
-        let mut decoder = Decoder::new(SAMPLE_RATE, Channels::Mono).unwrap();
-        let mut pcm = Vec::new();
-        let mut buffer = vec![0.0; 5_760];
-        let mut last_granule = 0;
-        let mut eos = false;
-        while let Ok(Some(packet)) = reader.read_packet() {
-            let count = decoder
-                .decode_float(&packet.data, &mut buffer, false)
-                .unwrap();
-            pcm.extend_from_slice(&buffer[..count]);
-            if packet.last_in_page() {
-                last_granule = packet.absgp_page();
-            }
-            eos |= packet.last_in_stream();
-        }
-        let skip = pre_skip / 3;
-        let end = (last_granule as usize / 3).min(pcm.len());
-        Decoded {
-            pre_skip,
-            input_rate,
-            last_granule,
-            eos,
-            samples: pcm[skip.min(end)..end].to_vec(),
-        }
+        let decoded = read(Cursor::new(bytes)).unwrap();
+        assert!(decoded.pre_skip > 0);
+        decoded
     }
 
     fn rms(samples: &[f32]) -> f64 {
@@ -316,7 +358,7 @@ mod tests {
         let duration = decoded.samples.len() as f64 / f64::from(SAMPLE_RATE);
         assert!((duration - 3.0).abs() <= 0.020, "decoded {duration} s");
         let granule_duration =
-            (decoded.last_granule - decoded.pre_skip as u64) as f64 / f64::from(GRANULE_RATE);
+            (decoded.last_granule - u64::from(decoded.pre_skip)) as f64 / f64::from(GRANULE_RATE);
         assert!(
             (granule_duration - 3.0).abs() <= 0.020,
             "{granule_duration} s"
@@ -379,7 +421,7 @@ mod tests {
         assert!(!decoded.eos);
         let duration = decoded.samples.len() as f64 / f64::from(SAMPLE_RATE);
         assert!(
-            (duration - (5.0 - decoded.pre_skip as f64 / 48_000.0)).abs() <= 0.020,
+            (duration - (5.0 - f64::from(decoded.pre_skip) / 48_000.0)).abs() <= 0.020,
             "{duration} s"
         );
     }
