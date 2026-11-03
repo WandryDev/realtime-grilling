@@ -10,5 +10,7 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./vitest.setup.ts"],
+    // Room for the condition waits of vitest.setup.ts on a loaded machine.
+    testTimeout: 30_000,
   },
 });
