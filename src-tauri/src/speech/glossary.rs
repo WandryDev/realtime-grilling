@@ -3,16 +3,18 @@
 //!
 //! Terms go in priority order: the project name, the call's participants,
 //! the project's other people, then the brief's glossary terms and stack.
-//! They are joined with ", " and cut on whole terms: 600 characters for the
-//! second pass, the first 300 for the live pass (the spike's ~170-character
-//! prompt worked well, a ~900-character one made things worse).
+//! They are joined with ", " and cut on whole terms: 340 characters for the
+//! second pass, the first 250 for the live pass (the spike's ~170-character
+//! prompt worked well, a ~900-character one made things worse). Cyrillic
+//! runs ~2.3 characters per Whisper token, so 340 characters are ~150
+//! tokens, well inside the 224 that whisper.cpp keeps.
 
 use serde_json::Value;
 
-/// Characters in the full (second-pass) prompt; ~150 tokens at ~4 per token.
-pub const FULL_CHARS: usize = 600;
+/// Characters in the full (second-pass) prompt; ~150 tokens of Cyrillic.
+pub const FULL_CHARS: usize = 340;
 /// Characters in the live-pass prompt.
-pub const LIVE_CHARS: usize = 300;
+pub const LIVE_CHARS: usize = 250;
 const SEPARATOR: &str = ", ";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -93,6 +95,7 @@ impl Glossary {
         &self.terms
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
     }
@@ -157,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn cut_on_whole_terms_at_600_and_300_characters() {
+    fn cut_on_whole_terms_at_340_and_250_characters() {
         // 50 terms of 18 characters: 18 + 20 per further term.
         let people: Vec<String> = (0..50).map(|n| format!("Участник номер {n:03}")).collect();
         let glossary = Glossary::build(None, &people, &[], None);
@@ -166,11 +169,12 @@ mod tests {
         let live = glossary.live().chars().count();
         assert!(full <= FULL_CHARS && full > FULL_CHARS - 20, "{full}");
         assert!(live <= LIVE_CHARS && live > LIVE_CHARS - 20, "{live}");
-        assert_eq!(glossary.terms().len(), 30);
+        // 18 + 16 × 20 = 338 and 18 + 11 × 20 = 238.
+        assert_eq!(glossary.terms().len(), 17);
         assert!(glossary.full().starts_with(glossary.live()));
         // Whole terms only.
-        assert!(glossary.full().ends_with("Участник номер 029"));
-        assert!(glossary.live().ends_with("Участник номер 014"));
+        assert!(glossary.full().ends_with("Участник номер 016"));
+        assert!(glossary.live().ends_with("Участник номер 011"));
     }
 
     #[test]
