@@ -402,7 +402,7 @@ mod tests {
             calls::{self, CallCreate},
             open, open_in_memory,
             people::{self, PersonCreate},
-            projects::{self, ProjectCreate},
+            projects,
         },
     };
 
@@ -417,12 +417,18 @@ mod tests {
         }
     }
 
+    /// A project row with the columns of 0001, so it works on every schema
+    /// version the migration tests start from.
     fn project(connection: &Connection, name: &str) -> String {
-        let input = ProjectCreate {
-            name: name.into(),
-            ..Default::default()
-        };
-        projects::create(connection, input).unwrap().0.id
+        let id = crate::storage::new_id();
+        connection
+            .execute(
+                "INSERT INTO projects (id, name, description, created_at, updated_at)
+                 VALUES (?1, ?2, '', 0, 0)",
+                params![id, name],
+            )
+            .unwrap();
+        id
     }
 
     fn call(connection: &Connection, project_id: &str) -> String {

@@ -1,16 +1,25 @@
 /*
- * Turns the stored entities (projects, people) into what the project screens
- * draw. The demo project "Телемедиа" has full data from Paper; other
- * projects get what can be derived plus the demo brief as a placeholder.
- * When the backend arrives this becomes queries for the project's brief,
- * calls and sources.
+ * Turns the stored entities (projects, people, documents) into what the
+ * project screens draw. The demo projects exist only in the mock layer
+ * (their ids are readable, never a UUID): they keep the Paper brief, calls
+ * and integrations. A project made in the app shows what is stored: its
+ * brief with its state, its documents, and empty calls and proposals until
+ * those come from the backend (tasks 9 and 10).
  */
 
+import type { Brief, ProjectSource } from "@/bindings";
 import type { ClientPerson } from "@/data/people";
+import type { ProjectRecord } from "@/data/projects";
 import type { MockProject } from "@/features/mock/projects";
 
+import type { BriefView } from "./components/brief-section";
+import { documentRowId } from "./components/documents-block";
 import type { ScaleValue } from "./components/person-profile";
-import type { BriefState } from "./components/project-sections";
+import type { PersonFormValues } from "./components/project-dialogs";
+import type {
+  BriefState,
+  BriefStatusView,
+} from "./components/project-sections";
 import {
   BRIEF,
   BRIEF_STATUS,
@@ -37,6 +46,37 @@ import {
 /** The project with the full demo data. */
 export const DEMO_PROJECT_ID = PROJECT.id;
 
+/** A demo project of the mock layer: it keeps the Paper data. */
+export function isDemoProject(id: string) {
+  return HOME_PROJECTS.some((project) => project.id === id);
+}
+
+const MS_PER_MINUTE = 60_000;
+const MINUTES_PER_HOUR = 60;
+const HOURS_PER_DAY = 24;
+const WHEN = new Intl.DateTimeFormat("ru-RU", {
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  month: "long",
+});
+
+/** "только что", "5 мин назад", "3 ч назад", "4 ноября, 12:00". */
+export function relativeTime(at: number, now: number = Date.now()) {
+  const minutes = Math.floor((now - at) / MS_PER_MINUTE);
+  if (minutes < 1) {
+    return "только что";
+  }
+  if (minutes < MINUTES_PER_HOUR) {
+    return `${minutes} мин назад`;
+  }
+  const hours = Math.floor(minutes / MINUTES_PER_HOUR);
+  if (hours < HOURS_PER_DAY) {
+    return `${hours} ч назад`;
+  }
+  return WHEN.format(at);
+}
+
 const SOURCE_NAMES: Record<SourceKind, string> = {
   clickup: "ClickUp",
   github: "GitHub",
@@ -46,10 +86,12 @@ const SOURCE_NAMES: Record<SourceKind, string> = {
 /* ------------------------------------------------------------------ Home */
 
 /**
- * Row of the home table. Seed projects keep their demo row; a project made
- * in the wizard was built from the demo sources and has no calls yet.
+ * Row of the home table. Demo projects keep their demo row; any other shows
+ * the open questions and the last recording of `projects_overview`.
  */
-export function toHomeProject(project: MockProject): HomeProject {
+export function toHomeProject(
+  project: MockProject & Partial<Pick<ProjectRecord, "recordings">>
+): HomeProject {
   const demo = HOME_PROJECTS.find((item) => item.id === project.id);
   if (demo) {
     return {
@@ -59,14 +101,20 @@ export function toHomeProject(project: MockProject): HomeProject {
       name: project.name,
     };
   }
+  const { recordings } = project;
+  const open = recordings?.openQuestions ?? project.openQuestions;
+  const lastAt = recordings?.lastAt ?? null;
   return {
     description: project.description,
     id: project.id,
     initial: project.initial,
-    lastCall: null,
+    lastCall:
+      lastAt === null
+        ? null
+        : { people: "последняя запись", when: WHEN.format(lastAt) },
     name: project.name,
-    open: project.openQuestions ? { count: project.openQuestions } : null,
-    sources: HOME_PROJECTS[0]?.sources ?? [],
+    open: open ? { count: open } : null,
+    sources: [],
   };
 }
 
@@ -83,11 +131,14 @@ export function recentCalls(projects: MockProject[]): CallSummary[] {
 
 export interface ProjectPageData {
   anchors: typeof PROJECT_ANCHORS;
-  brief: typeof BRIEF;
-  briefStatus: typeof BRIEF_STATUS;
+  /** `null`: nothing built yet. */
+  brief: BriefView | null;
+  briefStatus: BriefStatusView;
   calls: CallSummary[];
   callsSummary: typeof PROJECT_CALLS_SUMMARY;
   deleteContents: typeof DELETE_PROJECT.contents;
+  /** The demo projects: Paper data, integrations connected. */
+  demo: boolean;
   people: PersonSummary[];
   proposals: typeof PROPOSALS | null;
   sources: typeof PROJECT_SOURCES;
@@ -168,72 +219,229 @@ export function toPersonSummary(person: ClientPerson): PersonSummary {
   };
 }
 
+/** 1 документ, 2 документа, 5 документов. */
+function documentsCount(count: number) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} документ`;
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} документа`;
+  }
+  return `${count} документов`;
+}
+
+const OUTDATED_NOTICE = {
+  detail:
+    "После сборки изменились описание, заметки, люди или документы проекта. Перед ближайшим звонком агент обновит бриф сам, но лучше сделать это заранее.",
+  title: "Бриф мог устареть",
+};
+
+const TRUNCATED_NOTE =
+  "Собран по сокращённым материалам: документы не поместились целиком, агент читал их начало.";
+
+const EXTENSION = /\.[^.]+$/u;
+
+/** A stored brief in the shape the brief section draws. */
+export function toBriefView(
+  brief: Brief,
+  documents: ProjectSource[]
+): BriefView {
+  const byId = new Map(documents.map((source) => [source.id, source]));
+  const keyDocuments = brief.keyDocuments.map((document) => {
+    const source = byId.get(document.sourceId);
+    return {
+      href: source ? `#${documentRowId(source.id)}` : undefined,
+      kind: "file" as const,
+      meta: source?.name ?? "документ удалён из проекта",
+      title: document.title || (source?.name.replace(EXTENSION, "") ?? ""),
+    };
+  });
+  const ready = documents.filter((source) => source.status === "ready");
+  let keyDocumentsNote =
+    "Документов в проекте нет, бриф собран по описанию, заметкам и людям.";
+  if (ready.length > 0) {
+    keyDocumentsNote = `Агент выбрал ${keyDocuments.length} из ${documentsCount(ready.length)}.`;
+  }
+  return {
+    glossary: brief.glossary,
+    keyDocuments,
+    keyDocumentsNote,
+    modules: brief.modules.map((module) => ({
+      description: module.description || undefined,
+      name: module.name,
+    })),
+    product: brief.product,
+    stack: brief.stack,
+  };
+}
+
+/** The brief state the page shows: a build running wins. */
+export function pageBriefState(
+  project: Pick<ProjectRecord, "brief" | "briefState">,
+  building: boolean
+): BriefState {
+  if (building || project.briefState === "building") {
+    return "updating";
+  }
+  if (project.briefState === "none" || project.brief === null) {
+    return "none";
+  }
+  return project.briefState;
+}
+
+export interface ProjectPageInput {
+  /** Finished stages of the build that runs, 0…`stages`. */
+  buildStage?: number;
+  /** The documents of the project. */
+  documents?: ProjectSource[];
+  now?: number;
+  stages?: number;
+}
+
+type PageProject = Pick<MockProject, "id"> &
+  Partial<Pick<ProjectRecord, "brief" | "briefBuiltAt" | "briefTruncated">>;
+
+/** Calls of a demo project; a project made in the app has none yet. */
+function demoCalls(projectId: string) {
+  if (projectId === DEMO_PROJECT_ID) {
+    return { calls: PROJECT_CALLS, summary: PROJECT_CALLS_SUMMARY };
+  }
+  if (!isDemoProject(projectId)) {
+    return { calls: [], summary: { hidden: 0, summary: "пока пусто" } };
+  }
+  const calls = RECENT_CALLS.filter((call) => call.projectId === projectId).map(
+    (call) => ({ ...call, project: undefined })
+  );
+  return {
+    calls,
+    summary: {
+      hidden: 0,
+      summary: calls.length > 0 ? callsCount(calls.length) : "пока пусто",
+    },
+  };
+}
+
+/** The head of the brief for a stored project. */
+function storedBriefStatus(
+  project: PageProject,
+  input: ProjectPageInput
+): BriefStatusView {
+  const stages = input.stages ?? 5;
+  const stage = Math.min((input.buildStage ?? 0) + 1, stages);
+  const builtAt = project.briefBuiltAt ?? null;
+  const built = builtAt === null ? "" : relativeTime(builtAt, input.now);
+  return {
+    fresh: `Обновлён ${built}`,
+    outdated: `Обновлён ${built}`,
+    outdatedNotice: OUTDATED_NOTICE,
+    truncated: project.briefTruncated ? TRUNCATED_NOTE : undefined,
+    updating: `Собираю бриф: этап ${stage} из ${stages}`,
+    updatingProgress: Math.round(((stage - 1) / stages) * 100),
+  };
+}
+
+/** The line under the header: the documents and how many could be read. */
+function documentsStatus(documents: ProjectSource[]): SourceStatusItem[] {
+  if (documents.length === 0) {
+    return [];
+  }
+  const ready = documents.filter((source) => source.status === "ready");
+  return [
+    {
+      detail: `${documentsCount(documents.length)}, прочитано ${ready.length}`,
+      health: ready.length === documents.length ? "ok" : "error",
+      kind: "file",
+      name: "Документы",
+    },
+  ];
+}
+
+function deleteContentsOf(
+  totalCalls: number,
+  documents: number,
+  people: number
+): typeof DELETE_PROJECT.contents {
+  return [
+    {
+      label: "Звонки с расшифровками и итогами",
+      mono: true,
+      value: String(totalCalls),
+    },
+    {
+      label: "Аудиозаписи",
+      mono: true,
+      value: totalCalls > 0 ? `${totalCalls * 17} МБ` : "0 МБ",
+    },
+    {
+      label: "Документы с компьютера, их копии",
+      mono: true,
+      value: String(documents),
+    },
+    { label: "Бриф, заметки и профили людей", value: peopleCount(people) },
+  ];
+}
+
+/** The Paper parts of a demo project's page. */
+function demoParts(projectId: string, briefState: BriefState) {
+  const { sources, status } = projectSources(projectId);
+  const isTelemedia = projectId === DEMO_PROJECT_ID;
+  const isOutdated = briefState === "outdated";
+  return {
+    brief: BRIEF,
+    briefStatus: BRIEF_STATUS,
+    sources,
+    sourcesStatus: isOutdated && isTelemedia ? SOURCES_STATUS_OUTDATED : status,
+    synced: isOutdated ? SYNCED_OUTDATED : SYNCED_FRESH,
+  };
+}
+
 /** Everything the project page draws for one project. */
 export function projectPageData(
-  project: Pick<MockProject, "id">,
+  project: PageProject,
   people: ClientPerson[],
-  briefState: BriefState = "fresh"
+  briefState: BriefState = "fresh",
+  input: ProjectPageInput = {}
 ): ProjectPageData {
-  const isDemo = project.id === DEMO_PROJECT_ID;
-  const isOutdated = briefState === "outdated";
-  const { sources, status } = projectSources(project.id);
+  const demo = isDemoProject(project.id);
+  const isTelemedia = project.id === DEMO_PROJECT_ID;
+  const documents = input.documents ?? [];
+  const { calls, summary: callsSummary } = demoCalls(project.id);
+  const totalCalls = calls.length + callsSummary.hidden;
 
-  const calls = isDemo
-    ? PROJECT_CALLS
-    : RECENT_CALLS.filter((call) => call.projectId === project.id).map(
-        (call) => ({ ...call, project: undefined })
-      );
-  const hidden = isDemo ? PROJECT_CALLS_SUMMARY.hidden : 0;
-  const callsSummary = isDemo
-    ? PROJECT_CALLS_SUMMARY
+  const parts = demo
+    ? demoParts(project.id, briefState)
     : {
-        hidden,
-        summary: calls.length > 0 ? callsCount(calls.length) : "пока пусто",
+        brief: project.brief ? toBriefView(project.brief, documents) : null,
+        briefStatus: storedBriefStatus(project, input),
+        sources: [],
+        sourcesStatus: documentsStatus(documents),
+        synced: "",
       };
-  const totalCalls = calls.length + hidden;
 
   const anchorCounts: Record<string, number | undefined> = {
     calls: totalCalls,
     people: people.length,
-    sources: sources.length,
+    sources: parts.sources.length + documents.length,
   };
-  // "Заметки" has no section on the page yet, so the app leaves it out.
-  const anchors = PROJECT_ANCHORS.filter((anchor) => anchor.id !== "notes").map(
-    (anchor) =>
-      anchor.id in anchorCounts
-        ? { ...anchor, count: anchorCounts[anchor.id] }
-        : anchor
+  const anchors = PROJECT_ANCHORS.map((anchor) =>
+    anchor.id in anchorCounts
+      ? { ...anchor, count: anchorCounts[anchor.id] }
+      : anchor
   );
 
   return {
+    ...parts,
     anchors,
-    brief: BRIEF,
-    briefStatus: BRIEF_STATUS,
     calls,
     callsSummary,
-    deleteContents: isDemo
+    deleteContents: isTelemedia
       ? DELETE_PROJECT.contents
-      : [
-          {
-            label: "Звонки с расшифровками и итогами",
-            mono: true,
-            value: String(totalCalls),
-          },
-          {
-            label: "Аудиозаписи",
-            mono: true,
-            value: totalCalls > 0 ? `${totalCalls * 17} МБ` : "0 МБ",
-          },
-          {
-            label: "Бриф, заметки и профили людей",
-            value: peopleCount(people.length),
-          },
-        ],
+      : deleteContentsOf(totalCalls, documents.length, people.length),
+    demo,
     people: people.map(toPersonSummary),
-    proposals: isDemo ? PROPOSALS : null,
-    sources,
-    sourcesStatus: isOutdated && isDemo ? SOURCES_STATUS_OUTDATED : status,
-    synced: isOutdated ? SYNCED_OUTDATED : SYNCED_FRESH,
+    proposals: isTelemedia ? PROPOSALS : null,
   };
 }
 
@@ -241,7 +449,7 @@ export function projectPageData(
 export function demoProjectPageData(briefState: BriefState = "fresh") {
   return {
     ...projectPageData(PROJECT, [], briefState),
-    anchors: PROJECT_ANCHORS,
+    anchors: PROJECT_ANCHORS.filter((anchor) => anchor.id !== "notes"),
     people: PROJECT_PEOPLE,
   };
 }
@@ -259,6 +467,8 @@ export interface PersonProfile
   calls: DemoPerson["calls"];
   /** "Звонки с Ольгой"; without it the side says "Звонки". */
   firstName?: string;
+  /** The manager's notes; the demo profile has none to show. */
+  notes?: string;
   scales: { project: ScaleValue; tech: ScaleValue };
   suggestion?: DemoPerson["suggestion"];
   /** "для Ольги" after "Как формулировать вопросы". */
@@ -281,7 +491,14 @@ export const PROJECT_LEVEL_LABELS = [
   "в деталях",
 ] as const;
 
-function levelLabel(labels: readonly string[], level: number) {
+/** What an unset level reads as. */
+export const LEVEL_NOT_SET = "не указано";
+
+/** The name of a level on its scale; "не указано" without one. */
+export function levelLabel(labels: readonly string[], level: number | null) {
+  if (!level) {
+    return LEVEL_NOT_SET;
+  }
   return labels[Math.min(Math.max(level, 1), labels.length) - 1] ?? "";
 }
 
@@ -298,7 +515,10 @@ export const LEVEL_BY_CHOICE: Record<string, number> = {
 };
 
 /** What the agent does by default, from the technical level. */
-export function defaultHowToAsk(tech: number) {
+export function defaultHowToAsk(tech: number | null) {
+  if (!tech) {
+    return "";
+  }
   if (tech <= 2) {
     return "Простым языком, через последствия для бизнеса: деньги, сроки, клиенты. Без терминов.";
   }
@@ -341,12 +561,12 @@ export function personScales(
   return {
     project: {
       label: "Понимание проекта",
-      level: person.project,
+      level: person.project ?? 0,
       value: levelLabel(PROJECT_LEVEL_LABELS, person.project),
     },
     tech: {
       label: "В технике",
-      level: person.tech,
+      level: person.tech ?? 0,
       value: levelLabel(TECH_LEVEL_LABELS, person.tech),
     },
   };
@@ -381,9 +601,8 @@ export function toPersonProfile(person: ClientPerson): PersonProfile {
     calls: [],
     initials: person.initials,
     name: person.name,
-    origin: person.notes
-      ? `Ваши заметки: ${person.notes}`
-      : "Добавлен вами, агент дополнит профиль после звонков",
+    notes: person.notes ?? "",
+    origin: "Добавлен вами, агент дополнит профиль после звонков",
     portrait: PORTRAIT_LABELS.map((label) => ({
       label,
       value:
@@ -393,4 +612,55 @@ export function toPersonProfile(person: ClientPerson): PersonProfile {
     scales: personScales(person),
   };
   return applyEdits(base, person);
+}
+
+/* -------------------------------------------------- Person dialogs */
+
+const TEMPERAMENT = "Темперамент";
+const CHARACTER = "Характер";
+
+/** A person as the fields of "Изменить человека". */
+export function personFormValues(person: ClientPerson): PersonFormValues {
+  return {
+    askStyle: person.askStyle ?? person.howToAsk,
+    character: person.portrait?.[CHARACTER] ?? "",
+    name: person.name,
+    notes: person.notes ?? "",
+    project: person.project,
+    role: person.role,
+    tech: person.tech,
+    temperament: person.portrait?.[TEMPERAMENT] ?? "",
+  };
+}
+
+/**
+ * What the person dialogs save. The card's "how to ask" follows the level
+ * until the manager writes their own; the portrait keeps its other rows.
+ */
+export function personFromForm(
+  values: PersonFormValues,
+  current?: ClientPerson
+): Omit<ClientPerson, "id" | "initials" | "projectId"> {
+  const portrait: Record<string, string> = { ...current?.portrait };
+  for (const [label, value] of [
+    [TEMPERAMENT, values.temperament],
+    [CHARACTER, values.character],
+  ] as const) {
+    if (value) {
+      portrait[label] = value;
+    } else {
+      delete portrait[label];
+    }
+  }
+  return {
+    askStyle: values.askStyle || undefined,
+    howToAsk: values.askStyle || defaultHowToAsk(values.tech),
+    name: values.name,
+    notes: values.notes || undefined,
+    portrait: Object.keys(portrait).length > 0 ? portrait : undefined,
+    project: values.project,
+    role: values.role,
+    suggestion: current?.suggestion,
+    tech: values.tech,
+  };
 }

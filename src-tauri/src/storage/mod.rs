@@ -16,6 +16,7 @@ pub mod projects;
 )]
 pub mod recordings;
 pub mod settings;
+pub mod sources;
 #[allow(
     dead_code,
     reason = "append_live / replace_refined are for the TranscriptSink and the Refiner \
@@ -53,6 +54,9 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!(
         "../../migrations/0004_call_state_by_recording.sql"
     )),
+    M::up(include_str!(
+        "../../migrations/0005_project_sources_and_brief.sql"
+    )),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
@@ -79,7 +83,8 @@ impl Storage {
     /// Opens `<dir>/grill.db`, migrating it to [`SCHEMA_VERSION`].
     ///
     /// Then tidies the recordings: rows a crash left `recording` become
-    /// `interrupted`, folders without a row are removed.
+    /// `interrupted`, folders without a row are removed. Copies of project
+    /// documents without a row and folders of deleted projects go too.
     pub fn open_in(dir: &Path) -> Self {
         let recordings = Arc::new(LocalStore::new(dir));
         Self {
@@ -184,6 +189,12 @@ impl Storage {
         Ok(value)
     }
 
+    /// The app data folder (`grill.db`, recordings, projects' documents);
+    /// `None` without one.
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
     /// The store of the recordings' files, shared with the recorder so a
     /// sweep never removes a recording being written. `None` without a data
     /// folder.
@@ -226,6 +237,9 @@ fn open_dir(dir: &Path, recordings: &LocalStore) -> Result<Db, String> {
         .map_err(|error| format!("Не удалось создать папку данных {}: {error}", dir.display()))
         .and_then(|()| open(&dir.join(DATABASE_FILE), &MIGRATIONS))?;
     tidy_recordings(&connection, dir, recordings);
+    if let Err(error) = crate::projects::sources::files::sweep(&connection, dir) {
+        eprintln!("grill: documents sweep failed: {error}");
+    }
     Ok(Arc::new(Mutex::new(connection)))
 }
 

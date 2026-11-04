@@ -25,9 +25,10 @@ export const PERSON_DEMO_STATES = ["edit"] as const;
 
 const PORTRAIT_PREFIX = "portrait:";
 
+/** 1–5; `null`: not set. */
 interface Levels {
-  project: number;
-  tech: number;
+  project: number | null;
+  tech: number | null;
 }
 
 /** `/project/person?project=&id=`: the profile of a person of the client. */
@@ -89,10 +90,12 @@ function PersonView({
         }
       }
       const askStyle = String(data.get("askStyle") ?? profile.askStyle).trim();
+      const notes = String(data.get("notes") ?? person.notes ?? "").trim();
       updatePerson(person.projectId, person.id, {
         askStyle,
         // The card repeats the profile text once the manager rewrote it.
         howToAsk: askStyle === profile.askStyle ? person.howToAsk : askStyle,
+        notes: notes || undefined,
         portrait,
         project: editLevels.project,
         role: String(data.get("role") ?? person.role).trim(),
@@ -117,8 +120,11 @@ function PersonView({
       if (!(value && (scale === "tech" || scale === "project"))) {
         return;
       }
+      // The step that is set again clears the level: "не указано".
       setEditLevels((current) =>
-        current ? { ...current, [scale]: value } : current
+        current
+          ? { ...current, [scale]: current[scale] === value ? null : value }
+          : current
       );
     },
     []

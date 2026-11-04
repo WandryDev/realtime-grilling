@@ -7,6 +7,7 @@ import { routes } from "@/lib/routes";
 
 import {
   AskStyle,
+  ManagerNotes,
   Portrait,
   ProfileEditActions,
   ProfileHeader,
@@ -137,6 +138,9 @@ export function PersonScreen({
             />
           </div>
           <Portrait editing={editing} rows={person.portrait} />
+          {person.notes === undefined ? null : (
+            <ManagerNotes editing={editing} text={person.notes} />
+          )}
         </ProfileColumn>
         <ProfileSide
           calls={person.calls}

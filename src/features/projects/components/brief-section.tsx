@@ -5,13 +5,43 @@ import { RowStatus } from "@/components/ui/row-status";
 import { cn } from "@/lib/utils";
 
 import { ExternalIcon } from "../icons";
-import type { BRIEF, SourceKind } from "../mock";
-import { SourceMark } from "./source-mark";
+import { type DocumentKind, SourceMark } from "./source-mark";
 
 /*
  * The brief on the project page: the product in a paragraph, modules, the
  * stack, the client's glossary, and the key documents on the right (300).
+ * The demo projects draw the Paper brief; a stored brief maps onto the same
+ * shape (`project-data.ts`).
  */
+
+export interface BriefModuleView {
+  /** "противоречие, уточнить": the agent saw two versions. */
+  conflict?: string;
+  /** What the module does, under its name (a stored brief). */
+  description?: string;
+  name: string;
+  /** "этап 1", on the right. */
+  stage?: string;
+}
+
+export interface KeyDocument {
+  /** Where the row leads: the document in "Источники". */
+  href?: string;
+  kind: DocumentKind;
+  meta: string;
+  metaMono?: boolean;
+  mono?: boolean;
+  title: string;
+}
+
+export interface BriefView {
+  glossary: { definition: string; term: string }[];
+  keyDocuments: KeyDocument[];
+  keyDocumentsNote: string;
+  modules: BriefModuleView[];
+  product: string;
+  stack: string[];
+}
 
 /** Muted label over a block of the brief. */
 export function BriefLabel({
@@ -32,7 +62,7 @@ export function BriefBody({
   brief,
   className,
 }: {
-  brief: typeof BRIEF;
+  brief: BriefView;
   className?: string;
 }) {
   return (
@@ -44,9 +74,13 @@ export function BriefBody({
             {brief.product}
           </p>
         </section>
-        <BriefModules modules={brief.modules} />
-        <BriefStack stack={brief.stack} />
-        <BriefGlossary glossary={brief.glossary} />
+        {brief.modules.length > 0 ? (
+          <BriefModules modules={brief.modules} />
+        ) : null}
+        {brief.stack.length > 0 ? <BriefStack stack={brief.stack} /> : null}
+        {brief.glossary.length > 0 ? (
+          <BriefGlossary glossary={brief.glossary} />
+        ) : null}
       </div>
       <KeyDocuments
         className="w-75 shrink-0"
@@ -62,41 +96,53 @@ export function BriefModules({
   modules,
 }: {
   className?: string;
-  modules: typeof BRIEF.modules;
+  modules: BriefModuleView[];
 }) {
   return (
     <section className={cn("flex flex-col gap-1", className)}>
       <BriefLabel className="pb-1.5">Модули</BriefLabel>
       <ul className="flex flex-col gap-1">
-        {modules.map((module) => (
-          <li
-            className="border-border flex h-9 shrink-0 items-center gap-3 border-b last:border-b-0"
-            key={module.name}
-          >
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-base",
-                module.conflict ? "text-muted-foreground" : "text-foreground"
-              )}
+        {modules.map((module) =>
+          module.description ? (
+            <li
+              className="border-border flex shrink-0 flex-col gap-0.5 border-b py-2 last:border-b-0"
+              key={module.name}
             >
-              {module.name}
-            </span>
-            {module.conflict ? (
-              <button
-                className="focus-visible:focus-ring -mx-1 flex rounded-full px-1"
-                type="button"
-              >
-                <RowStatus dot tone="contradiction">
-                  {module.conflict}
-                </RowStatus>
-              </button>
-            ) : (
+              <span className="text-foreground text-base">{module.name}</span>
               <span className="text-muted-foreground text-sm">
-                {module.stage}
+                {module.description}
               </span>
-            )}
-          </li>
-        ))}
+            </li>
+          ) : (
+            <li
+              className="border-border flex h-9 shrink-0 items-center gap-3 border-b last:border-b-0"
+              key={module.name}
+            >
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-base",
+                  module.conflict ? "text-muted-foreground" : "text-foreground"
+                )}
+              >
+                {module.name}
+              </span>
+              {module.conflict ? (
+                <button
+                  className="focus-visible:focus-ring -mx-1 flex rounded-full px-1"
+                  type="button"
+                >
+                  <RowStatus dot tone="contradiction">
+                    {module.conflict}
+                  </RowStatus>
+                </button>
+              ) : (
+                <span className="text-muted-foreground text-sm">
+                  {module.stage}
+                </span>
+              )}
+            </li>
+          )
+        )}
       </ul>
     </section>
   );
@@ -130,7 +176,7 @@ export function BriefGlossary({
   glossary,
 }: {
   className?: string;
-  glossary: typeof BRIEF.glossary;
+  glossary: BriefView["glossary"];
 }) {
   return (
     <section className={cn("flex flex-col gap-2.5", className)}>
@@ -149,14 +195,6 @@ export function BriefGlossary({
       </dl>
     </section>
   );
-}
-
-interface KeyDocument {
-  kind: SourceKind;
-  meta: string;
-  metaMono?: boolean;
-  mono?: boolean;
-  title: string;
 }
 
 /**
@@ -178,38 +216,40 @@ export function KeyDocuments({
   return (
     <section className={cn("flex flex-col gap-3", className)}>
       <BriefLabel>Ключевые документы</BriefLabel>
-      <ul className="bg-surface flex flex-col rounded-md p-1.5">
-        {documents.map((document, index) => (
-          <li key={document.title}>
-            <a
-              className="group/doc hover:bg-background hover:shadow-touch focus-visible:focus-ring flex items-center gap-2.5 rounded-sm p-2.5 transition-[background-color,box-shadow]"
-              data-preview={index === hovered ? "hover" : undefined}
-              href="#key-document"
-            >
-              <SourceMark className="size-4" kind={document.kind} />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span
-                  className={cn(
-                    "text-foreground truncate",
-                    document.mono ? "font-mono text-sm/5" : "text-base"
-                  )}
-                >
-                  {document.title}
+      {documents.length > 0 ? (
+        <ul className="bg-surface flex flex-col rounded-md p-1.5">
+          {documents.map((document, index) => (
+            <li key={`${document.title}-${document.meta}`}>
+              <a
+                className="group/doc hover:bg-background hover:shadow-touch focus-visible:focus-ring flex items-center gap-2.5 rounded-sm p-2.5 transition-[background-color,box-shadow]"
+                data-preview={index === hovered ? "hover" : undefined}
+                href={document.href ?? "#key-document"}
+              >
+                <SourceMark className="size-4" kind={document.kind} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span
+                    className={cn(
+                      "text-foreground truncate",
+                      document.mono ? "font-mono text-sm/5" : "text-base"
+                    )}
+                  >
+                    {document.title}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-muted-foreground truncate text-xs",
+                      (document.mono || document.metaMono) && "font-mono"
+                    )}
+                  >
+                    {document.meta}
+                  </span>
                 </span>
-                <span
-                  className={cn(
-                    "text-muted-foreground truncate text-xs",
-                    (document.mono || document.metaMono) && "font-mono"
-                  )}
-                >
-                  {document.meta}
-                </span>
-              </span>
-              <ExternalIcon className="text-subtle hidden size-3 group-hover/doc:block" />
-            </a>
-          </li>
-        ))}
-      </ul>
+                <ExternalIcon className="text-subtle hidden size-3 group-hover/doc:block" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <p className="text-muted-foreground px-1 text-xs">{note}</p>
     </section>
   );

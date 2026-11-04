@@ -9,6 +9,7 @@ import { DataLayerMock } from "@/data/services/layers";
 import { PeopleData } from "@/data/services/people";
 import { ProjectsData } from "@/data/services/projects";
 import { SettingsData } from "@/data/services/settings";
+import { ProjectSourcesData } from "@/data/services/sources";
 import type { BackendError, BackendErrorKind } from "@/effect/tauri";
 
 /*
@@ -25,6 +26,7 @@ type DataServices =
   | DataEvents
   | PeopleData
   | ProjectsData
+  | ProjectSourcesData
   | SettingsData;
 
 const UUID_V7 =
@@ -440,6 +442,120 @@ function dataContract(
     );
   });
 
+  describe(`${name}: notes, documents and the brief state`, () => {
+    it.effect("keeps the notes and starts without a brief", () =>
+      run(
+        Effect.gen(function* () {
+          const projects = yield* ProjectsData;
+          const project = yield* projects.create({
+            name: "Ромашка",
+            notes: "  Решает CEO  ",
+          });
+          assert.strictEqual(project.notes, "Решает CEO");
+          assert.strictEqual(project.briefState, "none");
+          assert.strictEqual(project.briefBuiltAt, null);
+          assert.isFalse(project.briefTruncated);
+          const updated = yield* projects.update(project.id, {
+            notes: "Бюджет отдельно",
+          });
+          assert.strictEqual(updated.notes, "Бюджет отдельно");
+          assert.strictEqual(
+            (yield* projects.update(project.id, { name: "Р" })).notes,
+            "Бюджет отдельно"
+          );
+        })
+      )
+    );
+
+    it.effect("reads a brief given by hand as outdated", () =>
+      run(
+        Effect.gen(function* () {
+          const projects = yield* ProjectsData;
+          const project = yield* projects.create({
+            brief: { product: "Запись" },
+            name: "Ромашка",
+          });
+          assert.strictEqual(project.briefState, "outdated");
+          assert.isNumber(project.briefBuiltAt);
+          const cleared = yield* projects.update(project.id, { brief: null });
+          assert.strictEqual(cleared.briefState, "none");
+          assert.strictEqual(cleared.briefBuiltAt, null);
+        })
+      )
+    );
+
+    it.effect(
+      "adds documents once, turns away other types, tells the project",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const projects = yield* ProjectsData;
+            const sources = yield* ProjectSourcesData;
+            const project = yield* projects.create({ name: "Ромашка" });
+            const readChanges = yield* recordChanges;
+
+            const results = yield* sources.add(project.id, [
+              "/Users/dima/ТЗ.docx",
+              "/Users/dima/смета.xlsx",
+              "/Users/dima/скан договора.pdf",
+            ]);
+            assert.deepStrictEqual(
+              results.map((item) => [item.name, item.result.outcome]),
+              [
+                ["ТЗ.docx", "added"],
+                ["смета.xlsx", "rejected"],
+                ["скан договора.pdf", "added"],
+              ]
+            );
+            const [added, rejected, scan] = results.map((item) => item.result);
+            assert.deepStrictEqual(rejected, {
+              message: "Поддерживаются .md, .txt, .pdf и .docx",
+              outcome: "rejected",
+              reason: "unsupportedType",
+            });
+            assert.strictEqual(
+              scan?.outcome === "added" ? scan.source.status : undefined,
+              "noText"
+            );
+            const again = yield* sources.add(project.id, ["/tmp/ТЗ.docx"]);
+            assert.strictEqual(again[0]?.result.outcome, "duplicate");
+            assert.deepStrictEqual(
+              (yield* sources.list(project.id)).map((source) => source.name),
+              ["ТЗ.docx", "скан договора.pdf"]
+            );
+            assert.deepStrictEqual(
+              (yield* readChanges).map(({ change, entity }) => [
+                entity,
+                change,
+              ]),
+              [
+                ["project", "updated"],
+                ["project", "updated"],
+              ]
+            );
+
+            assert.strictEqual(added?.outcome, "added");
+            const docId = added?.outcome === "added" ? added.source.id : "";
+            yield* sources.remove(docId);
+            assert.strictEqual(
+              yield* failureKind(sources.remove(docId)),
+              "NotFound"
+            );
+            assert.strictEqual(
+              yield* failureKind(sources.add("nope", ["/a.md"])),
+              "NotFound"
+            );
+
+            yield* projects.remove(project.id);
+            assert.strictEqual(
+              yield* failureKind(sources.list(project.id)),
+              "NotFound"
+            );
+          })
+        )
+    );
+  });
+
   describe(`${name}: changes and settings`, () => {
     it.effect("tells about every write, with its project", () =>
       run(
@@ -469,11 +585,16 @@ function dataContract(
             ]),
             [
               ["project", "created", project.id, project.id],
+              // A person's write tells about the project too: its brief
+              // is built from its people.
               ["person", "created", person.id, project.id],
+              ["project", "updated", project.id, project.id],
               ["call", "created", created.id, project.id],
               ["call", "updated", created.id, project.id],
               ["person", "updated", person.id, project.id],
+              ["project", "updated", project.id, project.id],
               ["person", "deleted", person.id, project.id],
+              ["project", "updated", project.id, project.id],
             ]
           );
           // The person left the call with their record.

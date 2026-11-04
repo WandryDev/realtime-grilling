@@ -1,10 +1,11 @@
-import type { Call, Person, Project, Value } from "@/bindings";
+import type { Brief, Call, Person, Project, Value } from "@/bindings";
 import { PROJECTS } from "@/features/mock/projects";
 import {
   type HistoryCall,
   PROJECT_HISTORY,
   PROPOSAL_GROUPS,
 } from "@/features/post-call/mock";
+import { BRIEF } from "@/features/projects/mock";
 
 /*
  * The demo records the mock repository starts with, in the shapes of
@@ -18,6 +19,26 @@ export const DEMO_CALL_ID = "telemedia-19-oct";
 
 /** Seeds are older than anything created in the app, in list order. */
 const SEED_CREATED_AT = Date.UTC(2026, 8, 1);
+
+/** The demo briefs were built two hours before the app opened. */
+const SEED_BRIEF_AGE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The Paper brief in the stored shape. The project page draws the Paper
+ * version for the demo projects; this one gives them a brief state.
+ */
+function demoBrief(): Brief {
+  return {
+    glossary: BRIEF.glossary.map((entry) => ({ ...entry })),
+    keyDocuments: [],
+    modules: BRIEF.modules.map((module) => ({
+      description: module.conflict ?? module.stage ?? "",
+      name: module.name,
+    })),
+    product: BRIEF.product,
+    stack: [...BRIEF.stack],
+  };
+}
 
 const SEED_PEOPLE: {
   id: string;
@@ -174,10 +195,15 @@ export function mockSeed(): MockSeed {
   };
 
   const projects: Project[] = PROJECTS.map((project) => ({
-    brief: null,
+    brief: demoBrief(),
+    briefBuiltAt: Date.now() - SEED_BRIEF_AGE_MS,
+    // Computed on read by the mock database.
+    briefState: "fresh",
+    briefTruncated: false,
     description: project.description,
     id: project.id,
     name: project.name,
+    notes: "",
     openQuestions: project.openQuestions,
     ...stamp(),
   }));

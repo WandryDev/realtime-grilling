@@ -1,12 +1,14 @@
 import { Clock, Context, Effect, Layer, PubSub, Stream } from "effect";
 
 import type {
+  BriefState,
   Call,
   Change,
   DataChanged,
   Entity,
   Person,
   Project,
+  ProjectSource,
   Value,
 } from "@/bindings";
 import { BackendError } from "@/effect/tauri";
@@ -21,13 +23,29 @@ import { mockSeed } from "./mock-seed";
  *
  * Everything runs synchronously, which lets the stores apply a mock write
  * before the call returns (`src/data/synced-store.ts`).
+ *
+ * The brief state of a project is computed on read, as in Rust: the
+ * fingerprint of its description, notes, people and readable documents
+ * against the one the brief was built from (design.md, decision 7).
  */
 
+/** A document of a project with what the screens never see. */
+export interface MockSource {
+  /** Stands in for the SHA-256 of the content: the same file, the same hash. */
+  readonly sha256: string;
+  readonly source: ProjectSource;
+}
+
 export interface MockTables {
+  /** The fingerprint each project's brief was built from. */
+  briefInputs: Map<string, string>;
+  /** Projects whose brief is being built now. */
+  building: Set<string>;
   calls: Map<string, Call>;
   people: Map<string, Person>;
   projects: Map<string, Project>;
   settings: Map<string, Value>;
+  sources: Map<string, MockSource>;
 }
 
 /** Where the browser keeps the mock settings between reloads. */
@@ -50,14 +68,69 @@ function storedSettings(): Map<string, Value> {
   }
 }
 
+/** Ids sorted as SQLite sorts TEXT. */
+function byId<T extends { id: string }>(a: T, b: T) {
+  return compareIds(a.id, b.id);
+}
+
+/**
+ * What a project's brief is built from, as one string: the description,
+ * the notes, the people by id and the hashes of the readable documents.
+ * The name is not part of it: renaming leaves the brief fresh.
+ */
+export function briefFingerprint(tables: MockTables, projectId: string) {
+  const project = tables.projects.get(projectId);
+  const people = [...tables.people.values()]
+    .filter((person) => person.projectId === projectId)
+    .sort(byId)
+    .map((person) => [person.name, person.role, person.profile]);
+  const sources = [...tables.sources.values()]
+    .filter(
+      ({ source }) =>
+        source.projectId === projectId && source.status === "ready"
+    )
+    .map(({ sha256 }) => sha256)
+    .sort();
+  return JSON.stringify([
+    project?.description ?? "",
+    project?.notes ?? "",
+    people,
+    sources,
+  ]);
+}
+
+/** The brief state of a stored project, as the Rust read computes it. */
+export function briefStateOf(tables: MockTables, project: Project): BriefState {
+  if (tables.building.has(project.id)) {
+    return "building";
+  }
+  if (project.brief === null) {
+    return "none";
+  }
+  return tables.briefInputs.get(project.id) ===
+    briefFingerprint(tables, project.id)
+    ? "fresh"
+    : "outdated";
+}
+
 function seedTables(): MockTables {
   const seed = mockSeed();
-  return {
+  const tables: MockTables = {
+    briefInputs: new Map(),
+    building: new Set(),
     calls: new Map(seed.calls.map((call) => [call.id, call])),
     people: new Map(seed.people.map((person) => [person.id, person])),
     projects: new Map(seed.projects.map((project) => [project.id, project])),
     settings: storedSettings(),
+    sources: new Map(),
   };
+  // The demo briefs were built from the demo records as they are.
+  for (const project of seed.projects) {
+    if (project.brief !== null) {
+      tables.briefInputs.set(project.id, briefFingerprint(tables, project.id));
+    }
+  }
+  return tables;
 }
 
 const HEX = 16;
@@ -176,10 +249,13 @@ export class MockDatabase extends Context.Service<
           ),
         reset: Effect.sync(() => {
           const seed = seedTables();
+          tables.briefInputs = seed.briefInputs;
+          tables.building = seed.building;
           tables.calls = seed.calls;
           tables.people = seed.people;
           tables.projects = seed.projects;
           tables.settings = new Map();
+          tables.sources = seed.sources;
         }),
         resetCalls: Effect.sync(() => {
           tables.calls = seedTables().calls;

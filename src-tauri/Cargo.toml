@@ -21,6 +21,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
+# Picking documents and the brief export folder (projects-people-brief).
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -49,6 +51,12 @@ whisper-rs = "0.16"
 # Speech models download (specs/speech-models, speech-recognition design.md decision 2).
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 sha2 = "0.11"
+# Text of the project's documents (projects-people-brief design.md, decision 2):
+# PDF, DOCX (a zip of XML), and Windows-1251 text files.
+pdf-extract = "0.12"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+quick-xml = "0.42"
+encoding_rs = "0.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
@@ -102,5 +110,8 @@ jsonschema = { version = "0.60", default-features = false }
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Not `abort`: a panic of `pdf-extract` on a broken PDF must stay a `failed`
+# document (`catch_unwind`, projects-people-brief design.md, risks), not end
+# the app.
+panic = "unwind"
 strip = true

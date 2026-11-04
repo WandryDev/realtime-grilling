@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{AgentError, Events, RateLimit, Usage, reset_in_text};
+use super::{AgentError, Events, OutputKind, RateLimit, Usage, reset_in_text};
 
 pub const SUCCESS: &str = include_str!("fixtures/success.jsonl");
 pub const EMPTY_PATCH: &str = include_str!("fixtures/empty_patch.jsonl");
@@ -32,7 +32,7 @@ const ELAPSED: Duration = Duration::from_millis(13_480);
 const RESETS_AT_MS: i64 = 1_793_623_200_000;
 
 fn reply(stream: &str) -> Result<super::AgentReply, AgentError> {
-    Events::parse(stream).reply(ELAPSED, None, "")
+    Events::parse(stream).reply(ELAPSED, None, "", OutputKind::Patch)
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn not_logged_in_is_recognized() {
     assert_eq!(reply(NOT_LOGGED_IN), Err(AgentError::NotLoggedIn));
     let stderr = "Invalid API key · Please run /login\n";
     assert_eq!(
-        Events::default().reply(ELAPSED, None, stderr),
+        Events::default().reply(ELAPSED, None, stderr, OutputKind::Patch),
         Err(AgentError::NotLoggedIn)
     );
 }
@@ -132,7 +132,7 @@ fn unknown_events_and_garbage_are_skipped() {
 #[test]
 fn no_result_is_a_process_error_with_stderr() {
     let Err(AgentError::Process(message)) =
-        Events::parse("").reply(ELAPSED, None, "\u{1b}[31mboom\u{1b}[0m")
+        Events::parse("").reply(ELAPSED, None, "\u{1b}[31mboom\u{1b}[0m", OutputKind::Patch)
     else {
         panic!("not a process error");
     };
@@ -159,4 +159,63 @@ fn the_fullest_limit_window_counts() {
         }
     );
     assert_eq!(RateLimit::of(&json!({})), RateLimit::default());
+}
+
+/// The phases the hook hears on a stream, in order.
+fn phases(stream: &str) -> Vec<super::OutputPhase> {
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&heard);
+    let mut events = Events {
+        hook: Some(super::OutputHook::new(move |phase| {
+            sink.lock().unwrap().push(phase);
+        })),
+        ..Events::default()
+    };
+    for line in stream.lines() {
+        events.line(line);
+    }
+    heard.lock().unwrap().clone()
+}
+
+#[test]
+fn the_hook_hears_reading_then_writing_once_each() {
+    use super::OutputPhase::{Reading, Writing};
+    // The spike's call: a thinking delta, then the StructuredOutput block.
+    assert_eq!(phases(SUCCESS), [Reading, Writing]);
+    // The tool call straight away still reads first.
+    let tool_first = r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","name":"StructuredOutput","input":{}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}}"#;
+    assert_eq!(phases(tool_first), [Reading, Writing]);
+    // Only the assistant message with the call (no partial messages).
+    let message_only = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"StructuredOutput","input":{}}]}}"#;
+    assert_eq!(phases(message_only), [Reading, Writing]);
+    // Text only: reading, never writing.
+    let text = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}}"#;
+    assert_eq!(phases(text), [Reading]);
+}
+
+#[test]
+fn an_object_output_takes_any_object_but_nothing_else() {
+    let result = |output: &str| {
+        format!(
+            r#"{{"type":"result","subtype":"success","is_error":false,"structured_output":{output}}}"#
+        )
+    };
+    let brief = result(r#"{"product":"Звонки","stack":[]}"#);
+    let reply = Events::parse(&brief)
+        .reply(ELAPSED, None, "", OutputKind::Object)
+        .unwrap();
+    assert_eq!(reply.patch["product"], "Звонки");
+    // The fast loop's check stays: no ops, no patch.
+    assert!(matches!(
+        Events::parse(&brief).reply(ELAPSED, None, "", OutputKind::Patch),
+        Err(AgentError::InvalidOutput(_))
+    ));
+    for not_an_object in ["[1]", "\"текст\"", "null"] {
+        assert!(matches!(
+            Events::parse(&result(not_an_object)).reply(ELAPSED, None, "", OutputKind::Object),
+            Err(AgentError::InvalidOutput(_))
+        ));
+    }
 }

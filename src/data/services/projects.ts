@@ -4,11 +4,13 @@ import {
   commands,
   type Project,
   type ProjectCreate,
+  type ProjectOverview,
   type ProjectUpdate,
 } from "@/bindings";
 import { type BackendError, call } from "@/effect/tauri";
 
 import {
+  briefStateOf,
   compareIds,
   MockDatabase,
   notFound,
@@ -19,8 +21,10 @@ import {
 /*
  * Projects in the local database. `layerTauri` calls the Rust commands,
  * `layerMock` keeps the same contract in memory (MockDatabase): UUID v7
- * ids, `Invalid` for an empty name, `NotFound`, a cascade delete and one
- * `DataChanged` per write.
+ * ids, `Invalid` for an empty name, `NotFound`, a cascade delete (people,
+ * calls, documents) and one `DataChanged` per write. The brief state is
+ * computed on every read; a brief given in `create` / `update` is not the
+ * agent's and reads as `outdated`.
  */
 export class ProjectsData extends Context.Service<
   ProjectsData,
@@ -35,14 +39,17 @@ export class ProjectsData extends Context.Service<
       id: string,
       patch: ProjectUpdate
     ) => Effect.Effect<Project, BackendError>;
-    /** Takes the project's people and calls along. */
+    /** Takes the project's people, calls and documents along. */
     readonly remove: (id: string) => Effect.Effect<void, BackendError>;
+    /** Open questions and the last recording of every project (home). */
+    readonly overview: Effect.Effect<ProjectOverview[], BackendError>;
   }
 >()("grill/data/services/ProjectsData") {
   static readonly layerTauri = Layer.succeed(ProjectsData, {
     create: (input) => call(() => commands.projectsCreate(input)),
     get: (id) => call(() => commands.projectsGet(id)),
     list: call(() => commands.projectsList()),
+    overview: call(() => commands.projectsOverview()),
     remove: (id) => Effect.asVoid(call(() => commands.projectsDelete(id))),
     update: (id, patch) => call(() => commands.projectsUpdate(id, patch)),
   });
@@ -53,7 +60,13 @@ export class ProjectsData extends Context.Service<
       const database = yield* MockDatabase;
       const { tables } = database;
 
-      const get = Effect.fnUntraced(function* (id: string) {
+      /** A stored project as the read gives it: with its brief state. */
+      const read = (project: Project): Project => ({
+        ...project,
+        briefState: briefStateOf(tables, project),
+      });
+
+      const stored = Effect.fnUntraced(function* (id: string) {
         const project = tables.projects.get(id);
         if (!project) {
           return yield* notFound(`Проект ${id} не найден`);
@@ -61,46 +74,67 @@ export class ProjectsData extends Context.Service<
         return project;
       });
 
+      const get = (id: string) => Effect.map(stored(id), read);
+
       const create = Effect.fnUntraced(function* (input: ProjectCreate) {
         const name = yield* requiredName(input.name);
         const { id, now } = yield* database.stamp;
+        const brief = input.brief ?? null;
         const project: Project = {
-          brief: input.brief ?? null,
+          brief,
+          briefBuiltAt: brief === null ? null : now,
+          briefState: "none",
+          briefTruncated: false,
           createdAt: now,
           description: input.description?.trim() ?? "",
           id,
           name,
+          notes: input.notes?.trim() ?? "",
           openQuestions: 0,
           updatedAt: now,
         };
         tables.projects.set(id, project);
         yield* database.emit("project", id, id, "created");
-        return project;
+        return read(project);
       });
 
       const update = Effect.fnUntraced(function* (
         id: string,
         patch: ProjectUpdate
       ) {
-        const current = yield* get(id);
+        const current = yield* stored(id);
         const name = Predicate.isNullish(patch.name)
           ? current.name
           : yield* requiredName(patch.name);
+        const updatedAt = yield* database.touch(current.updatedAt);
         const project: Project = {
           ...current,
           brief: orCurrent(patch.brief, current.brief),
           description: patch.description?.trim() ?? current.description,
           name,
-          updatedAt: yield* database.touch(current.updatedAt),
+          notes: patch.notes?.trim() ?? current.notes,
+          updatedAt,
         };
+        if (patch.brief !== undefined) {
+          // Not the agent's brief: no fingerprint, so it reads as outdated.
+          tables.briefInputs.delete(id);
+          project.briefBuiltAt = patch.brief === null ? null : updatedAt;
+          project.briefTruncated = false;
+        }
         tables.projects.set(id, project);
         yield* database.emit("project", id, id, "updated");
-        return project;
+        return read(project);
       });
 
       const remove = Effect.fnUntraced(function* (id: string) {
-        yield* get(id);
+        yield* stored(id);
         tables.projects.delete(id);
+        tables.briefInputs.delete(id);
+        for (const [sourceId, { source }] of tables.sources) {
+          if (source.projectId === id) {
+            tables.sources.delete(sourceId);
+          }
+        }
         for (const [personId, person] of tables.people) {
           if (person.projectId === id) {
             tables.people.delete(personId);
@@ -115,14 +149,32 @@ export class ProjectsData extends Context.Service<
         yield* database.emit("project", id, id, "deleted");
       });
 
+      const overview = Effect.sync(() =>
+        [...tables.projects.values()].map((project): ProjectOverview => {
+          let openQuestions = 0;
+          let lastRecordingAt: number | null = null;
+          for (const item of tables.calls.values()) {
+            if (item.projectId !== project.id) {
+              continue;
+            }
+            openQuestions += item.openQuestions;
+            if (item.startedAt !== null) {
+              lastRecordingAt = Math.max(lastRecordingAt ?? 0, item.startedAt);
+            }
+          }
+          return { lastRecordingAt, openQuestions, projectId: project.id };
+        })
+      );
+
       return ProjectsData.of({
         create,
         get,
         list: Effect.sync(() =>
-          [...tables.projects.values()].sort(
-            (a, b) => a.createdAt - b.createdAt || compareIds(a.id, b.id)
-          )
+          [...tables.projects.values()]
+            .sort((a, b) => a.createdAt - b.createdAt || compareIds(a.id, b.id))
+            .map(read)
         ),
+        overview,
         remove,
         update,
       });

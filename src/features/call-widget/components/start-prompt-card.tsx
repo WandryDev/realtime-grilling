@@ -15,6 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 import { DismissIcon } from "../icons";
@@ -35,6 +36,7 @@ function RemovableParticipant({
   const remove = useCallback(() => onRemove?.(person.id), [onRemove, person]);
   return (
     <ParticipantChip
+      detail={person.detail}
       initials={person.initials}
       name={person.name}
       onRemove={onRemove ? remove : undefined}
@@ -50,7 +52,11 @@ function AddPersonItem({
   person: Participant;
 }) {
   const add = useCallback(() => onAdd(person.id), [onAdd, person]);
-  return <DropdownMenuItem onClick={add}>{person.name}</DropdownMenuItem>;
+  return (
+    <DropdownMenuItem onClick={add} title={person.detail}>
+      {person.name}
+    </DropdownMenuItem>
+  );
 }
 
 /*
@@ -174,6 +180,7 @@ function StartErrorAlert({ error }: { error: StartError }) {
 export function StartPromptCard({
   addablePeople,
   app,
+  briefNote,
   className,
   onAddParticipant,
   onDismiss,
@@ -191,6 +198,8 @@ export function StartPromptCard({
   /** The client's people not on the call yet, for the "+" menu. */
   addablePeople?: Participant[];
   app: string;
+  /** "Обновляю бриф…": the project's brief is being refreshed. */
+  briefNote?: string;
   onAddParticipant?: (id: string) => void;
   /** × and "Не сейчас": collapse into the pill. */
   onDismiss?: () => void;
@@ -228,6 +237,15 @@ export function StartPromptCard({
         projects={projects}
         value={projectId}
       />
+      {briefNote ? (
+        <p
+          className="text-muted-foreground -mt-2 flex items-center gap-2 text-sm"
+          role="status"
+        >
+          <Spinner className="size-3.5" />
+          {briefNote}
+        </p>
+      ) : null}
       <ParticipantsField
         addable={addablePeople}
         onAdd={onAddParticipant}

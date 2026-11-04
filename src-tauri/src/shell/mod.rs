@@ -88,6 +88,8 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(SettingsLock::default());
     app.manage(crate::audio::levels_for_app(app.handle()));
     app.manage(crate::agent::AgentSessions::default());
+    // Which projects have a brief build running (`briefState: building`).
+    app.manage(crate::projects::builds::BriefBuilds::default());
     // One recognizer for the app; it runs the selected model once installed.
     let speech = Speech::new(Recognizer::whisper(None));
     let follow = speech.clone();
@@ -219,6 +221,9 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
             if let Some(fast_loop) = app.try_state::<crate::agent::fast_loop::scheduler::FastLoop>()
             {
                 fast_loop.shutdown();
+            }
+            if let Some(builds) = app.try_state::<crate::projects::builds::BriefBuilds>() {
+                builds.shutdown();
             }
             crate::recording::stop_on_exit(app);
             crate::audio::mic_watch::stop(app);

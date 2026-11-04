@@ -1155,7 +1155,17 @@ mod acl {
     #[test]
     fn floating_windows_cannot_delete_projects_or_change_settings() {
         for label in ["overlay", "widget"] {
-            for command in ["projects_delete", "projects_update", "settings_update"] {
+            for command in [
+                "projects_delete",
+                "projects_update",
+                "settings_update",
+                "project_sources_add",
+                "project_sources_list",
+                "project_sources_remove",
+                "brief_build",
+                "brief_cancel",
+                "brief_export",
+            ] {
                 let result = invoke(label, command);
                 assert!(denied(&result), "{label} → {command}: {result:?}");
             }
@@ -1249,6 +1259,21 @@ mod acl {
             ("overlay", "call_state_get"),
             ("overlay", "questions_act"),
             ("overlay", "agent_retry"),
+            // The home screen and the start widget read the overview; only
+            // the main window manages documents.
+            ("main", "projects_overview"),
+            ("widget", "projects_overview"),
+            ("overlay", "projects_overview"),
+            ("main", "project_sources_add"),
+            ("main", "project_sources_list"),
+            ("main", "project_sources_remove"),
+            // The brief is built, stopped and exported from the main window;
+            // the start widget refreshes it before a call.
+            ("main", "brief_build"),
+            ("main", "brief_cancel"),
+            ("main", "brief_prepare"),
+            ("main", "brief_export"),
+            ("widget", "brief_prepare"),
         ] {
             let result = invoke(label, command);
             assert!(!denied(&result), "{label} → {command}: {result:?}");
@@ -1301,6 +1326,9 @@ fn capabilities_match_the_command_list() {
         "recording_start",
         "recording_stop",
         "recording_status",
+        "projects_get",
+        "projects_overview",
+        "brief_prepare",
     ] {
         assert!(
             floating.iter().any(|command| command == needed),
@@ -1308,6 +1336,12 @@ fn capabilities_match_the_command_list() {
         );
     }
     for forbidden in [
+        "brief_build",
+        "brief_cancel",
+        "brief_export",
+        "project_sources_add",
+        "project_sources_list",
+        "project_sources_remove",
         "projects_create",
         "projects_update",
         "projects_delete",
@@ -1342,6 +1376,336 @@ fn capabilities_match_the_command_list() {
         assert!(
             !floating.iter().any(|command| command == forbidden),
             "floating windows must not get {forbidden}"
+        );
+    }
+}
+
+/* projects-people-brief task 1.4: notes, brief state, overview */
+
+mod brief_state {
+    use super::*;
+    use crate::{
+        projects::{brief_inputs, builds::BriefBuilds},
+        storage::{
+            people::PersonUpdate,
+            projects::{BriefState, ProjectOverview},
+        },
+    };
+
+    fn state(fx: &Fixture, project: &Project) -> BriefState {
+        get(fx, project).brief_state
+    }
+
+    fn get(fx: &Fixture, project: &Project) -> Project {
+        let id = project.id.clone();
+        fx.read(move |db| projects::get(db, &id)).unwrap()
+    }
+
+    fn update(fx: &Fixture, project: &Project, patch: ProjectUpdate) -> Project {
+        let id = project.id.clone();
+        fx.write(move |db| projects::update(db, &id, patch))
+            .unwrap()
+    }
+
+    /// Saves a brief as the build will: the fingerprint read before it.
+    fn build(fx: &Fixture, project: &Project, truncated: bool) -> Project {
+        let id = project.id.clone();
+        fx.write(move |db| {
+            let inputs = brief_inputs::read(db, &id)?;
+            projects::save_brief(
+                db,
+                &id,
+                &json!({ "product": "Колл-центр", "glossary": [], "stack": [] }),
+                &inputs.fingerprint,
+                truncated,
+            )
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn notes_are_created_updated_and_trimmed() {
+        let fx = Fixture::new();
+        let input = ProjectCreate {
+            name: "Телемедиа".to_owned(),
+            notes: Some("  Клиент торопится  ".to_owned()),
+            ..ProjectCreate::default()
+        };
+        let project = fx.write(move |db| projects::create(db, input)).unwrap();
+        assert_eq!(project.notes, "Клиент торопится");
+        assert_eq!(project.brief_state, BriefState::None);
+        assert_eq!(project.brief_built_at, None);
+
+        let renamed = update(
+            &fx,
+            &project,
+            ProjectUpdate {
+                name: Some("Телемедиа 2".to_owned()),
+                ..ProjectUpdate::default()
+            },
+        );
+        assert_eq!(renamed.notes, "Клиент торопится", "absent keeps the notes");
+        let cleared = update(
+            &fx,
+            &project,
+            ProjectUpdate {
+                notes: Some(String::new()),
+                ..ProjectUpdate::default()
+            },
+        );
+        assert_eq!(cleared.notes, "");
+        let json = serde_json::to_value(&cleared).unwrap();
+        assert_eq!(json["notes"], "");
+        assert_eq!(json["briefState"], "none");
+        assert_eq!(json["briefBuiltAt"], serde_json::Value::Null);
+        assert_eq!(json["briefTruncated"], false);
+    }
+
+    #[test]
+    fn a_built_brief_is_fresh_and_survives_a_reread() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        let built = build(&fx, &project, true);
+        assert_eq!(built.brief_state, BriefState::Fresh);
+        assert!(built.brief_truncated);
+        assert!(built.brief_built_at.unwrap() >= project.created_at);
+        assert_eq!(built.brief.as_ref().unwrap()["product"], "Колл-центр");
+        assert_eq!(get(&fx, &project), built);
+        assert_eq!(
+            fx.sink.events().last(),
+            Some(&DataChanged::new(
+                Entity::Project,
+                &project.id,
+                Some(&project.id),
+                Change::Updated
+            ))
+        );
+    }
+
+    /// «Добавили человека»: the brief may be outdated, and the project's
+    /// stores hear about it.
+    #[test]
+    fn adding_a_person_makes_the_brief_outdated() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        build(&fx, &project, false);
+        let before = fx.sink.events().len();
+
+        let person = fx.person(&project, "Ольга");
+
+        assert_eq!(state(&fx, &project), BriefState::Outdated);
+        assert_eq!(
+            fx.sink.events()[before..],
+            [
+                DataChanged::new(
+                    Entity::Person,
+                    &person.id,
+                    Some(&project.id),
+                    Change::Created
+                ),
+                DataChanged::new(
+                    Entity::Project,
+                    &project.id,
+                    Some(&project.id),
+                    Change::Updated
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn renaming_the_project_keeps_the_brief_fresh() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        fx.person(&project, "Ольга");
+        build(&fx, &project, false);
+
+        let renamed = update(
+            &fx,
+            &project,
+            ProjectUpdate {
+                name: Some("Телемедиа (сеть клиник)".to_owned()),
+                ..ProjectUpdate::default()
+            },
+        );
+
+        assert_eq!(renamed.brief_state, BriefState::Fresh);
+    }
+
+    /// Editing there and back gives the same fingerprint: fresh again.
+    #[test]
+    fn editing_there_and_back_is_fresh_again() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        let person = fx.person(&project, "Ольга");
+        build(&fx, &project, false);
+
+        let notes = |text: &str| ProjectUpdate {
+            notes: Some(text.to_owned()),
+            ..ProjectUpdate::default()
+        };
+        assert_eq!(
+            update(&fx, &project, notes("Не говорить о сроках")).brief_state,
+            BriefState::Outdated
+        );
+        assert_eq!(
+            update(&fx, &project, notes("")).brief_state,
+            BriefState::Fresh
+        );
+
+        let edit = |profile: serde_json::Value| {
+            let id = person.id.clone();
+            let patch = PersonUpdate {
+                profile: Some(profile),
+                ..PersonUpdate::default()
+            };
+            fx.write(move |db| people::update(db, &id, patch)).unwrap();
+        };
+        edit(json!({ "howToAsk": "через деньги", "tech": 4, "project": 3 }));
+        assert_eq!(state(&fx, &project), BriefState::Outdated);
+        // The same profile, keys in another order.
+        edit(json!({ "project": 3, "tech": 1, "howToAsk": "через деньги" }));
+        assert_eq!(state(&fx, &project), BriefState::Fresh);
+
+        let description = |text: &str| ProjectUpdate {
+            description: Some(text.to_owned()),
+            ..ProjectUpdate::default()
+        };
+        update(&fx, &project, description("Другое"));
+        assert_eq!(state(&fx, &project), BriefState::Outdated);
+        update(&fx, &project, description(&project.description));
+        assert_eq!(state(&fx, &project), BriefState::Fresh);
+
+        // Removing a person: outdated, and the project hears about it.
+        let id = person.id.clone();
+        fx.write(move |db| people::delete(db, &id)).unwrap();
+        assert_eq!(state(&fx, &project), BriefState::Outdated);
+        assert_eq!(
+            fx.sink.events().last(),
+            Some(&DataChanged::new(
+                Entity::Project,
+                &project.id,
+                Some(&project.id),
+                Change::Updated
+            ))
+        );
+    }
+
+    /// A brief written through `projects_update` was not built from known
+    /// inputs; `null` removes it with its build time.
+    #[test]
+    fn a_brief_given_by_hand_is_outdated_and_null_removes_it() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        build(&fx, &project, true);
+        let given = update(
+            &fx,
+            &project,
+            ProjectUpdate {
+                brief: Some(Some(json!({ "product": "Руками" }))),
+                ..ProjectUpdate::default()
+            },
+        );
+        assert_eq!(given.brief_state, BriefState::Outdated);
+        assert!(!given.brief_truncated);
+        assert!(given.brief_built_at.is_some());
+
+        let removed = update(
+            &fx,
+            &project,
+            ProjectUpdate {
+                brief: Some(None),
+                ..ProjectUpdate::default()
+            },
+        );
+        assert_eq!(removed.brief, None);
+        assert_eq!(removed.brief_built_at, None);
+        assert_eq!(removed.brief_state, BriefState::None);
+    }
+
+    #[test]
+    fn a_running_build_reads_as_building() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        let other = fx.project("Лапа");
+        build(&fx, &project, false);
+        let builds = BriefBuilds::default();
+
+        let slot = builds.start(&project.id).unwrap();
+        assert!(builds.start(&project.id).is_none(), "one build per project");
+        let listed = builds.mark_all(fx.read(projects::list).unwrap());
+        let states: Vec<BriefState> = listed.iter().map(|p| p.brief_state).collect();
+        assert_eq!(states, [BriefState::Building, BriefState::None]);
+        assert_eq!(builds.mark(get(&fx, &other)).brief_state, BriefState::None);
+
+        drop(slot);
+        assert_eq!(
+            builds.mark(get(&fx, &project)).brief_state,
+            BriefState::Fresh
+        );
+    }
+
+    /// The home screen: open questions of the project's recordings (with a
+    /// call or not) and when the last one started.
+    #[test]
+    fn overview_counts_open_questions_and_the_last_recording() {
+        let fx = Fixture::new();
+        let project = fx.project("Телемедиа");
+        let lapa = fx.project("Лапа");
+        let empty = fx.project("Пустой");
+        let call = fx.call(&project, &[]);
+        let first = fx.recording(RecordingLinks::call(&call.id));
+        fx.question(&first, "Кто старший смены?");
+        let loose = fx.recording(RecordingLinks {
+            project_id: Some(project.id.clone()),
+            ..RecordingLinks::default()
+        });
+        let answered = fx.question(&loose, "Сколько операторов?");
+        fx.question(&loose, "Где очередь?");
+        let id = loose.clone();
+        fx.write(move |db| {
+            db.execute(
+                "UPDATE recordings SET started_at = 5000 WHERE id = ?1",
+                [&id],
+            )?;
+            db.execute(
+                "UPDATE questions SET status = 'answered' WHERE id = ?1",
+                [&answered],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .unwrap();
+        // Another project's recording counts there only.
+        fx.recording(RecordingLinks {
+            project_id: Some(lapa.id.clone()),
+            ..RecordingLinks::default()
+        });
+
+        let overview = fx.read(projects::overview).unwrap();
+
+        assert_eq!(
+            overview,
+            [
+                ProjectOverview {
+                    project_id: project.id.clone(),
+                    open_questions: 2,
+                    last_recording_at: Some(5000),
+                },
+                ProjectOverview {
+                    project_id: lapa.id.clone(),
+                    open_questions: 0,
+                    last_recording_at: Some(1000),
+                },
+                ProjectOverview {
+                    project_id: empty.id.clone(),
+                    open_questions: 0,
+                    last_recording_at: None,
+                },
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&overview[0]).unwrap(),
+            json!({ "projectId": project.id, "openQuestions": 2, "lastRecordingAt": 5000 })
         );
     }
 }

@@ -7,6 +7,7 @@ import { usePeople } from "@/data/people";
 import { useProjects } from "@/data/projects";
 import { useSettings } from "@/data/settings";
 import { inTauri } from "@/effect/runtime";
+import { prepareBrief, useBriefProgress } from "@/features/projects/api";
 import { type RecordingStart, useMicApp } from "@/features/recording/api";
 import { hideWindow, useOpenRoute } from "@/features/shell/api";
 import { linkButtonProps } from "@/lib/link-button";
@@ -176,9 +177,29 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
     () => clientPeople.filter((person) => !selectedIds.includes(person.id)),
     [clientPeople, selectedIds]
   );
-  const projectName =
-    projects.find((project) => project.id === projectId)?.name ??
-    "Звонок без проекта";
+  const project = projects.find((item) => item.id === projectId);
+  const projectName = project?.name ?? "Звонок без проекта";
+
+  // Shown for a project: Rust refreshes its brief if it is outdated. The
+  // call doesn't wait; the fast loop takes the last brief that is ready.
+  const prompting = phase === "prompt";
+  useEffect(() => {
+    if (!(prompting && projectId)) {
+      return;
+    }
+    prepareBrief(projectId);
+    // The widget window stays loaded; Rust shows it again for each call.
+    const onShown = () => {
+      if (document.visibilityState === "visible") {
+        prepareBrief(projectId);
+      }
+    };
+    document.addEventListener("visibilitychange", onShown);
+    return () => document.removeEventListener("visibilitychange", onShown);
+  }, [projectId, prompting]);
+  const briefProgress = useBriefProgress(projectId);
+  const updatingBrief =
+    Boolean(briefProgress?.running) || project?.briefState === "building";
 
   const afterStartHref = compactOverlay ? routes.overlay() : routes.call();
   const time = useCallTime(LAUNCH.time);
@@ -281,6 +302,7 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
         <StartWidget
           addablePeople={addablePeople}
           app={app}
+          briefNote={updatingBrief ? "Обновляю бриф…" : undefined}
           callHref={routes.call()}
           launch={launch}
           onAddParticipant={addParticipant}

@@ -6,6 +6,10 @@ import { startCall } from "@/data/call-session";
 import type { ClientPerson } from "@/data/people";
 import { runCancelable } from "@/effect/runtime";
 import {
+  levelLabel,
+  TECH_LEVEL_LABELS,
+} from "@/features/projects/project-data";
+import {
   beginRecording,
   finishRecordedCall,
   type RecordingStart,
@@ -35,11 +39,15 @@ import {
 
 /* ---------------------------------------------------------------- People */
 
-/** A person of the client as a widget chip: first name and its cases. */
+/**
+ * A person of the client as a widget chip: first name and its cases, and
+ * the tech level from the profile as the hint.
+ */
 export function toParticipant(person: ClientPerson): Participant {
   const name = person.name.split(" ")[0] ?? person.name;
   return {
     ...NAME_FORMS[name],
+    detail: `${person.name}, в технике: ${levelLabel(TECH_LEVEL_LABELS, person.tech)}`,
     id: person.id,
     initials: person.initials,
     name,

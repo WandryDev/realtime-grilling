@@ -48,7 +48,7 @@ use super::{
 };
 use crate::{
     agent::{
-        claude_cli::{self, Agent, AgentError, AgentRequest},
+        claude_cli::{self, Agent, AgentError, AgentRequest, CallOptions},
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
@@ -718,6 +718,7 @@ async fn run_call(
         user_message: assembled.user_message,
         schema: patch::schema_argument().to_owned(),
         process,
+        options: CallOptions::default(),
     };
     let (cancel, cancelled) = oneshot::channel();
     let running = call.agent.run(request, cancelled);

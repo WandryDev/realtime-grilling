@@ -5,7 +5,7 @@
 //! Adding a command: register it in `bindings::builder` and in
 //! `command_names.rs`, and allow it in `capabilities/*.json`.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +32,11 @@ use crate::{
     error::{CommandError, CommandResult},
     events::Navigate,
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
+    projects::{
+        brief::{export as brief_export_file, run as brief_run},
+        builds::BriefBuilds,
+        sources::{self as project_sources, SourceAddResult},
+    },
     recording::{RecordingManager, status::RecordingStatus},
     shell::{self, SettingsLock, shortcuts::ShortcutError, windows},
     speech::{
@@ -46,9 +51,10 @@ use crate::{
         call_state::{self, QuestionAction},
         calls::{self, Call, CallCreate, CallUpdate},
         people::{self, Person, PersonCreate, PersonUpdate},
-        projects::{self, Project, ProjectCreate, ProjectUpdate},
+        projects::{self, Project, ProjectCreate, ProjectOverview, ProjectUpdate},
         recordings::{self, RecordingLinks, TranscriptState},
         settings::{self, SettingsMap},
+        sources::{self, ProjectSource},
         transcript::{self, TranscriptSegment},
     },
 };
@@ -57,14 +63,22 @@ use crate::{
 
 #[tauri::command]
 #[specta::specta]
-pub async fn projects_list(storage: State<'_, Storage>) -> CommandResult<Vec<Project>> {
-    storage.read(projects::list).await
+pub async fn projects_list(
+    storage: State<'_, Storage>,
+    builds: State<'_, BriefBuilds>,
+) -> CommandResult<Vec<Project>> {
+    Ok(builds.mark_all(storage.read(projects::list).await?))
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn projects_get(storage: State<'_, Storage>, id: String) -> CommandResult<Project> {
-    storage.read(move |db| projects::get(db, &id)).await
+pub async fn projects_get(
+    storage: State<'_, Storage>,
+    builds: State<'_, BriefBuilds>,
+    id: String,
+) -> CommandResult<Project> {
+    let project = storage.read(move |db| projects::get(db, &id)).await?;
+    Ok(builds.mark(project))
 }
 
 #[tauri::command]
@@ -84,12 +98,14 @@ pub async fn projects_create(
 pub async fn projects_update(
     app: AppHandle,
     storage: State<'_, Storage>,
+    builds: State<'_, BriefBuilds>,
     id: String,
     patch: ProjectUpdate,
 ) -> CommandResult<Project> {
-    storage
+    let project = storage
         .write(&app, move |db| projects::update(db, &id, patch))
-        .await
+        .await?;
+    Ok(builds.mark(project))
 }
 
 #[tauri::command]
@@ -99,12 +115,117 @@ pub async fn projects_delete(
     storage: State<'_, Storage>,
     id: String,
 ) -> CommandResult<()> {
+    let project_id = id.clone();
     storage
         .write(&app, move |db| projects::delete(db, &id))
         .await?;
-    // The project's calls took their recordings with them; now their files.
+    // The project's calls took their recordings with them; now their files,
+    // and the copies of its documents.
     storage.sweep_recordings().await;
+    project_sources::remove_project_files(&storage, &project_id);
     Ok(())
+}
+
+/// Per project: open questions of its recordings and when the last one
+/// started (the home screen).
+#[tauri::command]
+#[specta::specta]
+pub async fn projects_overview(storage: State<'_, Storage>) -> CommandResult<Vec<ProjectOverview>> {
+    storage.read(projects::overview).await
+}
+
+/* Project documents */
+
+/// Adds files from the manager's computer to the project: a result per
+/// path, in order (added, a duplicate of an existing document, or
+/// rejected with a reason). `NotFound` for an unknown project.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_sources_add(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    project_id: String,
+    paths: Vec<String>,
+) -> CommandResult<Vec<SourceAddResult>> {
+    project_sources::add(&storage, &app, &project_id, paths).await
+}
+
+/// The project's documents in the order they were added, without their
+/// text. `NotFound` for an unknown project.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_sources_list(
+    storage: State<'_, Storage>,
+    project_id: String,
+) -> CommandResult<Vec<ProjectSource>> {
+    storage.read(move |db| sources::list(db, &project_id)).await
+}
+
+/// Deletes a document and its copy. `NotFound` for an unknown id.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_sources_remove(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    id: String,
+) -> CommandResult<()> {
+    project_sources::remove(&storage, &app, id).await
+}
+
+/* Project brief */
+
+/// Starts building the project's brief with the agent, in the background,
+/// and returns at once: `BriefProgress` follows the stages (1…5) to `done`,
+/// `failed` or `cancelled`. While a build of the project runs, does nothing
+/// (follow that one). `NotFound` for an unknown project.
+#[tauri::command]
+#[specta::specta]
+pub async fn brief_build(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    builds: State<'_, BriefBuilds>,
+    project_id: String,
+) -> CommandResult<()> {
+    let id = project_id.clone();
+    storage.read(move |db| projects::exists(db, &id)).await?;
+    brief_run::start(&Arc::new(app), &builds, &project_id, None);
+    Ok(())
+}
+
+/// Stops the project's build and kills the agent; the old brief stays.
+/// Nothing when none runs.
+#[tauri::command]
+#[specta::specta]
+pub fn brief_cancel(builds: State<'_, BriefBuilds>, project_id: String) -> CommandResult<()> {
+    builds.cancel(&project_id);
+    Ok(())
+}
+
+/// The start widget, when shown for a project: refreshes an `outdated`
+/// brief (or builds a missing one when there are materials) in the
+/// background, if the agent is ready and no build runs. `true` when a
+/// build started. The call never waits for it.
+#[tauri::command]
+#[specta::specta]
+pub async fn brief_prepare(
+    app: AppHandle,
+    builds: State<'_, BriefBuilds>,
+    project_id: String,
+) -> CommandResult<bool> {
+    brief_run::prepare(&Arc::new(app), &builds, &project_id).await
+}
+
+/// Writes `<Проект> — бриф.md` into `folder` and returns its path.
+/// `NotFound` for an unknown project, `Invalid` without a brief or with a
+/// folder that does not exist, `External` when the file can't be written.
+#[tauri::command]
+#[specta::specta]
+pub async fn brief_export(
+    storage: State<'_, Storage>,
+    project_id: String,
+    folder: String,
+) -> CommandResult<String> {
+    brief_export_file::export(&storage, &project_id, &folder).await
 }
 
 /* People */
@@ -124,6 +245,7 @@ pub async fn people_get(storage: State<'_, Storage>, id: String) -> CommandResul
     storage.read(move |db| people::get(db, &id)).await
 }
 
+/// Also sends the project's `DataChanged`: its brief depends on its people.
 #[tauri::command]
 #[specta::specta]
 pub async fn people_create(
@@ -136,6 +258,7 @@ pub async fn people_create(
         .await
 }
 
+/// Also sends the project's `DataChanged`: its brief depends on its people.
 #[tauri::command]
 #[specta::specta]
 pub async fn people_update(
@@ -149,6 +272,7 @@ pub async fn people_update(
         .await
 }
 
+/// Also sends the project's `DataChanged`: its brief depends on its people.
 #[tauri::command]
 #[specta::specta]
 pub async fn people_delete(

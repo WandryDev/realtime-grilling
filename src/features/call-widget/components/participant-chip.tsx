@@ -14,11 +14,14 @@ import { cn } from "@/lib/utils";
  */
 export function ParticipantChip({
   className,
+  detail,
   initials,
   name,
   onRemove,
 }: {
   className?: string;
+  /** The hover hint: the full name and the tech level. */
+  detail?: string;
   initials: string;
   name: string;
   onRemove?: () => void;
@@ -31,6 +34,7 @@ export function ParticipantChip({
       )}
       initials={initials}
       name={name}
+      title={detail}
     >
       <PersonChipRemove
         className="text-subtle -ml-1.5 w-6 opacity-100"

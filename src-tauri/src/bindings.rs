@@ -16,6 +16,7 @@ use crate::{
     audio::{AudioLevel, AudioLevelStopped, mic_watch::MicActivityChanged},
     commands,
     events::{CallSessionChanged, DataChanged, Navigate, ShortcutPressed},
+    projects::brief::{Brief, BriefProgress},
     recording::status::{RecordingChanged, RecordingLevels},
     speech::{
         events::{
@@ -41,6 +42,14 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::projects_create,
             commands::projects_update,
             commands::projects_delete,
+            commands::projects_overview,
+            commands::project_sources_add,
+            commands::project_sources_list,
+            commands::project_sources_remove,
+            commands::brief_build,
+            commands::brief_cancel,
+            commands::brief_prepare,
+            commands::brief_export,
             commands::people_list,
             commands::people_get,
             commands::people_create,
@@ -97,6 +106,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             AgentStatus,
             AudioLevel,
             AudioLevelStopped,
+            BriefProgress,
             CallSessionChanged,
             CallStateChanged,
             DataChanged,
@@ -113,6 +123,8 @@ pub fn builder() -> Builder<tauri::Wry> {
             TranscriptRefine,
             TranscriptSkipped
         ])
+        // The shape of `Project.brief` (a JSON column, `JsonValue` there).
+        .typ::<Brief>()
 }
 
 /// `src/bindings.ts` of the repository.

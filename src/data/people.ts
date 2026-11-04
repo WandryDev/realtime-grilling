@@ -28,8 +28,8 @@ export interface ClientPerson {
   notes?: string;
   /** Portrait rows edited by the manager: label → value. */
   portrait?: Record<string, string>;
-  /** Understanding of the project, 1–5. */
-  project: number;
+  /** Understanding of the project, 1–5; `null`: not set. */
+  project: number | null;
   projectId: string;
   role: string;
   /**
@@ -37,8 +37,8 @@ export interface ClientPerson {
    * manager, `accepted` is applied, `declined` is dropped.
    */
   suggestion?: "pending" | "accepted" | "declined";
-  /** Technical level, 1–5. */
-  tech: number;
+  /** Technical level, 1–5; `null`: not set. */
+  tech: number | null;
 }
 
 const WHITESPACE = /\s+/u;
@@ -62,18 +62,15 @@ const Profile = Schema.Struct({
   initials: Schema.optionalKey(Schema.String),
   notes: Schema.optionalKey(Schema.String),
   portrait: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
-  project: Schema.optionalKey(Schema.Number),
+  project: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   suggestion: Schema.optionalKey(
     Schema.Literals(["pending", "accepted", "declined"])
   ),
-  tech: Schema.optionalKey(Schema.Number),
+  tech: Schema.optionalKey(Schema.NullOr(Schema.Number)),
 });
 const decodeProfile = Schema.decodeUnknownOption(Profile);
 
 type ProfileFields = Omit<ClientPerson, "id" | "name" | "projectId" | "role">;
-
-/** Levels of a person nobody described yet. */
-const DEFAULT_LEVEL = 3;
 
 /** A stored person as the screens draw it. */
 export function toClientPerson(person: Person): ClientPerson {
@@ -88,18 +85,21 @@ export function toClientPerson(person: Person): ClientPerson {
     initials: profile.initials ?? initialsOf(person.name),
     name: person.name,
     portrait: profile.portrait ? { ...profile.portrait } : undefined,
-    project: profile.project ?? DEFAULT_LEVEL,
+    project: profile.project ?? null,
     projectId: person.projectId,
     role: person.role,
-    tech: profile.tech ?? DEFAULT_LEVEL,
+    tech: profile.tech ?? null,
   };
 }
 
-/** The `profile` JSON of a person: the fields the record has no column for. */
+/**
+ * The `profile` JSON of a person: the fields the record has no column for.
+ * What isn't set (a level, an empty text) is left out.
+ */
 function toProfile(fields: ProfileFields): { [key: string]: Value } {
   const profile: { [key: string]: Value } = {};
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) {
+    if (value !== undefined && value !== null && value !== "") {
       profile[key] = value as Value;
     }
   }
@@ -225,6 +225,14 @@ export function updatePerson(
       })
     ),
     { error: "Не удалось сохранить профиль" }
+  );
+}
+
+/** Removes a person from their project (and from its calls). */
+export function removePerson(personId: string) {
+  return peopleStore.mutate(
+    PeopleData.use((people) => Effect.as(people.remove(personId), true)),
+    { error: "Не удалось убрать человека" }
   );
 }
 

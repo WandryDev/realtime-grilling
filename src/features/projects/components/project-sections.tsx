@@ -12,16 +12,15 @@ import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { ClockIcon, RefreshIcon } from "../icons";
 import type {
-  BRIEF,
-  BRIEF_STATUS,
   CallSummary,
   PersonSummary,
   PROJECT_ANCHORS,
   PROJECT_SOURCES,
 } from "../mock";
-import { BriefBody } from "./brief-section";
+import { BriefBody, type BriefView } from "./brief-section";
 import { CallLineList } from "./call-line";
 import { PersonCard } from "./person-card";
+import { PersonMenu } from "./project-live-sections";
 import { SectionHeading } from "./section-heading";
 import { SourceTile } from "./source-mark";
 
@@ -74,7 +73,24 @@ function ProjectSection({ className, ...props }: ComponentProps<"section">) {
   );
 }
 
-export type BriefState = "fresh" | "updating" | "outdated";
+/**
+ * - none: no brief yet, "Собрать бриф"
+ * - fresh: built from the materials as they are
+ * - updating: the agent builds it, the old one (if any) is dimmed
+ * - outdated: something it was built from changed, "Обновить бриф"
+ */
+export type BriefState = "none" | "fresh" | "updating" | "outdated";
+
+/** The texts of the brief's head in each state. */
+export interface BriefStatusView {
+  fresh: string;
+  outdated: string;
+  outdatedNotice: { detail: string; title: string };
+  /** Built from shortened materials: said under the head. */
+  truncated?: string;
+  updating: string;
+  updatingProgress: number;
+}
 
 export function BriefSection({
   brief,
@@ -85,15 +101,16 @@ export function BriefSection({
   state,
   status,
 }: {
-  brief: typeof BRIEF;
+  /** `null`: nothing built yet. */
+  brief: BriefView | null;
   className?: string;
   id?: string;
-  /** "Обновить" / "Обновить бриф". */
+  /** "Собрать бриф" / "Обновить" / "Обновить бриф". */
   onRefresh?: () => void;
   /** "Остановить" while updating. */
   onStop?: () => void;
   state: BriefState;
-  status: typeof BRIEF_STATUS;
+  status: BriefStatusView;
 }) {
   const titleId = useId();
   return (
@@ -121,10 +138,21 @@ export function BriefSection({
           <AlertDescription>{status.outdatedNotice.detail}</AlertDescription>
         </Alert>
       ) : null}
-      <BriefBody
-        brief={brief}
-        className={cn(state === "updating" && "opacity-45")}
-      />
+      {status.truncated && brief && state !== "none" ? (
+        <p className="text-muted-foreground text-sm">{status.truncated}</p>
+      ) : null}
+      {brief && state !== "none" ? (
+        <BriefBody
+          brief={brief}
+          className={cn(state === "updating" && "opacity-45")}
+        />
+      ) : (
+        <p className="text-muted-foreground max-w-[640px] text-base">
+          {state === "updating"
+            ? "Агент читает описание, заметки, людей и документы проекта."
+            : "Агент соберёт бриф из описания, заметок, людей и документов проекта: продукт, стек, модули, глоссарий и ключевые документы."}
+        </p>
+      )}
     </section>
   );
 }
@@ -134,7 +162,7 @@ function BriefMeta({
   status,
 }: {
   state: BriefState;
-  status: typeof BRIEF_STATUS;
+  status: BriefStatusView;
 }) {
   if (state === "updating") {
     return (
@@ -143,6 +171,9 @@ function BriefMeta({
         {status.updating}
       </span>
     );
+  }
+  if (state === "none") {
+    return "ещё не собран";
   }
   return state === "outdated" ? status.outdated : status.fresh;
 }
@@ -160,6 +191,13 @@ function BriefAction({
     return (
       <Button onClick={onStop} variant="secondary">
         Остановить
+      </Button>
+    );
+  }
+  if (state === "none") {
+    return (
+      <Button className="h-9 px-3.5" onClick={onRefresh}>
+        Собрать бриф
       </Button>
     );
   }
@@ -197,6 +235,8 @@ export function PeopleSection({
   className,
   id,
   onAdd,
+  onEdit,
+  onRemove,
   people,
   projectId = "telemedia",
 }: {
@@ -205,6 +245,10 @@ export function PeopleSection({
   id?: string;
   /** "Добавить": opens "Новый человек". */
   onAdd?: () => void;
+  /** "Изменить" in a person's menu. */
+  onEdit?: (personId: string) => void;
+  /** "Убрать из проекта" in a person's menu. */
+  onRemove?: (personId: string) => void;
   people: PersonSummary[];
   /** Project of the people, for the links to their profiles. */
   projectId?: string;
@@ -232,12 +276,20 @@ export function PeopleSection({
       {people.length > 0 ? (
         <ul className="flex flex-wrap gap-4">
           {people.map((person) => (
-            <li className="flex min-w-[320px] flex-1" key={person.id}>
+            <li className="relative flex min-w-[320px] flex-1" key={person.id}>
               <PersonCard
-                className="flex-1"
+                className={cn("flex-1", (onEdit || onRemove) && "pr-14")}
                 href={routes.person(projectId, person.id)}
                 person={person}
               />
+              {onEdit || onRemove ? (
+                <PersonMenu
+                  name={person.name}
+                  onEdit={onEdit}
+                  onRemove={onRemove}
+                  personId={person.id}
+                />
+              ) : null}
             </li>
           ))}
         </ul>
@@ -299,11 +351,17 @@ export function CallsSection({
 
 export function SourcesSection({
   className,
+  documents,
   id,
+  integrations,
   sources,
 }: {
   className?: string;
+  /** "Документы с компьютера". */
+  documents?: ReactNode;
   id?: string;
+  /** What comes after the connected sources: the integrations to come. */
+  integrations?: ReactNode;
   sources: typeof PROJECT_SOURCES;
 }) {
   const titleId = useId();
@@ -319,38 +377,42 @@ export function SourcesSection({
         meta="агент только читает"
         title="Источники"
       />
-      {sources.length === 0 ? (
+      {documents ? <div className="pb-4">{documents}</div> : null}
+      {sources.length === 0 && !documents ? (
         <p className="text-muted-foreground text-sm">
           Источники можно подключить в настройках, в разделе «Интеграции».
         </p>
       ) : null}
-      <div className="flex flex-col">
-        {sources.map((source) => (
-          <IntegrationRow
-            action={
-              <Button
-                className="-mr-2 px-2"
-                {...linkButtonProps(routes.settings("integrations"))}
-                size="sm"
-                variant="ghost"
-              >
-                Настроить
-              </Button>
-            }
-            className="[&_[data-slot=item-meta]]:text-muted-foreground gap-3.5 px-0 py-3 last:border-b-0 [&_[data-slot=item-actions]]:w-20 [&_[data-slot=item-meta]]:w-50 [&_[data-slot=item-meta]]:gap-1.5"
-            description={
-              <span className={cn(source.mono && "font-mono text-xs/[18px]")}>
-                {source.description}
-              </span>
-            }
-            icon={<SourceTile kind={source.kind} size="lg" />}
-            key={source.kind}
-            name={source.name}
-            status="connected"
-            statusLabel={source.status}
-          />
-        ))}
-      </div>
+      {sources.length > 0 ? (
+        <div className="flex flex-col">
+          {sources.map((source) => (
+            <IntegrationRow
+              action={
+                <Button
+                  className="-mr-2 px-2"
+                  {...linkButtonProps(routes.settings("integrations"))}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Настроить
+                </Button>
+              }
+              className="[&_[data-slot=item-meta]]:text-muted-foreground gap-3.5 px-0 py-3 last:border-b-0 [&_[data-slot=item-actions]]:w-20 [&_[data-slot=item-meta]]:w-50 [&_[data-slot=item-meta]]:gap-1.5"
+              description={
+                <span className={cn(source.mono && "font-mono text-xs/[18px]")}>
+                  {source.description}
+                </span>
+              }
+              icon={<SourceTile kind={source.kind} size="lg" />}
+              key={source.kind}
+              name={source.name}
+              status="connected"
+              statusLabel={source.status}
+            />
+          ))}
+        </div>
+      ) : null}
+      {integrations}
     </ProjectSection>
   );
 }

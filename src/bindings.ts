@@ -12,10 +12,56 @@ export const commands = {
 	projectsCreate: (input: ProjectCreate) => typedError<Project, CommandError>(__TAURI_INVOKE("projects_create", { input })),
 	projectsUpdate: (id: string, patch: ProjectUpdate) => typedError<Project, CommandError>(__TAURI_INVOKE("projects_update", { id, patch })),
 	projectsDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("projects_delete", { id })),
+	/**
+	 *  Per project: open questions of its recordings and when the last one
+	 *  started (the home screen).
+	 */
+	projectsOverview: () => typedError<ProjectOverview[], CommandError>(__TAURI_INVOKE("projects_overview")),
+	/**
+	 *  Adds files from the manager's computer to the project: a result per
+	 *  path, in order (added, a duplicate of an existing document, or
+	 *  rejected with a reason). `NotFound` for an unknown project.
+	 */
+	projectSourcesAdd: (projectId: string, paths: string[]) => typedError<SourceAddResult[], CommandError>(__TAURI_INVOKE("project_sources_add", { projectId, paths })),
+	/**
+	 *  The project's documents in the order they were added, without their
+	 *  text. `NotFound` for an unknown project.
+	 */
+	projectSourcesList: (projectId: string) => typedError<ProjectSource[], CommandError>(__TAURI_INVOKE("project_sources_list", { projectId })),
+	/**  Deletes a document and its copy. `NotFound` for an unknown id. */
+	projectSourcesRemove: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("project_sources_remove", { id })),
+	/**
+	 *  Starts building the project's brief with the agent, in the background,
+	 *  and returns at once: `BriefProgress` follows the stages (1…5) to `done`,
+	 *  `failed` or `cancelled`. While a build of the project runs, does nothing
+	 *  (follow that one). `NotFound` for an unknown project.
+	 */
+	briefBuild: (projectId: string) => typedError<null, CommandError>(__TAURI_INVOKE("brief_build", { projectId })),
+	/**
+	 *  Stops the project's build and kills the agent; the old brief stays.
+	 *  Nothing when none runs.
+	 */
+	briefCancel: (projectId: string) => typedError<null, CommandError>(__TAURI_INVOKE("brief_cancel", { projectId })),
+	/**
+	 *  The start widget, when shown for a project: refreshes an `outdated`
+	 *  brief (or builds a missing one when there are materials) in the
+	 *  background, if the agent is ready and no build runs. `true` when a
+	 *  build started. The call never waits for it.
+	 */
+	briefPrepare: (projectId: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("brief_prepare", { projectId })),
+	/**
+	 *  Writes `<Проект> — бриф.md` into `folder` and returns its path.
+	 *  `NotFound` for an unknown project, `Invalid` without a brief or with a
+	 *  folder that does not exist, `External` when the file can't be written.
+	 */
+	briefExport: (projectId: string, folder: string) => typedError<string, CommandError>(__TAURI_INVOKE("brief_export", { projectId, folder })),
 	peopleList: (projectId: string) => typedError<Person[], CommandError>(__TAURI_INVOKE("people_list", { projectId })),
 	peopleGet: (id: string) => typedError<Person, CommandError>(__TAURI_INVOKE("people_get", { id })),
+	/**  Also sends the project's `DataChanged`: its brief depends on its people. */
 	peopleCreate: (input: PersonCreate) => typedError<Person, CommandError>(__TAURI_INVOKE("people_create", { input })),
+	/**  Also sends the project's `DataChanged`: its brief depends on its people. */
 	peopleUpdate: (id: string, patch: PersonUpdate) => typedError<Person, CommandError>(__TAURI_INVOKE("people_update", { id, patch })),
+	/**  Also sends the project's `DataChanged`: its brief depends on its people. */
 	peopleDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("people_delete", { id })),
 	/**  Calls of a project, or all calls when `projectId` is `null`; newest first. */
 	callsList: (projectId: string | null) => typedError<Call[], CommandError>(__TAURI_INVOKE("calls_list", { projectId })),
@@ -267,6 +313,7 @@ export const events = {
 	agentStatus: makeEvent<AgentStatus, AgentStatus>("agent-status"),
 	audioLevel: makeEvent<AudioLevel, AudioLevel>("audio-level"),
 	audioLevelStopped: makeEvent<AudioLevelStopped, AudioLevelStopped>("audio-level-stopped"),
+	briefProgress: makeEvent<BriefProgress, BriefProgress>("brief-progress"),
 	callSessionChanged: makeEvent<CallSessionChanged, CallSessionChanged>("call-session-changed"),
 	callStateChanged: makeEvent<CallStateChanged, CallStateChanged>("call-state-changed"),
 	dataChanged: makeEvent<DataChanged, DataChanged>("data-changed"),
@@ -387,6 +434,56 @@ export type BenchmarkResult = {
 	wer: number,
 	reason?: BenchmarkFailure | null,
 };
+
+/**  The brief as the agent gives it and as `projects.brief` stores it. */
+export type Brief = {
+	/**  What the product is and for whom. */
+	product: string,
+	stack: string[],
+	modules: BriefModule[],
+	/**  Project terms and names; recognition is prompted with the terms. */
+	glossary: GlossaryEntry[],
+	keyDocuments: KeyDocument[],
+};
+
+export type BriefModule = {
+	name: string,
+	description: string,
+};
+
+/**  Where a brief build is (design.md, decision 6). Sent to every window. */
+export type BriefProgress = {
+	projectId: string,
+	/**
+	 *  1 reading the documents, 2 starting the agent, 3 the agent reads,
+	 *  4 the agent writes, 5 checking and saving.
+	 */
+	stage: number,
+	state: BriefStageState,
+};
+
+export type BriefStageState = { status: "running" } | { status: "done" } | 
+/**  The build ended here; the old brief stays. */
+{ status: "failed"; message: string } | 
+/**  `brief_cancel`; the old brief stays. */
+{ status: "cancelled" };
+
+/**
+ *  Whether the brief matches the project's materials (projects-people-brief
+ *  design.md, decision 7).
+ */
+export type BriefState = 
+/**  No brief yet. */
+"none" | 
+/**  Built from the description, notes, people and documents as they are. */
+"fresh" | 
+/**
+ *  Something it was built from changed since (or it was not built by
+ *  the agent).
+ */
+"outdated" | 
+/**  A build of this project runs now. */
+"building";
 
 export type Call = {
 	id: string,
@@ -650,9 +747,21 @@ export type GapType =
 /**  Two phrases of the client disagree; the evidence names both. */
 "contradiction";
 
+export type GlossaryEntry = {
+	term: string,
+	definition: string,
+};
+
 export type InstallStage = "downloading" | "installing" | 
 /**  The installer finished; the app checks the CLI. */
 "verifying";
+
+export type KeyDocument = {
+	/**  A `ready` document of the project (`F1…` in the agent's reply). */
+	sourceId: string,
+	title: string,
+	why: string,
+};
 
 /**
  *  Whether another app captures from an input. Sent to every window on
@@ -764,6 +873,16 @@ export type Project = {
 	description: string,
 	/**  The project brief the agent builds; `null` until there is one. */
 	brief: Value | null,
+	/**  What the manager wrote about the project for the agent. */
+	notes: string,
+	/**
+	 *  When the brief was built, milliseconds since the Unix epoch, UTC;
+	 *  `null` without a brief.
+	 */
+	briefBuiltAt: number | null,
+	/**  The brief was built from shortened materials. */
+	briefTruncated: boolean,
+	briefState: BriefState,
 	/**  Open questions across the project's calls (the sidebar count). */
 	openQuestions: number,
 	/**  Milliseconds since the Unix epoch, UTC. */
@@ -774,14 +893,56 @@ export type Project = {
 export type ProjectCreate = {
 	name: string,
 	description?: string | null,
+	notes?: string | null,
+	/**  A brief given here is not the agent's: it reads as `outdated`. */
 	brief?: Value | null,
+};
+
+/**  What the home screen shows about a project. */
+export type ProjectOverview = {
+	projectId: string,
+	/**  Open questions of the project's recordings. */
+	openQuestions: number,
+	/**
+	 *  When the project's last recording started, milliseconds since the
+	 *  Unix epoch, UTC; `null` without recordings.
+	 */
+	lastRecordingAt: number | null,
+};
+
+/**  A document of a project, as the screens see it: no text, no path. */
+export type ProjectSource = {
+	id: string,
+	projectId: string,
+	/**  The file name as it was added, e.g. `ТЗ.docx`. */
+	name: string,
+	/**  Lower case, without the dot: `md`, `txt`, `pdf` or `docx`. */
+	extension: string,
+	/**  Bytes. */
+	size: number,
+	status: SourceStatus,
+	/**
+	 *  Why the text could not be read (`failed`) or why there is none
+	 *  (`noText`).
+	 */
+	error: string | null,
+	/**  Characters of the stored text. */
+	textChars: number,
+	/**  The text was cut at the limit. */
+	truncated: boolean,
+	/**  Milliseconds since the Unix epoch, UTC. */
+	createdAt: number,
 };
 
 /**  Only the fields present change. */
 export type ProjectUpdate = {
 	name?: string | null,
 	description?: string | null,
-	/**  `null` removes the brief; absent leaves it as it is. */
+	notes?: string | null,
+	/**
+	 *  `null` removes the brief; absent leaves it as it is. A brief given
+	 *  here is not the agent's: it reads as `outdated`.
+	 */
 	brief?: Value | null,
 };
 
@@ -879,6 +1040,15 @@ export type RefineState = "refining" |
 /**  The live transcript stays. */
 "failed";
 
+/**  Why a file was not added. */
+export type RejectReason = 
+/**  Not `.md`, `.txt`, `.pdf` or `.docx`. */
+"unsupportedType" | 
+/**  Larger than 20 MB. */
+"tooLarge" | 
+/**  Missing, a folder, or the OS would not let the app read it. */
+"unreadable";
+
 /**  Whether phrases come out of a channel; part of the recording status. */
 export type SegmentationStatus = "ok" | 
 /**
@@ -918,6 +1088,30 @@ export type ShortcutError = {
 export type ShortcutPressed = {
 	action: string,
 };
+
+/**  What happened to one file of `project_sources_add`. */
+export type SourceAddOutcome = { outcome: "added"; source: ProjectSource } | 
+/**  The project already has a document with the same content: that one. */
+{ outcome: "duplicate"; source: ProjectSource } | { outcome: "rejected"; reason: RejectReason; 
+/**  What to show next to the file. */
+message: string };
+
+export type SourceAddResult = {
+	/**  The path as given. */
+	path: string,
+	/**  Its file name. */
+	name: string,
+	result: SourceAddOutcome,
+};
+
+/**  Whether the text of a document could be read. */
+export type SourceStatus = 
+/**  The text was read; the brief is built from it. */
+"ready" | 
+/**  Nothing to read, e.g. a scanned PDF. Kept, never sent to the agent. */
+"noText" | 
+/**  The file could not be read; `error` says why. */
+"failed";
 
 /**  A model as the windows see it. */
 export type SpeechModel = {

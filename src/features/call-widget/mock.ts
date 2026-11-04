@@ -13,6 +13,8 @@ export interface PickerProject {
 }
 
 export interface Participant {
+  /** How technical they are, "в технике: технарь": the chip's hint. */
+  detail?: string;
   /** "Ольги", for "Профили Ольги и Игоря". */
   genitive?: string;
   id: string;

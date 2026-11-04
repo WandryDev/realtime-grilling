@@ -40,6 +40,10 @@ import {
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import {
   SegmentedControl,
   SegmentedControlItem,
 } from "@/components/ui/segmented-control";
@@ -204,58 +208,128 @@ export function AddPersonDialog({
   );
 }
 
-export interface NewPersonInput {
+/** What the person dialogs save: every field but the name is optional. */
+export interface PersonFormValues {
+  /** "Как формулировать вопросы", word for word for the agent. */
+  askStyle: string;
+  character: string;
   name: string;
   notes: string;
+  /** 1–5; `null`: not set. */
+  project: number | null;
   role: string;
-  tech: string;
-  understanding: string;
+  tech: number | null;
+  temperament: string;
 }
 
-/** Live "Новый человек": Enter adds, Esc or the backdrop closes. */
-export function AddPersonDialogLive({
+export const EMPTY_PERSON: PersonFormValues = {
+  askStyle: "",
+  character: "",
+  name: "",
+  notes: "",
+  project: null,
+  role: "",
+  tech: null,
+  temperament: "",
+};
+
+const NOT_SET = "";
+
+function levelOf(value: FormDataEntryValue | null): number | null {
+  const level = Number(value);
+  return Number.isInteger(level) && level >= 1 && level <= 5 ? level : null;
+}
+
+/** A 1–5 scale as a select, "Не указано" first. */
+function LevelSelect({
+  defaultValue,
+  label,
+  labels,
+  name,
+}: {
+  defaultValue: number | null;
+  label: string;
+  labels: readonly string[];
+  name: string;
+}) {
+  const id = useId();
+  return (
+    <Field className="min-w-0 flex-1">
+      <FieldLabel className="text-sm font-medium" htmlFor={id}>
+        {label}
+      </FieldLabel>
+      <NativeSelect
+        className="w-full [&_select]:h-9"
+        defaultValue={defaultValue === null ? NOT_SET : String(defaultValue)}
+        id={id}
+        name={name}
+      >
+        <NativeSelectOption value={NOT_SET}>Не указано</NativeSelectOption>
+        {labels.map((text, index) => (
+          <NativeSelectOption key={text} value={String(index + 1)}>
+            {index + 1}, {text}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+    </Field>
+  );
+}
+
+/**
+ * Live "Новый человек" and "Изменить человека": the profile the agent words
+ * its questions by. Enter adds, Esc or the backdrop closes. `person` fills
+ * the fields when editing; `levels` names the steps of the two scales.
+ */
+export function PersonDialog({
   levels,
-  onAdd,
   onOpenChange,
+  onSave,
   open,
+  person,
   project,
 }: {
-  levels: Pick<typeof ADD_PERSON, "techLevels" | "understandingLevels">;
-  onAdd: (person: NewPersonInput) => void;
+  levels: { project: readonly string[]; tech: readonly string[] };
   onOpenChange: (open: boolean) => void;
+  onSave: (values: PersonFormValues) => void;
   open: boolean;
+  /** The person to edit; a new one without it. */
+  person?: PersonFormValues;
   project: string;
 }) {
-  const [tech, setTech] = useState(levels.techLevels[1]?.value ?? "");
-  const [understanding, setUnderstanding] = useState(
-    levels.understandingLevels[1]?.value ?? ""
-  );
+  const editing = person !== undefined;
+  const values = person ?? EMPTY_PERSON;
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget);
-      const name = String(data.get("name") ?? "").trim();
+      const text = (key: string) => String(data.get(key) ?? "").trim();
+      const name = text("name");
       if (!name) {
         return;
       }
-      onAdd({
+      onSave({
+        askStyle: text("askStyle"),
+        character: text("character"),
         name,
-        notes: String(data.get("notes") ?? "").trim(),
-        role: String(data.get("role") ?? "").trim(),
-        tech,
-        understanding,
+        notes: text("notes"),
+        project: levelOf(data.get("project")),
+        role: text("role"),
+        tech: levelOf(data.get("tech")),
+        temperament: text("temperament"),
       });
     },
-    [onAdd, tech, understanding]
+    [onSave]
   );
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="p-7 sm:max-w-[520px]" showCloseButton={false}>
+      <DialogContent className="p-7 sm:max-w-[560px]" showCloseButton={false}>
         <form className="contents" onSubmit={handleSubmit}>
           <DialogHeader className="gap-1">
-            <DialogTitle>Новый человек</DialogTitle>
+            <DialogTitle>
+              {editing ? "Изменить человека" : "Новый человек"}
+            </DialogTitle>
             <DialogDescription className="text-sm">
               Со стороны клиента, проект {project}
             </DialogDescription>
@@ -272,22 +346,130 @@ export function AddPersonDialogLive({
           >
             <CloseIcon className="size-4" />
           </DialogClose>
-          <AddPersonFields
-            levels={levels}
-            onTechChange={setTech}
-            onUnderstandingChange={setUnderstanding}
-            tech={tech}
-            understanding={understanding}
-          />
+          <div className="flex gap-3">
+            <Field>
+              <FieldLabel className="text-sm font-medium">Имя</FieldLabel>
+              <Input
+                autoComplete="off"
+                defaultValue={values.name}
+                name="name"
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel className="text-sm font-medium">Роль</FieldLabel>
+              <Input
+                autoComplete="off"
+                defaultValue={values.role}
+                name="role"
+              />
+            </Field>
+          </div>
+          <div className="flex gap-3">
+            <LevelSelect
+              defaultValue={values.tech}
+              label="В технике"
+              labels={levels.tech}
+              name="tech"
+            />
+            <LevelSelect
+              defaultValue={values.project}
+              label="Понимание проекта"
+              labels={levels.project}
+              name="project"
+            />
+          </div>
+          <div className="flex gap-3">
+            <Field>
+              <FieldLabel className="text-sm font-medium">
+                Темперамент
+              </FieldLabel>
+              <Input
+                autoComplete="off"
+                defaultValue={values.temperament}
+                name="temperament"
+                placeholder="Например: быстрый, перебивает"
+              />
+            </Field>
+            <Field>
+              <FieldLabel className="text-sm font-medium">Характер</FieldLabel>
+              <Input
+                autoComplete="off"
+                defaultValue={values.character}
+                name="character"
+                placeholder="Например: ценит цифры и сроки"
+              />
+            </Field>
+          </div>
+          <Field>
+            <FieldLabel className="text-sm font-medium">
+              Как формулировать вопросы
+            </FieldLabel>
+            <Textarea
+              className="min-h-16"
+              defaultValue={values.askStyle}
+              name="askStyle"
+              placeholder="Например: простым языком, через деньги и сроки"
+            />
+          </Field>
+          <Field>
+            <div className="flex justify-between gap-4">
+              <FieldLabel className="text-sm font-medium">
+                Что важно знать
+              </FieldLabel>
+              <span className="text-muted-foreground text-sm">
+                необязательно
+              </span>
+            </div>
+            <Textarea
+              className="min-h-16"
+              defaultValue={values.notes}
+              name="notes"
+              placeholder="Например: будет на звонках про сценарии оператора, говорит по делу"
+            />
+          </Field>
           <DialogFooter className="pt-1 [&>button]:text-sm">
             <DialogClose render={<Button variant="secondary" />}>
               Отмена
             </DialogClose>
-            <Button type="submit">Добавить</Button>
+            <Button type="submit">{editing ? "Сохранить" : "Добавить"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** "Убрать из проекта": the person leaves the project and its calls. */
+export function RemovePersonDialog({
+  name,
+  onOpenChange,
+  onRemove,
+  open,
+}: {
+  name: string;
+  onOpenChange: (open: boolean) => void;
+  onRemove: () => void;
+  open: boolean;
+}) {
+  return (
+    <AlertDialog onOpenChange={onOpenChange} open={open}>
+      <AlertDialogContent className="p-7 sm:max-w-[440px]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Убрать {name} из проекта?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Профиль удалится, в участниках звонков этого человека больше не
+            будет. Бриф может устареть.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="pt-1 [&>button]:text-sm">
+          <AlertDialogCancel>Отмена</AlertDialogCancel>
+          <AlertDialogAction onClick={onRemove} variant="destructive">
+            Убрать
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

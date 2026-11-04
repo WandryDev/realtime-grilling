@@ -17,17 +17,19 @@ export function LevelMeter({
   className?: string;
   /** Accessible name, "В технике". */
   label: string;
-  level: number;
+  /** `null` (or 0): not set, every bar empty. */
+  level: number | null;
   max?: number;
   preview?: number;
   size?: "sm" | "md";
 }) {
   const steps = Array.from({ length: max }, (_, index) => index + 1);
+  const value = level ?? 0;
 
   return (
     <span className={cn("flex", className)}>
       <span className="sr-only">
-        {label}: {level} из {max}
+        {label}: {value > 0 ? `${value} из ${max}` : "не указано"}
       </span>
       <span
         aria-hidden="true"
@@ -38,7 +40,7 @@ export function LevelMeter({
             className={cn(
               "shrink-0 rounded-full",
               size === "sm" ? "h-1 w-5" : "h-1.5 flex-1",
-              levelColor({ level, preview, size, step })
+              levelColor({ level: value, preview, size, step })
             )}
             key={step}
           />

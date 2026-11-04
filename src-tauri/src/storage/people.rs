@@ -118,7 +118,9 @@ pub fn create(
         Some(&person.project_id),
         Change::Created,
     );
-    Ok((person, vec![event]))
+    // The project's brief depends on its people (`briefState`).
+    let brief = projects::changed(&person.project_id);
+    Ok((person, vec![event, brief]))
 }
 
 pub fn update(
@@ -150,7 +152,9 @@ pub fn update(
         Some(&person.project_id),
         Change::Updated,
     );
-    Ok((person, vec![event]))
+    // The project's brief depends on its people (`briefState`).
+    let brief = projects::changed(&person.project_id);
+    Ok((person, vec![event, brief]))
 }
 
 /// Deletes the person; they leave every call they took part in.
@@ -163,5 +167,7 @@ pub fn delete(connection: &Connection, id: &str) -> CommandResult<((), Vec<DataC
         Some(&person.project_id),
         Change::Deleted,
     );
-    Ok(((), vec![event]))
+    // The project's brief depends on its people (`briefState`).
+    let brief = projects::changed(&person.project_id);
+    Ok(((), vec![event, brief]))
 }

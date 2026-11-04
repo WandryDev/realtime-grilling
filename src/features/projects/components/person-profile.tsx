@@ -399,6 +399,50 @@ export function Portrait({
   );
 }
 
+/** "Что важно знать": the manager's notes about the person. */
+export function ManagerNotes({
+  className,
+  editing = false,
+  text,
+}: {
+  className?: string;
+  editing?: boolean;
+  text: string;
+}) {
+  const fieldId = useId();
+  return (
+    <section className={cn("flex flex-col gap-3", className)}>
+      {editing ? (
+        <label className="text-muted-foreground text-sm" htmlFor={fieldId}>
+          Что важно знать
+        </label>
+      ) : (
+        <h2 className="text-muted-foreground text-sm font-normal">
+          Что важно знать
+        </h2>
+      )}
+      {editing ? (
+        <Textarea
+          className="min-h-18"
+          defaultValue={text}
+          id={fieldId}
+          name="notes"
+          placeholder="Например: будет на звонках про сценарии оператора"
+        />
+      ) : (
+        <p
+          className={cn(
+            "max-w-[640px] text-base",
+            text ? "text-foreground" : "text-muted-foreground"
+          )}
+        >
+          {text || "Пока ничего"}
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** Right column: calls with the person and where the profile comes from. */
 export function ProfileSide({
   calls,

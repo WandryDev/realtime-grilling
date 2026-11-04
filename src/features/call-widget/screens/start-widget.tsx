@@ -41,6 +41,7 @@ export interface StartWidgetLaunch {
 export function StartWidget({
   addablePeople,
   app = MEETING_APP,
+  briefNote,
   callHref,
   className,
   launch,
@@ -65,6 +66,8 @@ export function StartWidget({
   addablePeople?: Participant[];
   /** The meeting app that holds the microphone. */
   app?: string;
+  /** "Обновляю бриф…" under the project while its brief is refreshed. */
+  briefNote?: string;
   /** "Открыть окно звонка" on the launch card. */
   callHref?: string;
   className?: string;
@@ -130,6 +133,7 @@ export function StartWidget({
     <StartPromptCard
       addablePeople={addablePeople}
       app={app}
+      briefNote={briefNote}
       className={className}
       onAddParticipant={onAddParticipant}
       onDismiss={onDismiss}

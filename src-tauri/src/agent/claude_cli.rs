@@ -54,7 +54,71 @@ pub struct AgentRequest {
     /// Where the CLI's process tree is kept while it runs, for the app's
     /// exit to kill it.
     pub process: process::TreeSlot,
+    /// What a call other than the fast loop's changes; the default is the
+    /// fast loop's call.
+    pub options: CallOptions,
 }
+
+/// Per-request overrides of the adapter's call (the brief build,
+/// projects-people-brief design.md decisions 4 and 6). `None` keeps the
+/// adapter's value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallOptions {
+    /// Instead of [`ClaudeCodeCli::model`].
+    pub model: Option<&'static str>,
+    /// `--effort`; `low` when `None`.
+    pub effort: Option<&'static str>,
+    /// Instead of [`ClaudeCodeCli::timeout`].
+    pub timeout: Option<Duration>,
+    pub output: OutputKind,
+    /// Told when the model starts reading and when it starts writing.
+    pub on_output: Option<OutputHook>,
+}
+
+/// What `structured_output` must be for the reply to count.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutputKind {
+    /// The fast loop's patch: an object with an `ops` array.
+    #[default]
+    Patch,
+    /// Any JSON object; the caller checks it.
+    Object,
+}
+
+/// Where the model is in its answer, as the stream shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputPhase {
+    /// The first `content_block_delta` (thinking or text).
+    Reading,
+    /// The first `input_json_delta`, or the `StructuredOutput` call.
+    Writing,
+}
+
+/// Called once per phase, `Reading` always before `Writing`, from the task
+/// that reads the CLI's output: it must not block.
+#[derive(Clone)]
+pub struct OutputHook(pub std::sync::Arc<dyn Fn(OutputPhase) + Send + Sync>);
+
+impl OutputHook {
+    pub fn new(hook: impl Fn(OutputPhase) + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(hook))
+    }
+}
+
+impl std::fmt::Debug for OutputHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OutputHook")
+    }
+}
+
+/// Clones are equal: the same hook.
+impl PartialEq for OutputHook {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for OutputHook {}
 
 /// What a call cost. Tokens are 0 when the CLI didn't report them.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -135,9 +199,9 @@ impl ClaudeCodeCli {
         [
             OsStr::new("-p"),
             OsStr::new("--model"),
-            OsStr::new(self.model),
+            OsStr::new(request.options.model.unwrap_or(self.model)),
             OsStr::new("--effort"),
-            OsStr::new("low"),
+            OsStr::new(request.options.effort.unwrap_or("low")),
             OsStr::new("--setting-sources"),
             OsStr::new(""),
             OsStr::new("--strict-mcp-config"),
@@ -184,6 +248,9 @@ impl ClaudeCodeCli {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let message = request.user_message.into_bytes();
+        let timeout = request.options.timeout.unwrap_or(self.timeout);
+        let output = request.options.output;
+        let hook = request.options.on_output;
 
         let work = async {
             // Written while the output is read: a full pipe can't block both.
@@ -195,7 +262,10 @@ impl ClaudeCodeCli {
                 }
             };
             let read = async {
-                let mut events = Events::default();
+                let mut events = Events {
+                    hook,
+                    ..Events::default()
+                };
                 if let Some(stdout) = stdout {
                     events.read(stdout).await;
                 }
@@ -210,7 +280,7 @@ impl ClaudeCodeCli {
         };
         let outcome = tokio::select! {
             done = work => Ok(done),
-            () = tokio::time::sleep(self.timeout) => Err(AgentError::Timeout),
+            () = tokio::time::sleep(timeout) => Err(AgentError::Timeout),
             _ = cancel => Err(AgentError::Cancelled),
         };
         let (events, status) = match outcome {
@@ -233,7 +303,7 @@ impl ClaudeCodeCli {
         } else {
             String::new()
         };
-        events.reply(duration, status, &stderr)
+        events.reply(duration, status, &stderr, output)
     }
 }
 
@@ -295,6 +365,9 @@ const fn unix_ms(value: i64) -> i64 {
 struct Events {
     result: Option<Value>,
     rate_limit: Option<RateLimit>,
+    hook: Option<OutputHook>,
+    /// The last phase told to the hook.
+    phase: Option<OutputPhase>,
 }
 
 impl Events {
@@ -330,6 +403,14 @@ impl Events {
             return;
         };
         match event.get("type").and_then(Value::as_str) {
+            Some("stream_event") => {
+                if let Some(phase) = phase_of(event.get("event").unwrap_or(&Value::Null)) {
+                    self.reached(phase);
+                }
+            }
+            Some("assistant") if calls_structured_output(&event) => {
+                self.reached(OutputPhase::Writing);
+            }
             Some("result") if self.result.is_none() => self.result = Some(event),
             Some("rate_limit_event") => {
                 if let Some(info) = event.get("rate_limit_info") {
@@ -337,6 +418,24 @@ impl Events {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Tells the hook about `phase` and the phases before it, once each.
+    fn reached(&mut self, phase: OutputPhase) {
+        let order = [OutputPhase::Reading, OutputPhase::Writing];
+        let done = self
+            .phase
+            .and_then(|seen| order.iter().position(|item| *item == seen))
+            .map_or(0, |index| index + 1);
+        let Some(target) = order.iter().position(|item| *item == phase) else {
+            return;
+        };
+        for next in order.iter().take(target + 1).skip(done) {
+            self.phase = Some(*next);
+            if let Some(hook) = &self.hook {
+                (hook.0)(*next);
+            }
         }
     }
 
@@ -354,6 +453,7 @@ impl Events {
         duration: Duration,
         status: Option<ExitStatus>,
         stderr: &str,
+        output: OutputKind,
     ) -> Result<AgentReply, AgentError> {
         let rate_limit = self.rate_limit.unwrap_or_default();
         let Some(result) = self.result else {
@@ -367,15 +467,24 @@ impl Events {
         if failed {
             return Err(failure(&result, rate_limit));
         }
-        let patch = match result.get("structured_output") {
-            Some(patch) if patch.get("ops").is_some_and(Value::is_array) => patch.clone(),
-            Some(other) => {
+        let patch = match (result.get("structured_output"), output) {
+            (Some(patch), OutputKind::Patch) if patch.get("ops").is_some_and(Value::is_array) => {
+                patch.clone()
+            }
+            (Some(object), OutputKind::Object) if object.is_object() => object.clone(),
+            (Some(other), OutputKind::Object) => {
+                return Err(AgentError::InvalidOutput(format!(
+                    "structured_output не объект: {}",
+                    clip(&other.to_string())
+                )));
+            }
+            (Some(other), OutputKind::Patch) => {
                 return Err(AgentError::InvalidOutput(format!(
                     "structured_output без ops: {}",
                     clip(&other.to_string())
                 )));
             }
-            None => {
+            (None, _) => {
                 return Err(AgentError::InvalidOutput(format!(
                     "нет structured_output: {}",
                     clip(&message(&result))
@@ -387,6 +496,41 @@ impl Events {
             usage: usage(&result, duration, rate_limit),
         })
     }
+}
+
+/// The phase a `stream_event` starts: a delta of any block is reading, of
+/// the `StructuredOutput` input (or that block's start) writing.
+fn phase_of(event: &Value) -> Option<OutputPhase> {
+    match event.get("type").and_then(Value::as_str)? {
+        "content_block_delta" => {
+            let delta = event.pointer("/delta/type").and_then(Value::as_str);
+            Some(if delta == Some("input_json_delta") {
+                OutputPhase::Writing
+            } else {
+                OutputPhase::Reading
+            })
+        }
+        "content_block_start" => {
+            let block = event.get("content_block")?;
+            let structured = block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && block.get("name").and_then(Value::as_str) == Some("StructuredOutput");
+            structured.then_some(OutputPhase::Writing)
+        }
+        _ => None,
+    }
+}
+
+/// An `assistant` message with the `StructuredOutput` call.
+fn calls_structured_output(event: &Value) -> bool {
+    event
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|block| {
+            block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && block.get("name").and_then(Value::as_str) == Some("StructuredOutput")
+        })
 }
 
 /// `result.usage`, `total_cost_usd` and the limit.

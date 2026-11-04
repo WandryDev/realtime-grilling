@@ -19,6 +19,7 @@ import {
   ProposalsBanner,
   SourcesStatus,
 } from "../components/project-header";
+import { NotesSection } from "../components/project-live-sections";
 import {
   BriefSection,
   type BriefState,
@@ -30,13 +31,19 @@ import {
 import { ADD_PERSON, DELETE_PROJECT, PROJECT, type PROPOSALS } from "../mock";
 import { demoProjectPageData, type ProjectPageData } from "../project-data";
 
-export type ProjectSectionId = "brief" | "people" | "calls" | "sources";
+export type ProjectSectionId =
+  | "brief"
+  | "people"
+  | "calls"
+  | "sources"
+  | "notes";
 
 const ALL_SECTIONS: ProjectSectionId[] = [
   "brief",
   "people",
   "calls",
   "sources",
+  "notes",
 ];
 
 /** Element id of a section, the target of its anchor. */
@@ -55,7 +62,8 @@ export function projectSectionId(section: string) {
  *
  * Without `project` and `data` it is the demo project from Paper. The app
  * passes the stored project, its data, the live header actions and dialogs
- * (`headerActions`, `dialogs`) and the handlers.
+ * (`headerActions`, `dialogs`), the documents block, the notes and the
+ * handlers. "Заметки" shows only with `notes`.
  */
 export function ProjectScreen({
   anchor,
@@ -64,10 +72,16 @@ export function ProjectScreen({
   data,
   dialog,
   dialogs,
+  documents,
   headerActions,
+  integrations,
+  notes,
   onAddPerson,
   onAnchorChange,
+  onEditPerson,
   onRefreshBrief,
+  onRemovePerson,
+  onSaveNotes,
   onStopRefresh,
   project = PROJECT,
   proposals,
@@ -82,10 +96,19 @@ export function ProjectScreen({
   dialog?: "add-person" | "delete-project";
   /** Live dialogs of the app; they portal over the window. */
   dialogs?: ReactNode;
+  /** "Документы с компьютера" in "Источники". */
+  documents?: ReactNode;
   headerActions?: ReactNode;
+  /** After the connected sources: the integrations to come. */
+  integrations?: ReactNode;
+  /** The manager's notes; without them there is no "Заметки". */
+  notes?: string;
   onAddPerson?: () => void;
   onAnchorChange?: (anchor: string) => void;
+  onEditPerson?: (personId: string) => void;
   onRefreshBrief?: () => void;
+  onRemovePerson?: (personId: string) => void;
+  onSaveNotes?: (notes: string) => void;
   onStopRefresh?: () => void;
   project?: { description: string; id: string; name: string };
   /** Unreviewed suggestions after a call; null hides the banner. */
@@ -150,6 +173,8 @@ export function ProjectScreen({
           <PeopleSection
             id={projectSectionId("people")}
             onAdd={onAddPerson}
+            onEdit={onEditPerson}
+            onRemove={onRemovePerson}
             people={page.people}
             projectId={project.id}
           />
@@ -165,8 +190,17 @@ export function ProjectScreen({
         ) : null}
         {sections.includes("sources") ? (
           <SourcesSection
+            documents={documents}
             id={projectSectionId("sources")}
+            integrations={integrations}
             sources={page.sources}
+          />
+        ) : null}
+        {sections.includes("notes") && notes !== undefined ? (
+          <NotesSection
+            id={projectSectionId("notes")}
+            notes={notes}
+            onSave={onSaveNotes}
           />
         ) : null}
       </PageContent>

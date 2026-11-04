@@ -12,7 +12,8 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 use super::{
-    Agent, AgentError, AgentReply, AgentRequest, ClaudeCodeCli, MODEL, TIMEOUT,
+    Agent, AgentError, AgentReply, AgentRequest, CallOptions, ClaudeCodeCli, MODEL, OutputHook,
+    OutputKind, OutputPhase, TIMEOUT,
     tests::{EMPTY_PATCH, NOT_A_PATCH, NOT_LOGGED_IN, RATE_LIMITED, SUCCESS},
 };
 
@@ -116,6 +117,7 @@ fn request_in(fake: &Fake) -> AgentRequest {
             .into(),
         schema: r#"{"type":"object","required":["ops"]}"#.into(),
         process: crate::agent::process::TreeSlot::default(),
+        options: CallOptions::default(),
     }
 }
 
@@ -348,4 +350,50 @@ fn works_as_a_shared_trait_object() {
     }))
     .unwrap();
     assert_eq!(reply.unwrap().patch, json!({ "ops": [] }));
+}
+
+/// The brief's call: its own model, effort and timeout, any object as the
+/// output, and the hook hears the phases; the fast loop's defaults stay.
+#[test]
+fn request_options_override_the_call() {
+    let fake = Fake::new(SUCCESS);
+    // The adapter's own timeout would kill the hanging fake at once.
+    let agent = fake.agent("hang", 0, Duration::from_millis(1));
+    let mut request = request_in(&fake);
+    request.options.timeout = Some(SLOW_START);
+    let started = Instant::now();
+    let (_cancel, cancelled) = oneshot::channel();
+    assert_eq!(
+        block_on(agent.run(request, cancelled)),
+        Err(AgentError::Timeout)
+    );
+    assert!(started.elapsed() >= SLOW_START, "{:?}", started.elapsed());
+
+    let fake = Fake::new(SUCCESS);
+    let agent = fake.agent("play", 0, SLOW_START * 2);
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&heard);
+    let mut request = request_in(&fake);
+    request.options = CallOptions {
+        model: Some("claude-opus-5-5"),
+        effort: Some("medium"),
+        timeout: None,
+        output: OutputKind::Object,
+        on_output: Some(OutputHook::new(move |phase| {
+            sink.lock().unwrap().push(phase);
+        })),
+    };
+    let (_cancel, cancelled) = oneshot::channel();
+    let reply = block_on(agent.run(request, cancelled)).unwrap();
+    assert!(reply.patch["ops"].is_array());
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [OutputPhase::Reading, OutputPhase::Writing]
+    );
+    let args = fake.read("args");
+    let args: Vec<&str> = args.split('\0').collect();
+    assert_eq!(
+        &args[1..5],
+        ["--model", "claude-opus-5-5", "--effort", "medium"]
+    );
 }

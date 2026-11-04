@@ -56,11 +56,18 @@ export function PersonCard({
   );
 }
 
-function PersonScale({ label, level }: { label: string; level: number }) {
+function PersonScale({
+  label,
+  level,
+}: {
+  label: string;
+  level: number | null;
+}) {
   return (
     <span className="flex flex-col gap-1.5">
       <span aria-hidden="true" className="text-muted-foreground text-xs">
         {label}
+        {level ? null : ": не указано"}
       </span>
       <LevelMeter label={label} level={level} />
     </span>

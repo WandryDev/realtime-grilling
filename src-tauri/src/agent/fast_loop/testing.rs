@@ -46,12 +46,19 @@ pub fn recording(connection: &Connection) -> String {
         ProjectCreate {
             name: "Телемедиа".to_owned(),
             description: Some("Единая система приёма звонков для сети клиник".to_owned()),
+            // The shape of `projects/brief/brief.schema.json`.
             brief: Some(json!({
                 "product": "Клиники теряют до половины звонков пациентов",
-                "glossary": [{ "term": "Первичка", "definition": "Пациент без карты" }],
                 "stack": ["amoCRM API v4", "Mango Office"],
-                "keyDocuments": [{ "title": "Архитектура телефонии", "meta": "Outline" }],
+                "modules": [],
+                "glossary": [{ "term": "Первичка", "definition": "Пациент без карты" }],
+                "keyDocuments": [{
+                    "sourceId": "0196f3a2-7c41-7d2e-9a10-3b5c8d4e6f70",
+                    "title": "Архитектура телефонии",
+                    "why": "Схема очередей"
+                }],
             })),
+            ..ProjectCreate::default()
         },
     )
     .unwrap();

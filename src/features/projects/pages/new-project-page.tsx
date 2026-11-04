@@ -13,7 +13,7 @@ import {
   useRef,
   useState,
 } from "react";
-
+import type { ProjectSource } from "@/bindings";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,20 +25,34 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/toast";
-import { useIntegrations } from "@/data/integrations";
-import { addPerson, initialsOf } from "@/data/people";
-import { createProject, useProjects } from "@/data/projects";
+import { addPerson, initialsOf, usePeople } from "@/data/people";
+import {
+  createProject,
+  deleteProject,
+  updateProject,
+  useProject,
+  useProjects,
+} from "@/data/projects";
+import { removeProjectSource, useProjectSources } from "@/data/sources";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 import {
+  documentDropSupported,
+  pickDocuments,
   sendBriefBuildToBackground,
   startBriefBuild,
   stopBriefBuild,
+  useAddDocuments,
   useBriefBuild,
+  useDocumentDrop,
 } from "../api";
 import { BRIEF_BUILD_STAGES } from "../backend";
+import {
+  DocumentsBlock,
+  SoonIntegrations,
+} from "../components/documents-block";
 import {
   DraftProjectNavItem,
   WizardButton,
@@ -46,10 +60,12 @@ import {
   WizardTextAction,
 } from "../components/wizard-layout";
 import type { QuickPerson } from "../components/wizard-people";
+import { type BRIEF_READY, type BRIEF_TASKS, QUICK_TECH_LEVELS } from "../mock";
 import {
   DEMO_PROJECT_ID,
   defaultHowToAsk,
   LEVEL_BY_CHOICE,
+  peopleCount,
 } from "../project-data";
 import {
   BuildingStep,
@@ -91,11 +107,97 @@ const RAIL_STEP: Record<string, FormStep> = {
   sources: "sources",
 };
 
+/** The quick tech level nobody picked: the profile says "не указано". */
+const LEVEL_UNSET = "unset";
+
+const WIZARD_TECH_LEVELS = [
+  { label: "не указано", value: LEVEL_UNSET },
+  ...QUICK_TECH_LEVELS,
+];
+
 const TECH_TAG: Record<string, string> = {
   medium: "средне",
   none: "не технарь",
   tech: "технарь",
+  [LEVEL_UNSET]: "уровень не указан",
 };
+
+/** 1 документ, 2 документа, 5 документов. */
+function documentsLabel(count: number) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} документ`;
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} документа`;
+  }
+  return `${count} документов`;
+}
+
+/** The real stages of the build (BriefProgress, design.md decision 6). */
+function buildTasks(people: number, documents: number): typeof BRIEF_TASKS {
+  const read = documents > 0 ? `, ${documentsLabel(documents)}` : "";
+  return [
+    {
+      detail: `Описание, заметки, ${peopleCount(people)}${read}`,
+      state: "pending",
+      title: "Читаю материалы проекта",
+    },
+    { detail: "Claude Code", state: "pending", title: "Запускаю агента" },
+    {
+      detail: "Продукт, люди, сроки, термины клиента",
+      state: "pending",
+      title: "Агент читает материалы",
+    },
+    {
+      detail: "Продукт, модули, стек, глоссарий, ключевые документы",
+      state: "pending",
+      title: "Агент пишет бриф",
+    },
+    {
+      detail: "Ссылки на документы, термины для распознавания",
+      state: "pending",
+      title: "Проверяю и сохраняю",
+    },
+  ];
+}
+
+/** "Бриф готов" from the stored brief. */
+function readySummary(
+  brief: {
+    glossary: unknown[];
+    modules: { name: string }[];
+    product: string;
+    stack: string[];
+  } | null,
+  people: number,
+  documents: ProjectSource[]
+) {
+  const ready = documents.filter((source) => source.status === "ready");
+  const stats: typeof BRIEF_READY.stats = [
+    { label: "документов прочитано", value: String(ready.length) },
+    { label: "людей клиента", value: String(people) },
+    {
+      label: "терминов в глоссарии",
+      value: String(brief?.glossary.length ?? 0),
+    },
+  ];
+  const facts: typeof BRIEF_READY.facts = [];
+  if (brief?.product) {
+    facts.push({ label: "Продукт", value: brief.product });
+  }
+  if (brief && brief.stack.length > 0) {
+    facts.push({ label: "Стек", value: brief.stack.join(", ") });
+  }
+  if (brief && brief.modules.length > 0) {
+    facts.push({
+      label: "Модули",
+      value: brief.modules.map((module) => module.name).join(", "),
+    });
+  }
+  return { facts, stats };
+}
 
 interface DraftPerson extends WizardPerson {
   level: string;
@@ -107,7 +209,6 @@ type NameError = "empty" | "duplicate";
 export function NewProjectPage() {
   const router = useRouter();
   const projects = useProjects();
-  const integrations = useIntegrations();
   const demo = useDemoState(NEW_PROJECT_DEMO_STATES);
 
   const [step, setStep] = useState<Step>("name");
@@ -117,9 +218,15 @@ export function NewProjectPage() {
   const [people, setPeople] = useState<DraftPerson[]>([]);
   const [notes, setNotes] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
+  /** Saved as soon as it gets a document: documents belong to a project. */
+  const [draftId, setDraftId] = useState<string | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const build = useBriefBuild(projectId);
+  const savedId = projectId ?? draftId;
+  const saved = useProject(savedId);
+  const savedPeople = usePeople(projectId);
+  const documents = useProjectSources(savedId);
 
   // A forced state applies when the demo param changes.
   useEffect(() => {
@@ -143,13 +250,17 @@ export function NewProjectPage() {
 
   const duplicate = useMemo(() => {
     const needle = name.trim().toLowerCase();
-    return projects.find((project) => project.name.toLowerCase() === needle);
-  }, [name, projects]);
+    return projects.find(
+      (project) =>
+        project.id !== draftId && project.name.toLowerCase() === needle
+    );
+  }, [draftId, name, projects]);
 
   let view: Step = step;
-  if (build) {
+  if (build && build.status !== "stopped") {
     view = build.status === "ready" ? "ready" : "building";
   }
+  const failed = build?.status === "failed";
   let screenState: NewProjectState = view;
   if (view === "name" && nameError) {
     screenState = "name-error";
@@ -159,7 +270,8 @@ export function NewProjectPage() {
     name.trim() !== "" ||
     description.trim() !== "" ||
     people.length > 0 ||
-    notes.trim() !== "";
+    notes.trim() !== "" ||
+    draftId !== null;
 
   /* -------------------------------------------------- Navigation */
 
@@ -213,8 +325,12 @@ export function NewProjectPage() {
 
   const leave = useCallback(() => {
     setLeaveOpen(false);
+    // The project made for the documents goes with them.
+    if (draftId && !projectId) {
+      deleteProject(draftId);
+    }
     router.push(routes.home());
-  }, [router]);
+  }, [draftId, projectId, router]);
 
   /* -------------------------------------------------- Step 1 */
 
@@ -237,6 +353,16 @@ export function NewProjectPage() {
     },
     [goNext]
   );
+
+  /* -------------------------------------------------- Step 2 */
+
+  const documentsBlock = useWizardDocuments({
+    active: view === "sources",
+    description,
+    name,
+    onDraft: setDraftId,
+    savedId,
+  });
 
   /* -------------------------------------------------- Step 3 */
 
@@ -297,41 +423,52 @@ export function NewProjectPage() {
 
   /* -------------------------------------------------- Brief */
 
-  const handleBuild = useCallback(() => {
+  const handleBuild = useCallback(async () => {
     const projectName = name.trim();
     if (!projectName) {
       setStep("name");
       setNameError("empty");
       return;
     }
-    // The project is saved right away with the id the backend gives it;
-    // the agent builds the brief after. A failed save (toast) goes back.
+    // The project is saved right away with the id the backend gives it
+    // (or was, with its first document); the people and the notes go with
+    // it, then the agent builds the brief. A failed save (toast) goes back.
     setStep("building");
-    createProject({
+    const fields = {
       description: description.trim(),
       name: projectName,
-    }).then((id) => {
-      if (!id) {
-        setStep("notes");
-        return;
-      }
-      for (const person of people) {
-        const tech = LEVEL_BY_CHOICE[person.level] ?? 3;
-        addPerson({
+      notes: notes.trim(),
+    };
+    const id = draftId
+      ? ((await updateProject(draftId, fields))?.id ?? null)
+      : await createProject(fields);
+    if (!id) {
+      setStep("notes");
+      return;
+    }
+    await Promise.all(
+      people.map((person) => {
+        const tech = LEVEL_BY_CHOICE[person.level] ?? null;
+        return addPerson({
           howToAsk: defaultHowToAsk(tech),
           initials: person.initials,
           name: person.name,
-          notes: notes.trim() || undefined,
-          project: 2,
+          project: null,
           projectId: id,
           role: person.role,
           tech,
         });
-      }
-      startBriefBuild(id, projectName);
-      setProjectId(id);
-    });
-  }, [description, name, notes, people]);
+      })
+    );
+    startBriefBuild(id, projectName);
+    setProjectId(id);
+  }, [description, draftId, name, notes, people]);
+
+  const handleRetry = useCallback(() => {
+    if (projectId) {
+      startBriefBuild(projectId, name.trim());
+    }
+  }, [name, projectId]);
 
   const handleStop = useCallback(() => {
     if (!projectId) {
@@ -341,7 +478,7 @@ export function NewProjectPage() {
     stopBriefBuild(projectId);
     router.push(routes.project(projectId));
     toast.add({
-      description: "Проект сохранён, бриф можно собрать кнопкой «Обновить»",
+      description: "Проект сохранён, бриф можно собрать на его странице",
       title: "Сбор брифа остановлен",
       type: "info",
     });
@@ -349,7 +486,8 @@ export function NewProjectPage() {
 
   const handleBackground = useCallback(() => {
     if (projectId) {
-      sendBriefBuildToBackground(projectId);
+      const id = projectId;
+      sendBriefBuildToBackground(id, () => router.push(routes.project(id)));
     }
     router.push(routes.home());
     toast.add({
@@ -361,26 +499,16 @@ export function NewProjectPage() {
 
   /* -------------------------------------------------- Render */
 
-  const sources = useMemo(
-    () => ({
-      clickup: {
-        account: integrations.clickup.account,
-        connected: integrations.clickup.status === "connected",
-      },
-      github: {
-        account: integrations.github.account,
-        connected: integrations.github.status === "connected",
-      },
-      outline: {
-        account: integrations.outline.account,
-        connected: integrations.outline.status === "connected",
-      },
-    }),
-    [integrations]
-  );
-
   const projectHref = routes.project(projectId ?? DEMO_PROJECT_ID);
   const isSaved = projectId !== null || view === "ready";
+  // The draft has its own item until the wizard is done.
+  const sidebarProjects = useMemo(
+    () =>
+      isSaved
+        ? undefined
+        : projects.filter((project) => project.id !== draftId),
+    [draftId, isSaved, projects]
+  );
 
   let content: ReactNode = null;
   switch (view) {
@@ -413,14 +541,16 @@ export function NewProjectPage() {
     case "sources":
       content = (
         <SourcesStep
-          connectHref={routes.settings("integrations")}
-          sources={sources}
+          documents={documentsBlock}
+          integrations={<SoonIntegrations />}
         />
       );
       break;
     case "people":
       content = (
         <PeopleStep
+          level={LEVEL_UNSET}
+          levels={WIZARD_TECH_LEVELS}
           onAdd={handleAddPerson}
           onRemove={handleRemovePerson}
           people={people}
@@ -438,15 +568,21 @@ export function NewProjectPage() {
       break;
     case "building":
       content = (
-        <BuildingStep
-          stage={
-            build ? Math.min(build.stage + 1, BRIEF_BUILD_STAGES) : undefined
-          }
+        <BuildingView
+          build={build}
+          documents={documents.length}
+          people={people.length}
         />
       );
       break;
     default:
-      content = <ReadyStep />;
+      content = (
+        <ReadyStep
+          assumption={null}
+          description="Агент прочитал описание, заметки, людей и документы. Проверьте главное на странице проекта; бриф можно собрать заново в любой момент."
+          {...readySummary(saved?.brief ?? null, savedPeople.length, documents)}
+        />
+      );
   }
 
   return (
@@ -455,11 +591,13 @@ export function NewProjectPage() {
         className="h-svh"
         footer={
           <WizardActions
+            failed={failed}
             onBack={goBack}
             onBackground={handleBackground}
             onBuild={handleBuild}
             onCancel={handleCancel}
             onNext={goNext}
+            onRetry={handleRetry}
             onStop={handleStop}
             projectHref={projectHref}
             view={view}
@@ -469,6 +607,7 @@ export function NewProjectPage() {
         sidebar={
           <MainSidebar
             active={isSaved ? (projectId ?? DEMO_PROJECT_ID) : undefined}
+            projects={sidebarProjects}
             projectsEnd={
               isSaved ? null : (
                 <DraftProjectNavItem label={name.trim() || "Новый проект"} />
@@ -485,8 +624,8 @@ export function NewProjectPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Выйти без сохранения?</AlertDialogTitle>
             <AlertDialogDescription>
-              Название, люди и заметки не сохранятся. Проект появится, только
-              когда вы дойдёте до «Собрать бриф».
+              Название, документы, люди и заметки не сохранятся. Проект
+              появится, только когда вы дойдёте до «Собрать бриф».
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -501,26 +640,139 @@ export function NewProjectPage() {
   );
 }
 
+/**
+ * "Документы с компьютера" of step 2. Documents belong to a project, so the
+ * first of them saves it (`onDraft` gets its id); the wizard fills it in
+ * at "Собрать бриф". Files dropped on the window count while `active`.
+ */
+function useWizardDocuments({
+  active,
+  description,
+  name,
+  onDraft,
+  savedId,
+}: {
+  active: boolean;
+  description: string;
+  name: string;
+  onDraft: (id: string) => void;
+  savedId: string | null;
+}) {
+  const documents = useProjectSources(savedId);
+  const { add, adding, rejected } = useAddDocuments(savedId);
+
+  const ensureDraft = useCallback(async () => {
+    if (savedId) {
+      return savedId;
+    }
+    const id = await createProject({
+      description: description.trim(),
+      name: name.trim(),
+    });
+    if (id) {
+      onDraft(id);
+    }
+    return id ?? null;
+  }, [description, name, onDraft, savedId]);
+
+  const addPaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) {
+        return;
+      }
+      const id = await ensureDraft();
+      if (id) {
+        await add(paths, id);
+      }
+    },
+    [add, ensureDraft]
+  );
+  const handlePick = useCallback(async () => {
+    await addPaths(await pickDocuments());
+  }, [addPaths]);
+  const handleDrop = useCallback(
+    (paths: string[]) => {
+      addPaths(paths);
+    },
+    [addPaths]
+  );
+  const dropActive = useDocumentDrop(active ? handleDrop : null);
+  const handleRemove = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+    const sourceId = event.currentTarget.dataset.id;
+    if (sourceId) {
+      removeProjectSource(sourceId);
+    }
+  }, []);
+
+  return (
+    <DocumentsBlock
+      adding={adding}
+      documents={documents}
+      dropActive={dropActive}
+      dropSupported={documentDropSupported}
+      onPick={handlePick}
+      onRemove={handleRemove}
+      rejected={rejected}
+    />
+  );
+}
+
+/** "Собираю бриф" at the build's real stage, or why it failed. */
+function BuildingView({
+  build,
+  documents,
+  people,
+}: {
+  build: ReturnType<typeof useBriefBuild>;
+  documents: number;
+  people: number;
+}) {
+  return (
+    <BuildingStep
+      error={build?.status === "failed" ? build.error : undefined}
+      stage={build ? Math.min(build.stage + 1, BRIEF_BUILD_STAGES) : undefined}
+      tasks={buildTasks(people, documents)}
+    />
+  );
+}
+
 /** The footer of each step: text action on the left, step buttons right. */
 function WizardActions({
+  failed,
   onBack,
   onBackground,
   onBuild,
   onCancel,
   onNext,
+  onRetry,
   onStop,
   projectHref,
   view,
 }: {
+  /** The build failed: try again, or open the saved project. */
+  failed: boolean;
   onBack: () => void;
   onBackground: () => void;
   onBuild: () => void;
   onCancel: () => void;
   onNext: () => void;
+  onRetry: () => void;
   onStop: () => void;
   projectHref: string;
   view: Step;
 }) {
+  if (view === "building" && failed) {
+    return (
+      <WizardFooter
+        end={<WizardButton onClick={onRetry}>Собрать ещё раз</WizardButton>}
+        start={
+          <WizardTextAction {...linkButtonProps(projectHref)}>
+            Открыть проект
+          </WizardTextAction>
+        }
+      />
+    );
+  }
   if (view === "building") {
     return (
       <WizardFooter

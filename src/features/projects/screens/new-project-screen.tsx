@@ -6,6 +6,7 @@ import type {
   Ref,
 } from "react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -264,16 +265,37 @@ export interface WizardSource {
 }
 
 /**
- * Step 2. `sources` says which services are connected (all, in the
- * preview); a missing one offers "Подключить …" at `connectHref`.
+ * Step 2. The app passes `documents` ("Документы с компьютера") and
+ * `integrations` (Outline, GitHub, ClickUp «скоро») until the integrations
+ * come. The preview draws Paper's integration blocks: `sources` says which
+ * services are connected (all by default); a missing one offers
+ * "Подключить …" at `connectHref`.
  */
 export function SourcesStep({
   connectHref,
+  documents,
+  integrations,
   sources,
 }: {
   connectHref?: string;
+  documents?: ReactNode;
+  integrations?: ReactNode;
   sources?: Partial<Record<"outline" | "github" | "clickup", WizardSource>>;
 }) {
+  if (documents) {
+    return (
+      <WizardForm>
+        <WizardHeading
+          description="Всё необязательно. Агент прочитает текст документов и соберёт по ним бриф. Документы можно добавить позже на странице проекта."
+          title="Откуда брать контекст"
+        />
+        <div className="flex flex-col gap-7">
+          {documents}
+          {integrations}
+        </div>
+      </WizardForm>
+    );
+  }
   const outline = sources?.outline;
   const github = sources?.github;
   const clickup = sources?.clickup;
@@ -372,12 +394,19 @@ export interface WizardPerson {
   tag: string;
 }
 
-/** Step 3. The preview shows Paper's two people and a half-typed third. */
+/**
+ * Step 3. The preview shows Paper's two people and a half-typed third; the
+ * app adds "не указано" to the tech levels (`levels`, `level`).
+ */
 export function PeopleStep({
+  level = "medium",
+  levels = QUICK_TECH_LEVELS,
   onAdd,
   onRemove,
   people = WIZARD_PEOPLE,
 }: {
+  level?: string;
+  levels?: { label: string; value: string }[];
   onAdd?: (person: QuickPerson) => void;
   onRemove?: (event: MouseEvent<HTMLButtonElement>) => void;
   people?: WizardPerson[];
@@ -399,8 +428,8 @@ export function PeopleStep({
       ) : null}
       <QuickAddPerson
         defaultName={onAdd ? undefined : "Марина Ковальчук"}
-        level="medium"
-        levels={QUICK_TECH_LEVELS}
+        level={level}
+        levels={levels}
         onAdd={onAdd}
       />
       <p className="text-muted-foreground text-sm">
@@ -434,8 +463,11 @@ export function NotesStep({
 }
 
 /** What the agent does at `stage` (1-based): done before, working on it. */
-function briefTasksAt(stage: number): typeof BRIEF_TASKS {
-  return BRIEF_TASKS.map((task, index) => {
+function briefTasksAt(
+  stage: number,
+  tasks: typeof BRIEF_TASKS = BRIEF_TASKS
+): typeof BRIEF_TASKS {
+  return tasks.map((task, index) => {
     let state: BriefTaskState = "pending";
     if (index < stage - 1) {
       state = "done";
@@ -446,41 +478,68 @@ function briefTasksAt(stage: number): typeof BRIEF_TASKS {
   });
 }
 
-/** "Собираю бриф": the progress and the live list at `stage` of 5. */
+/**
+ * "Собираю бриф": the progress and the live list at `stage` of 5. The app
+ * passes its `tasks` (the real stages); `error` says why the build failed.
+ */
 export function BuildingStep({
+  error,
   stage = PREVIEW_BUILD_STAGE,
+  tasks: stageTasks,
 }: {
+  error?: string;
   stage?: number;
+  tasks?: typeof BRIEF_TASKS;
 }) {
-  const stages = BRIEF_TASKS.length;
+  const stages = (stageTasks ?? BRIEF_TASKS).length;
   const tasks =
-    stage === PREVIEW_BUILD_STAGE ? BRIEF_TASKS : briefTasksAt(stage);
+    stage === PREVIEW_BUILD_STAGE && !stageTasks
+      ? BRIEF_TASKS
+      : briefTasksAt(stage, stageTasks);
   return (
     <WizardForm>
       <WizardHeading
         description="Обычно это занимает пару минут. Можно свернуть, агент доделает в фоне и пришлёт уведомление."
         title="Собираю бриф проекта"
       />
-      <BriefBuildProgress
-        eta={stage < stages - 1 ? "~1 мин" : "~10 с"}
-        stage={stage}
-        stages={stages}
-      />
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTitle>Не удалось собрать бриф</AlertTitle>
+          <AlertDescription>
+            {error}. Проект сохранён, бриф можно собрать ещё раз.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <BriefBuildProgress
+          eta={stage < stages - 1 ? "~1 мин" : "~10 с"}
+          stage={stage}
+          stages={stages}
+        />
+      )}
       <BriefTaskList tasks={tasks} />
     </WizardForm>
   );
 }
 
-export function ReadyStep() {
+/** "Бриф готов": Paper's summary, or the app's from the stored brief. */
+export function ReadyStep({
+  assumption = BRIEF_READY.assumption,
+  description = "Агент прочитал документы, код и задачи. Проверьте главное на странице проекта, исправить можно в любой момент.",
+  facts = BRIEF_READY.facts,
+  stats = BRIEF_READY.stats,
+}: {
+  /** A mismatch the agent resolved; `null` hides the note. */
+  assumption?: typeof BRIEF_READY.assumption | null;
+  description?: string;
+  facts?: typeof BRIEF_READY.facts;
+  stats?: typeof BRIEF_READY.stats;
+}) {
   return (
     <WizardForm>
-      <WizardHeading
-        description="Агент прочитал документы, код и задачи. Проверьте главное на странице проекта, исправить можно в любой момент."
-        title="Бриф готов"
-      />
-      <BriefStats stats={BRIEF_READY.stats} />
-      <BriefFacts facts={BRIEF_READY.facts} />
-      <AssumptionNote {...BRIEF_READY.assumption} />
+      <WizardHeading description={description} title="Бриф готов" />
+      <BriefStats stats={stats} />
+      {facts.length > 0 ? <BriefFacts facts={facts} /> : null}
+      {assumption ? <AssumptionNote {...assumption} /> : null}
     </WizardForm>
   );
 }

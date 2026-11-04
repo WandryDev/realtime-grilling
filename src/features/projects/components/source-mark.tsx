@@ -1,3 +1,5 @@
+import { FileTextIcon } from "lucide-react";
+
 import {
   ClickUpIcon,
   GitHubIcon,
@@ -7,8 +9,23 @@ import { cn } from "@/lib/utils";
 
 import type { SourceKind } from "../mock";
 
+/** A source of the brief: an integration, or a document from the computer. */
+export type DocumentKind = SourceKind | "file";
+
+/** The file mark, sized and colored like the brand marks. */
+function FileMark({ className }: { className?: string }) {
+  return (
+    <FileTextIcon
+      aria-hidden="true"
+      className={cn("text-muted-foreground", className)}
+      strokeWidth={1.75}
+    />
+  );
+}
+
 const SOURCE_ICON = {
   clickup: ClickUpIcon,
+  file: FileMark,
   github: GitHubIcon,
   outline: OutlineIcon,
 } as const;
@@ -25,7 +42,7 @@ export function SourceMark({
   kind,
 }: {
   className?: string;
-  kind: SourceKind;
+  kind: DocumentKind;
 }) {
   const Icon = SOURCE_ICON[kind];
   return <Icon className={cn("size-3.5", className)} />;
@@ -42,7 +59,7 @@ export function SourceTile({
   size = "md",
 }: {
   className?: string;
-  kind: SourceKind;
+  kind: DocumentKind;
   /** Hover hint and spoken name; without it the tile is decorative. */
   label?: string;
   size?: "sm" | "md" | "lg";

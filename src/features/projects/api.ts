@@ -1,22 +1,37 @@
 "use client";
 
 import { Effect, Stream } from "effect";
+import { useCallback, useEffect, useState } from "react";
+
+import type { SourceAddResult } from "@/bindings";
 
 import { toast } from "@/components/ui/toast";
+import { addProjectSources } from "@/data/sources";
 import { createStore } from "@/data/store";
-import { runCancelable } from "@/effect/runtime";
+import { refreshMockStores } from "@/data/synced-store";
+import { appRuntime, inTauri, runCancelable } from "@/effect/runtime";
 
 import {
   BRIEF_BUILD_STAGES,
+  type DocumentDrop,
   type ExportTarget,
   ProjectsBackend,
 } from "./backend";
+import type { RejectedDocument } from "./components/documents-block";
 
 /*
  * React-facing side of the projects backend. The work itself lives in the
  * ProjectsBackend Effect service (`./backend.ts`); this module runs it
- * through the app runtime and keeps the progress in a store the screens
- * subscribe to.
+ * through the app runtime and keeps the progress in stores the screens
+ * subscribe to:
+ * - the builds started here (`useBriefBuild`): the wizard follows its own
+ *   build to "Бриф готов", "Свернуть" leaves it to a toast;
+ * - the stages of every build (`useBriefProgress`), whoever started it:
+ *   another window, or the start widget before a call.
+ *
+ * The mock stores don't follow `DataChanged`, so after every stage the
+ * mock ones re-read (the project reads `building`, then its new brief).
+ * In Tauri the stores follow the events and this does nothing.
  */
 
 /* ------------------------------------------------ Сбор брифа (мастер) */
@@ -24,14 +39,18 @@ import {
 export interface BriefBuild {
   /** Collapsed to the background: a toast tells when it is ready. */
   background: boolean;
+  /** Why it failed (`status: "failed"`). */
+  error?: string;
   projectName: string;
   /** Finished stages, 0…BRIEF_BUILD_STAGES. */
   stage: number;
-  status: "building" | "ready" | "stopped";
+  status: "building" | "ready" | "stopped" | "failed";
 }
 
 const buildsStore = createStore<Record<string, BriefBuild>>({});
 const cancelBuilds = new Map<string, () => void>();
+/** "Открыть проект" in the toast of a build in the background. */
+const openOnReady = new Map<string, () => void>();
 
 export function useBriefBuild(projectId: string | null | undefined) {
   const builds = buildsStore.use();
@@ -56,18 +75,23 @@ function cancelBuild(projectId: string) {
 const buildBrief = Effect.fn("buildBrief")(
   function* (projectId: string) {
     const backend = yield* ProjectsBackend;
-    yield* backend
-      .buildBrief(projectId)
-      .pipe(
-        Stream.runForEach((stage) =>
-          Effect.sync(() => patchBuild(projectId, { stage }))
-        )
-      );
+    yield* backend.buildBrief(projectId).pipe(
+      Stream.onStart(Effect.sync(refreshMockStores)),
+      Stream.runForEach((stage) =>
+        Effect.sync(() => {
+          patchBuild(projectId, { stage });
+          refreshMockStores();
+        })
+      )
+    );
     patchBuild(projectId, { stage: BRIEF_BUILD_STAGES, status: "ready" });
+    refreshMockStores();
     const build = buildsStore.get()[projectId];
+    const open = openOnReady.get(projectId);
     if (build?.background) {
       // Stands in for the system notification.
       toast.add({
+        actionProps: open ? { children: "Открыть", onClick: open } : undefined,
         description: "Откройте проект, чтобы проверить главное",
         title: `Бриф проекта «${build.projectName}» готов`,
         type: "success",
@@ -78,7 +102,8 @@ const buildBrief = Effect.fn("buildBrief")(
     effect.pipe(
       Effect.catchTag("BriefError", (error) =>
         Effect.sync(() => {
-          patchBuild(projectId, { status: "stopped" });
+          patchBuild(projectId, { error: error.message, status: "failed" });
+          refreshMockStores();
           toast.add({
             description: error.message,
             title: "Не удалось собрать бриф",
@@ -86,84 +111,263 @@ const buildBrief = Effect.fn("buildBrief")(
           });
         })
       ),
-      Effect.ensuring(Effect.sync(() => cancelBuilds.delete(projectId)))
+      // Stopped here ("Остановить") or in another window: the old brief stays.
+      Effect.catchTag("BriefCancelled", () =>
+        Effect.sync(() => {
+          patchBuild(projectId, { status: "stopped" });
+          refreshMockStores();
+        })
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          cancelBuilds.delete(projectId);
+          openOnReady.delete(projectId);
+        })
+      )
     )
 );
 
 /**
- * The agent reads the description, Outline, GitHub, ClickUp and writes the
- * brief. Runs outside React so it keeps going when the wizard is left.
+ * The agent reads the description, the notes, the people and the
+ * documents and writes the brief. Runs outside React, so it keeps going
+ * when the screen is left. With `background` a toast tells when it is
+ * ready; `onOpen` puts "Открыть" in that toast.
  */
-export function startBriefBuild(projectId: string, projectName: string) {
+export function startBriefBuild(
+  projectId: string,
+  projectName: string,
+  options: { background?: boolean; onOpen?: () => void } = {}
+) {
   cancelBuild(projectId);
   buildsStore.set((builds) => ({
     ...builds,
     [projectId]: {
-      background: false,
+      background: options.background ?? false,
       projectName,
       stage: 0,
       status: "building",
     },
   }));
+  if (options.onOpen) {
+    openOnReady.set(projectId, options.onOpen);
+  }
   cancelBuilds.set(projectId, runCancelable(buildBrief(projectId)));
 }
 
 /** "Свернуть в фон": the build goes on, a toast tells when it is ready. */
-export function sendBriefBuildToBackground(projectId: string) {
+export function sendBriefBuildToBackground(
+  projectId: string,
+  onOpen?: () => void
+) {
   patchBuild(projectId, { background: true });
+  if (onOpen) {
+    openOnReady.set(projectId, onOpen);
+  }
 }
 
-/** "Остановить": the project stays, the brief is left as it is. */
+/** "Остановить": the agent stops, the project keeps its old brief. */
 export function stopBriefBuild(projectId: string) {
   cancelBuild(projectId);
   patchBuild(projectId, { status: "stopped" });
+  appRuntime
+    .runPromise(ProjectsBackend.use((backend) => backend.cancel(projectId)))
+    .then(refreshMockStores);
 }
 
-/* ---------------------------------------------- Обновление брифа (проект) */
+/* ------------------------------------------------ Этапы любой сборки */
 
-/**
- * "Обновить": the agent rereads only what changed. Calls `onDone` when
- * finished; the returned function cancels ("Остановить").
- */
-export function refreshBrief(
-  projectId: string,
-  onDone: () => void
-): () => void {
-  return runCancelable(
-    ProjectsBackend.use((backend) => backend.refreshBrief(projectId)).pipe(
-      Effect.tap(() => Effect.sync(onDone)),
-      Effect.catchTag("BriefError", (error) =>
-        Effect.sync(() =>
-          toast.add({
-            description: error.message,
-            title: "Не удалось обновить бриф",
-            type: "error",
-          })
-        )
+export interface BriefStageProgress {
+  /** Finished stages, 0…BRIEF_BUILD_STAGES. */
+  finished: number;
+  running: boolean;
+}
+
+const progressStore = createStore<Record<string, BriefStageProgress>>({});
+let followingProgress = false;
+
+/** Starts following `BriefProgress` once, for the whole window. */
+function followProgress() {
+  if (followingProgress) {
+    return;
+  }
+  followingProgress = true;
+  runCancelable(
+    ProjectsBackend.use((backend) =>
+      Stream.runForEach(backend.progress, (progress) =>
+        Effect.sync(() => {
+          const running = progress.state.status === "running";
+          progressStore.set((current) => ({
+            ...current,
+            [progress.projectId]: {
+              finished: running ? progress.stage - 1 : BRIEF_BUILD_STAGES,
+              running,
+            },
+          }));
+          refreshMockStores();
+        })
       )
     )
   );
 }
 
+/**
+ * The build of a project that runs now, wherever it was started; the last
+ * one stays with `running: false`.
+ */
+export function useBriefProgress(
+  projectId: string | null | undefined
+): BriefStageProgress | undefined {
+  const progress = progressStore.use();
+  useEffect(followProgress, []);
+  return projectId ? progress[projectId] : undefined;
+}
+
+/**
+ * The start widget, shown for a project: Rust refreshes an outdated brief
+ * in the background when the agent is ready. The call never waits for it.
+ */
+export function prepareBrief(projectId: string) {
+  followProgress();
+  return appRuntime
+    .runPromise(
+      ProjectsBackend.use((backend) => backend.prepareBrief(projectId))
+    )
+    .then((started) => {
+      refreshMockStores();
+      return started;
+    });
+}
+
+/* -------------------------------------------------------- Документы */
+
+/** "Выбрать файлы": the paths picked in the dialog, `[]` when closed. */
+export function pickDocuments(): Promise<string[]> {
+  return appRuntime.runPromise(
+    ProjectsBackend.use((backend) => backend.pickDocuments)
+  );
+}
+
+/** Whether files dropped on the window reach the app (Tauri only). */
+export const documentDropSupported = inTauri;
+
+/**
+ * Files dragged onto the window while `onDrop` is set: `hovering` while
+ * they are over it, `onDrop` gets their paths. Nothing in the browser.
+ */
+export function useDocumentDrop(onDrop: ((paths: string[]) => void) | null) {
+  const [hovering, setHovering] = useState(false);
+  const enabled = onDrop !== null;
+
+  useEffect(() => {
+    if (!(enabled && onDrop)) {
+      return;
+    }
+    const handle = (drop: DocumentDrop) => {
+      setHovering(drop.type === "enter");
+      if (drop.type === "drop" && drop.paths.length > 0) {
+        onDrop(drop.paths);
+      }
+    };
+    const stop = runCancelable(
+      ProjectsBackend.use((backend) =>
+        Stream.runForEach(backend.documentDrops, (drop) =>
+          Effect.sync(() => handle(drop))
+        )
+      )
+    );
+    return () => {
+      stop();
+      setHovering(false);
+    };
+  }, [enabled, onDrop]);
+
+  return hovering;
+}
+
+/** What `project_sources_add` turned away, and what was there already. */
+function splitResults(results: SourceAddResult[]) {
+  const rejected: RejectedDocument[] = [];
+  const duplicates: string[] = [];
+  for (const { name, result } of results) {
+    if (result.outcome === "rejected") {
+      rejected.push({ message: result.message, name });
+    } else if (result.outcome === "duplicate") {
+      duplicates.push(name);
+    }
+  }
+  return { duplicates, rejected };
+}
+
+/**
+ * Adds files to a project and keeps what was not taken, to show next to
+ * the list; a duplicate gets a toast. Shared by the page and the wizard;
+ * `add` takes the project when it was created just now.
+ */
+export function useAddDocuments(projectId: string | null) {
+  const [rejected, setRejected] = useState<RejectedDocument[]>([]);
+  const [adding, setAdding] = useState(false);
+
+  const add = useCallback(
+    async (paths: string[], target: string | null = projectId) => {
+      if (!target || paths.length === 0) {
+        return;
+      }
+      setAdding(true);
+      const results = await addProjectSources(target, paths);
+      setAdding(false);
+      if (!results) {
+        return;
+      }
+      const split = splitResults(results);
+      setRejected(split.rejected);
+      if (split.duplicates.length > 0) {
+        toast.add({
+          description: split.duplicates.join(", "),
+          title: "Эти документы уже в проекте",
+          type: "info",
+        });
+      }
+    },
+    [projectId]
+  );
+
+  return { add, adding, rejected };
+}
+
 /* -------------------------------------------------------- Экспорт */
 
-/** Writes Markdown files to a folder the user picks (Finder in Tauri). */
-export function exportToMarkdown(what: ExportTarget, projectName: string) {
+/**
+ * The brief as Markdown, in a folder the user picks (Finder in Tauri).
+ * The calls' export comes with the post-call work: a note says so.
+ */
+export function exportToMarkdown(
+  what: ExportTarget,
+  project: { id: string; name: string }
+) {
+  if (what === "calls") {
+    toast.add({
+      description: "Пока итоги можно открыть на странице звонка",
+      title: "Экспорт итогов звонков появится позже",
+      type: "info",
+    });
+    return;
+  }
   runCancelable(
     ProjectsBackend.use((backend) =>
-      backend.exportMarkdown(what, projectName)
+      backend.exportMarkdown("brief", project)
     ).pipe(
-      Effect.tap((folder) =>
-        Effect.sync(() =>
+      Effect.tap((path) =>
+        Effect.sync(() => {
+          // The folder dialog was closed: nothing written, nothing to say.
+          if (path === null) {
+            return;
+          }
           toast.add({
-            description: `Папка «${folder}»`,
-            title:
-              what === "brief"
-                ? `Бриф «${projectName}» сохранён в Markdown`
-                : `Итоги звонков «${projectName}» сохранены в Markdown`,
+            description: path,
+            title: `Бриф «${project.name}» сохранён в Markdown`,
             type: "success",
-          })
-        )
+          });
+        })
       ),
       Effect.catchTag("ExportError", (error) =>
         Effect.sync(() =>

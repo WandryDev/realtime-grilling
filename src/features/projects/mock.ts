@@ -319,7 +319,8 @@ export type SourceHealth = "ok" | "error";
 export interface SourceStatusItem {
   detail: string;
   health: SourceHealth;
-  kind: SourceKind;
+  /** An integration, or the documents from the computer (`file`). */
+  kind: SourceKind | "file";
   name: string;
 }
 
@@ -447,11 +448,11 @@ export interface PersonSummary {
   id: string;
   initials: string;
   name: string;
-  /** Understanding of the project, 1–5. */
-  project: number;
+  /** Understanding of the project, 1–5; `null`: not set. */
+  project: number | null;
   role: string;
-  /** Technical level, 1–5. */
-  tech: number;
+  /** Technical level, 1–5; `null`: not set. */
+  tech: number | null;
 }
 
 export const PROJECT_PEOPLE: PersonSummary[] = [

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "floating",
-  "description": "Start widget and call overlay: read projects, people and calls; start and run a call; drag and hide; hand over to another window (windows_show); read whether another app uses the microphone (mic_activity_get); start, stop and watch the recording (recording_*); read the transcript (transcript_*); read the call's questions and topics, act on a question and retry the agent (call_state_get, questions_act, agent_retry). No project, people or settings changes.",
+  "description": "Start widget and call overlay: read projects (with the brief state and the overview, projects_overview), people and calls; start and run a call; drag and hide; hand over to another window (windows_show); read whether another app uses the microphone (mic_activity_get); refresh an outdated brief in the background before a call (brief_prepare); start, stop and watch the recording (recording_*); read the transcript (transcript_*); read the call's questions and topics, act on a question and retry the agent (call_state_get, questions_act, agent_retry). No project, document, people or settings changes.",
   "windows": ["widget", "overlay"],
   "permissions": [
     "core:default",
@@ -11,6 +11,8 @@
     "core:window:allow-set-focus",
     "allow-projects-list",
     "allow-projects-get",
+    "allow-projects-overview",
+    "allow-brief-prepare",
     "allow-people-list",
     "allow-people-get",
     "allow-calls-list",

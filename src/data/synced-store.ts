@@ -115,6 +115,15 @@ function rereadMockStores() {
   }
 }
 
+/**
+ * Re-reads the mock stores after a mock backend wrote to the mock
+ * database on its own (the brief build). Nothing in Tauri: the live
+ * stores follow `DataChanged`.
+ */
+export function refreshMockStores() {
+  rereadMockStores();
+}
+
 /** The `BackendError` of a failed exit; a defect becomes `Transport`. */
 export function backendErrorOf<A, E>(exit: Exit.Failure<A, E>): BackendError {
   const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));

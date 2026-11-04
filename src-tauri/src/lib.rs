@@ -5,6 +5,7 @@ mod commands;
 mod error;
 mod events;
 mod permissions;
+mod projects;
 mod recording;
 mod shell;
 mod speech;
@@ -45,6 +46,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // `platform()` picks the Windows variant of the onboarding steps.
         .plugin(tauri_plugin_os::init())
+        // Picking documents and the brief's export folder.
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

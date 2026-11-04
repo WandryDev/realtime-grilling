@@ -19,7 +19,8 @@ import {
 
 /*
  * People of the client, per project. The rich part of a person (how to
- * ask, levels, portrait) lives in the `profile` JSON object.
+ * ask, levels, portrait) lives in the `profile` JSON object. Every write
+ * also tells about the project: its brief is built from its people.
  */
 export class PeopleData extends Context.Service<
   PeopleData,
@@ -63,6 +64,10 @@ export class PeopleData extends Context.Service<
         return profile;
       });
 
+      /** The project's `DataChanged` after a write of its people. */
+      const projectChanged = (projectId: string) =>
+        database.emit("project", projectId, projectId, "updated");
+
       const get = Effect.fnUntraced(function* (id: string) {
         const person = tables.people.get(id);
         if (!person) {
@@ -89,6 +94,7 @@ export class PeopleData extends Context.Service<
         };
         tables.people.set(id, person);
         yield* database.emit("person", id, person.projectId, "created");
+        yield* projectChanged(person.projectId);
         return person;
       });
 
@@ -110,6 +116,7 @@ export class PeopleData extends Context.Service<
         };
         tables.people.set(id, person);
         yield* database.emit("person", id, person.projectId, "updated");
+        yield* projectChanged(person.projectId);
         return person;
       });
 
@@ -128,6 +135,7 @@ export class PeopleData extends Context.Service<
           }
         }
         yield* database.emit("person", id, person.projectId, "deleted");
+        yield* projectChanged(person.projectId);
       });
 
       return PeopleData.of({
