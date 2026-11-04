@@ -43,3 +43,7 @@ spikes/**/__pycache__/
 test-results/
 playwright-report/
 blob-report/
+
+# oh-my-claudecode state created in subdirectories
+src-tauri/**/.omc/
+src/**/.omc/
