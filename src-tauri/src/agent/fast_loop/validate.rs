@@ -360,7 +360,9 @@ pub fn validate(
                     rejected.push(reject(subject, reason));
                 } else if title.trim().is_empty() {
                     rejected.push(reject(subject, RejectReason::Blank { field: "title" }));
-                } else if !fields.contains(card_field) {
+                } else if *gap_type != GapType::Empty && !fields.contains(card_field) {
+                    // An empty field is the gap itself; an assumption or a
+                    // contradiction is about something the card already says.
                     let field = *card_field;
                     rejected.push(reject(subject, RejectReason::UnknownCardField { field }));
                 } else if let Err(reason) = check_evidence(context, evidence) {
@@ -910,13 +912,19 @@ mod tests {
         }
     }
 
-    /// A question is about a field of the current topic's card; a field set
-    /// earlier in the same patch counts.
+    /// An assumption or a contradiction is about a field the current topic's
+    /// card already has; a field set earlier in the same patch counts. An
+    /// empty field is the gap itself.
     #[test]
     fn a_question_needs_a_field_of_the_current_card() {
+        let empty = json!({
+            "op": "question", "title": "Кто будет принимать звонки?", "description": "", "cardField": "users",
+            "gapType": "empty", "priority": 3, "evidence": [segment("S1", "пять операторов в смену")]
+        });
+        assert!(check(json!([empty])).rejected.is_empty());
         let other = json!({
             "op": "question", "title": "Какая цель?", "description": "", "cardField": "goal",
-            "gapType": "empty", "priority": 2, "evidence": [segment("S1", "пять операторов в смену")]
+            "gapType": "assumption", "priority": 2, "evidence": [segment("S1", "пять операторов в смену")]
         });
         let validation = check(json!([other.clone()]));
         assert_eq!(
@@ -937,21 +945,26 @@ mod tests {
             other
         ]));
         assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
-        // A new topic has an empty card.
+        // A new topic has an empty card: its first question asks about an
+        // empty field in the same patch.
         let validation = check(json!([
             { "op": "topic", "action": "create", "title": "CRM" },
             question("Какие поля в CRM?", 2, json!([segment("S1", "пять операторов в смену")]))
+        ]));
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        assert_eq!(validation.patch.ops.len(), 2);
+        // An assumption on the new topic's empty card is not.
+        let validation = check(json!([
+            { "op": "topic", "action": "create", "title": "CRM" },
+            {
+                "op": "question", "title": "Точно пять операторов?", "description": "", "cardField": "users",
+                "gapType": "assumption", "priority": 2, "evidence": [segment("S1", "пять операторов в смену")]
+            }
         ]));
         assert_eq!(
             reasons(&validation),
             vec![&RejectReason::UnknownCardField {
                 field: CardLens::Users
-            }]
-        );
-        assert_eq!(
-            validation.patch.ops,
-            vec![ValidatedOp::CreateTopic {
-                title: "CRM".to_owned()
             }]
         );
     }

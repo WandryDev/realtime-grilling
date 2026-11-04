@@ -786,7 +786,7 @@ async fn a_made_up_quote_leaves_no_question() {
         .collect();
     assert_eq!(
         reasons,
-        ["quoteNotFound", "unknownCardField"],
+        ["quoteNotFound", "quoteNotFound"],
         "{}",
         call.rejected
     );
