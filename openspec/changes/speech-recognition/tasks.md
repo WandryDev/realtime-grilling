@@ -177,7 +177,7 @@
   - удаление модели в настройках.
 
   Проверка: сценарии `speech-models` и `speech-recognition` выполняются.
-- [ ] 7.3 Добавить changeset (`minor`) и отметить пункты задачи «Распознавание речи (STT)» в ClickUp. Проверка: `.changeset/*.md` есть; чеклист в ClickUp обновлён (если коннектор ClickUp авторизован).
+- [x] 7.3 Добавить changeset (`minor`) и отметить пункты задачи «Распознавание речи (STT)» в ClickUp. Проверка: `.changeset/*.md` есть; чеклист в ClickUp обновлён (если коннектор ClickUp авторизован).
 
 ## Workflow follow-up
 

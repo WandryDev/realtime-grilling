@@ -121,7 +121,7 @@
   - отключение AirPods во время записи переключает канал «Я».
 
   Проверка: сценарии `mic-activity`, `call-recording`, `speech-segmentation` выполняются.
-- [ ] 7.3 Добавить changeset (`minor`) и отметить пункты задачи «Захват звука и запись» в ClickUp. Проверка: `.changeset/*.md` есть; чеклист в ClickUp обновлён (если коннектор ClickUp авторизован).
+- [x] 7.3 Добавить changeset (`minor`) и отметить пункты задачи «Захват звука и запись» в ClickUp. Проверка: `.changeset/*.md` есть; чеклист в ClickUp обновлён (если коннектор ClickUp авторизован).
 
 ## Workflow follow-up
 
