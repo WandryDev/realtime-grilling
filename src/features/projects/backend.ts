@@ -26,10 +26,12 @@ import { type BackendError, call, subscribe } from "@/effect/tauri";
  * runs these effects through the app runtime (`src/effect/runtime.ts`).
  *
  * - `layerTauri` calls `brief_build` and follows `BriefProgress` of that
- *   project to `done`, `failed` or `cancelled`; the build runs in Rust, so
+ *   project to the last stage's `done`, `failed` or `cancelled` (every
+ *   stage sends its own `done`); the build runs in Rust, so
  *   leaving the screen (or "Свернуть") doesn't stop it, `cancel` does.
- * - `layerMock` plays the agent with timers over the mock database: the
- *   project reads `building` meanwhile, and the brief it writes is fresh.
+ * - `layerMock` plays the agent with timers over the mock database and
+ *   sends the same `BriefProgress` as Rust: the project reads `building`
+ *   meanwhile, and the brief it writes is fresh.
  */
 
 export class BriefError extends Schema.TaggedError<BriefError>()("BriefError", {
@@ -196,9 +198,13 @@ export class ProjectsBackend extends Context.Service<
           )
         );
 
-      const run = (projectId: string) =>
+      const run = (
+        projectId: string
+      ): Stream.Stream<number, BriefError | BriefCancelled> =>
         Stream.unwrap(
-          Effect.gen(function* () {
+          Effect.gen(function* (): Effect.fn.Return<
+            Stream.Stream<number, BriefError | BriefCancelled>
+          > {
             const project = tables.projects.get(projectId);
             if (!project) {
               return Stream.fail(
@@ -212,26 +218,33 @@ export class ProjectsBackend extends Context.Service<
             const inputs = briefFingerprint(tables, projectId);
             tables.building.add(projectId);
             yield* projectChanged(projectId);
-            let finished = 0;
+            // The stage running now, for the cancel.
+            let current = 0;
             return Stream.range(1, BRIEF_BUILD_STAGES).pipe(
+              // The same events as Rust: each stage runs, then is done.
               Stream.mapEffect((stage) =>
                 Effect.gen(function* () {
+                  current = stage;
                   yield* publish(projectId, stage, { status: "running" });
                   yield* Effect.sleep(MOCK_STAGE);
+                  // Deleting a project stops its build, as in Rust.
+                  if (!tables.projects.has(projectId)) {
+                    return yield* new BriefCancelled();
+                  }
                   if (stage === BRIEF_BUILD_STAGES) {
                     yield* saveBrief(projectId, inputs);
+                    // Not `building` by the time the last `done` is read.
+                    tables.building.delete(projectId);
                   }
-                  finished = stage;
+                  yield* publish(projectId, stage, { status: "done" });
                   return stage;
                 })
               ),
               Stream.onExit((exit) =>
                 Effect.gen(function* () {
                   tables.building.delete(projectId);
-                  if (Exit.isSuccess(exit)) {
-                    yield* publish(projectId, finished, { status: "done" });
-                  } else {
-                    yield* publish(projectId, finished + 1, {
+                  if (!Exit.isSuccess(exit)) {
+                    yield* publish(projectId, Math.max(current, 1), {
                       status: "cancelled",
                     });
                   }
@@ -339,21 +352,46 @@ function tauriBuildBrief(projectId: string) {
 }
 
 /**
- * Finished stages from the `BriefProgress` of one build: a running stage
- * means the ones before it are done; the stream ends with the build.
+ * Whether a `BriefProgress` ends its build. Rust sends `done` for every
+ * stage (`(1, running), (1, done), (2, running) … (5, done)`): only the
+ * last stage's `done` is the end, as are `failed` and `cancelled`.
+ */
+export function endsBuild(progress: BriefProgress) {
+  switch (progress.state.status) {
+    case "running":
+      return false;
+    case "done":
+      return progress.stage >= BRIEF_BUILD_STAGES;
+    default:
+      return true;
+  }
+}
+
+/**
+ * Stages finished by the time of a `BriefProgress`: a running stage means
+ * the ones before it are done, a done one counts itself.
+ */
+export function finishedStages(progress: BriefProgress) {
+  const finished =
+    progress.state.status === "done" ? progress.stage : progress.stage - 1;
+  return Math.min(Math.max(finished, 0), BRIEF_BUILD_STAGES);
+}
+
+/**
+ * Finished stages from the `BriefProgress` of one build; the stream ends
+ * with the build (see `endsBuild`), failing when it failed or was stopped.
  */
 function buildStages<E>(
   stages: Stream.Stream<BriefProgress, E>
 ): Stream.Stream<number, E | BriefError | BriefCancelled> {
   return stages.pipe(
-    Stream.takeUntil((item) => item.state.status !== "running"),
+    Stream.takeUntil(endsBuild),
     Stream.mapEffect(
       (item): Effect.Effect<number, BriefError | BriefCancelled> => {
         switch (item.state.status) {
           case "running":
-            return Effect.succeed(item.stage - 1);
           case "done":
-            return Effect.succeed(BRIEF_BUILD_STAGES);
+            return Effect.succeed(finishedStages(item));
           case "failed":
             return Effect.fail(new BriefError({ message: item.state.message }));
           default:

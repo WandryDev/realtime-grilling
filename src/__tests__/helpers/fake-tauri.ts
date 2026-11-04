@@ -385,6 +385,16 @@ export function createFakeTauri(): FakeTauri {
           ? result
           : Promise.resolve(structuredClone(result));
       }
+      if (command === "projects_get") {
+        const project = db.projects.find((item) => item.id === args.id);
+        const missing: CommandError = {
+          kind: "NotFound",
+          message: `Проект ${args.id} не найден`,
+        };
+        return project
+          ? Promise.resolve(structuredClone(project))
+          : Promise.reject(missing);
+      }
       try {
         // A copy, like a JSON round trip over the IPC.
         return Promise.resolve(structuredClone(answer(command, args)));

@@ -3,17 +3,22 @@
 //!
 //! - `.md`, `.txt`: UTF-8, else Windows-1251;
 //! - `.docx`: paragraphs (`w:p`) of `word/document.xml`, their text
-//!   (`w:t`), tabs and line breaks;
+//!   (`w:t`), tabs and line breaks; the XML is streamed from the archive,
+//!   at most [`MAX_DOCX_XML_BYTES`] of it, and reading stops once the text
+//!   passes [`MAX_TEXT_CHARS`];
 //! - `.pdf`: `pdf-extract`; fewer than [`MIN_CHARS_PER_PAGE`] non-space
 //!   characters a page on average is `no_text` (a scan).
 //!
-//! The text is cut at [`MAX_TEXT_CHARS`]. A parser that panics gives
-//! `failed`, one that hangs gives `failed` after [`EXTRACT_TIMEOUT`]
-//! ([`extract_in_background`]).
+//! The text is cut at [`MAX_TEXT_CHARS`], and a document cut anywhere is
+//! `truncated`. [`extract`] reads here and now; the app reads `.md` and
+//! `.txt` on a blocking thread and PDF and DOCX in a child process with a
+//! memory limit and a timeout ([`super::isolated`]), through
+//! [`extract_file`]. A parser that panics gives `failed`.
 
 use std::{
-    io::{Cursor, Read as _},
+    io::{BufReader, Cursor, Read, Take},
     panic::{self, AssertUnwindSafe},
+    path::Path,
     time::Duration,
 };
 
@@ -28,8 +33,11 @@ pub const MAX_TEXT_CHARS: usize = 200_000;
 pub const MIN_CHARS_PER_PAGE: usize = 20;
 /// How long one document may take to read.
 pub const EXTRACT_TIMEOUT: Duration = Duration::from_secs(30);
-/// `word/document.xml` larger than this is not read (a zip bomb).
-const MAX_DOCX_XML_BYTES: u64 = 256 * 1024 * 1024;
+/// How much of `word/document.xml` is read: about what [`MAX_TEXT_CHARS`]
+/// of text take with Word's markup around them. The rest of a larger one
+/// (a zip bomb, or a huge document) is not read, and the text is
+/// `truncated`.
+pub const MAX_DOCX_XML_BYTES: u64 = 32 * 1024 * 1024;
 
 /// The document types the app reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +69,11 @@ impl FileKind {
             Self::Docx => "docx",
         }
     }
+
+    /// Read by a parser of a binary format, in a child process.
+    pub fn isolated(self) -> bool {
+        matches!(self, Self::Pdf | Self::Docx)
+    }
 }
 
 /// What was read from a document.
@@ -75,23 +88,24 @@ pub struct Extraction {
 }
 
 impl Extraction {
-    fn ready(text: &str) -> Self {
+    /// `text` as read; `cut` when only a part of the document was read.
+    pub fn ready(text: String, cut: bool) -> Self {
         let text = normalize(text);
         if text.chars().all(char::is_whitespace) {
             return Self::no_text("В документе нет текста");
         }
-        let (text, truncated) = cap(text);
+        let (text, capped) = cap(text);
         let text_chars = u32::try_from(text.chars().count()).unwrap_or(u32::MAX);
         Self {
             status: SourceStatus::Ready,
             text,
             text_chars,
-            truncated,
+            truncated: cut || capped,
             error: None,
         }
     }
 
-    fn no_text(reason: &str) -> Self {
+    pub fn no_text(reason: &str) -> Self {
         Self {
             status: SourceStatus::NoText,
             text: String::new(),
@@ -101,7 +115,7 @@ impl Extraction {
         }
     }
 
-    fn failed(error: impl Into<String>) -> Self {
+    pub fn failed(error: impl Into<String>) -> Self {
         Self {
             status: SourceStatus::Failed,
             text: String::new(),
@@ -112,13 +126,31 @@ impl Extraction {
     }
 }
 
-/// Unix line ends, no NULs, no blank edges.
-fn normalize(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .replace(['\r', '\u{c}'], "\n")
-        .replace('\0', "")
-        .trim()
-        .to_owned()
+/// Unix line ends, no NULs, no blank edges, in one pass and in place when
+/// there is nothing to replace: a large text is never copied more than
+/// once.
+fn normalize(mut text: String) -> String {
+    if text.contains(['\r', '\u{c}', '\0']) {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(char) = chars.next() {
+            match char {
+                '\r' => {
+                    chars.next_if_eq(&'\n');
+                    out.push('\n');
+                }
+                '\u{c}' => out.push('\n'),
+                '\0' => {}
+                other => out.push(other),
+            }
+        }
+        text = out;
+    }
+    let end = text.trim_end().len();
+    text.truncate(end);
+    let start = text.len() - text.trim_start().len();
+    text.drain(..start);
+    text
 }
 
 /// At most [`MAX_TEXT_CHARS`] characters; `true` when cut.
@@ -136,9 +168,9 @@ fn cap(mut text: String) -> (String, bool) {
 /// a parser is `failed`.
 pub fn extract(kind: FileKind, bytes: &[u8]) -> Extraction {
     guarded(|| match kind {
-        FileKind::Markdown | FileKind::Text => Extraction::ready(&decode_text(bytes)),
-        FileKind::Docx => match docx_text(bytes) {
-            Ok(text) => Extraction::ready(&text),
+        FileKind::Markdown | FileKind::Text => Extraction::ready(decode_text(bytes), false),
+        FileKind::Docx => match docx_text(bytes, MAX_DOCX_XML_BYTES, MAX_TEXT_CHARS) {
+            Ok((text, cut)) => Extraction::ready(text, cut),
             Err(error) => Extraction::failed(format!("Не удалось прочитать DOCX: {error}")),
         },
         FileKind::Pdf => pdf_extraction(bytes),
@@ -152,14 +184,22 @@ fn guarded(job: impl FnOnce() -> Extraction) -> Extraction {
         .unwrap_or_else(|_| Extraction::failed("Не удалось прочитать файл: он повреждён"))
 }
 
-/// [`extract`] on a blocking thread, at most [`EXTRACT_TIMEOUT`].
-pub async fn extract_in_background(kind: FileKind, bytes: Vec<u8>) -> Extraction {
-    run_limited(EXTRACT_TIMEOUT, move || extract(kind, &bytes)).await
+/// Reads the document whose bytes are `bytes` and whose copy is at `copy`:
+/// `.md` and `.txt` on a blocking thread, PDF and DOCX in a child process
+/// (a memory limit, killed after [`EXTRACT_TIMEOUT`]).
+pub async fn extract_file(kind: FileKind, bytes: Vec<u8>, copy: &Path) -> Extraction {
+    if kind.isolated() {
+        drop(bytes);
+        super::isolated::extract(kind, copy).await
+    } else {
+        run_limited(EXTRACT_TIMEOUT, move || extract(kind, &bytes)).await
+    }
 }
 
 /// Runs `job` on a blocking thread; `failed` when it takes longer than
-/// `limit` (the thread is left to finish on its own) or dies.
-async fn run_limited(
+/// `limit` or dies. Only for text files, which can't hang: the thread of a
+/// late job is left to finish on its own.
+pub async fn run_limited(
     limit: Duration,
     job: impl FnOnce() -> Extraction + Send + 'static,
 ) -> Extraction {
@@ -167,8 +207,12 @@ async fn run_limited(
     match tokio::time::timeout(limit, handle).await {
         Ok(Ok(extraction)) => extraction,
         Ok(Err(error)) => Extraction::failed(format!("Не удалось прочитать файл: {error}")),
-        Err(_) => Extraction::failed(format!("Файл читается дольше {} с", limit.as_secs().max(1))),
+        Err(_) => too_slow(limit),
     }
+}
+
+pub fn too_slow(limit: Duration) -> Extraction {
+    Extraction::failed(format!("Файл читается дольше {} с", limit.as_secs().max(1)))
 }
 
 /// UTF-8 (a BOM is dropped), else Windows-1251.
@@ -183,60 +227,102 @@ fn decode_text(bytes: &[u8]) -> String {
     }
 }
 
-/// The text of `word/document.xml`: a line per paragraph.
-fn docx_text(bytes: &[u8]) -> Result<String, String> {
+/// The text of `word/document.xml`, a line per paragraph, streamed from the
+/// archive: at most `max_xml` bytes of XML are read, and reading stops once
+/// the text has more than `max_chars` characters. `true` when either cut
+/// the document short.
+/// The XML cap was reached: what was read is not the whole document.
+fn xml_cut<R: Read>(reader: &quick_xml::Reader<BufReader<Take<R>>>) -> bool {
+    reader.get_ref().get_ref().limit() == 0
+}
+
+fn docx_text(bytes: &[u8], max_xml: u64, max_chars: usize) -> Result<(String, bool), String> {
     let mut archive =
         zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
     let entry = archive
         .by_name("word/document.xml")
         .map_err(|_| "в архиве нет word/document.xml".to_owned())?;
-    let mut xml = String::new();
-    entry
-        .take(MAX_DOCX_XML_BYTES)
-        .read_to_string(&mut xml)
-        .map_err(|error| error.to_string())?;
-    document_xml_text(&xml)
+    let mut reader = quick_xml::Reader::from_reader(BufReader::new(entry.take(max_xml)));
+    let mut text = DocxText::new(max_chars);
+    let mut buffer = Vec::new();
+    loop {
+        let event = match reader.read_event_into(&mut buffer) {
+            Ok(event) => event,
+            // The XML ends where the cap cut it.
+            Err(_) if xml_cut(&reader) => return Ok((text.out, true)),
+            Err(error) => return Err(error.to_string()),
+        };
+        if matches!(event, Event::Eof) {
+            break;
+        }
+        text.on(event);
+        if text.full() {
+            return Ok((text.out, true));
+        }
+        buffer.clear();
+    }
+    let cut = xml_cut(&reader);
+    Ok((text.out, cut))
 }
 
-fn document_xml_text(xml: &str) -> Result<String, String> {
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut text = String::new();
-    let mut in_text = false;
-    loop {
-        match reader.read_event().map_err(|error| error.to_string())? {
+/// The text of `word/document.xml` as its events come.
+struct DocxText {
+    out: String,
+    chars: usize,
+    max_chars: usize,
+    in_text: bool,
+}
+
+impl DocxText {
+    fn new(max_chars: usize) -> Self {
+        Self {
+            out: String::new(),
+            chars: 0,
+            max_chars,
+            in_text: false,
+        }
+    }
+
+    fn push(&mut self, text: &str) {
+        self.chars += text.chars().count();
+        self.out.push_str(text);
+    }
+
+    /// More than the cap: the rest is not needed.
+    fn full(&self) -> bool {
+        self.chars > self.max_chars
+    }
+
+    fn on(&mut self, event: Event<'_>) {
+        match event {
             Event::Start(element) => match element.local_name().as_ref() {
-                "t" => in_text = true,
-                "tab" => text.push('\t'),
-                "br" | "cr" => text.push('\n'),
+                "t" => self.in_text = true,
+                "tab" => self.push("\t"),
+                "br" | "cr" => self.push("\n"),
                 _ => {}
             },
             Event::Empty(element) => match element.local_name().as_ref() {
-                "tab" => text.push('\t'),
-                "br" | "cr" => text.push('\n'),
-                "p" => text.push('\n'),
+                "tab" => self.push("\t"),
+                "br" | "cr" | "p" => self.push("\n"),
                 _ => {}
             },
             Event::End(element) => match element.local_name().as_ref() {
-                "t" => in_text = false,
-                "p" => text.push('\n'),
+                "t" => self.in_text = false,
+                "p" => self.push("\n"),
                 _ => {}
             },
-            Event::Text(content) if in_text => text.push_str(&content.xml10_content()),
-            Event::CData(content) if in_text => {
-                text.push_str(&content.into_inner());
-            }
-            Event::GeneralRef(reference) if in_text => {
+            Event::Text(content) if self.in_text => self.push(&content.xml10_content()),
+            Event::CData(content) if self.in_text => self.push(&content.into_inner()),
+            Event::GeneralRef(reference) if self.in_text => {
                 if let Ok(Some(character)) = reference.resolve_char_ref() {
-                    text.push(character);
+                    self.push(character.encode_utf8(&mut [0; 4]));
                 } else if let Some(entity) = resolve_predefined_entity(&reference.xml10_content()) {
-                    text.push_str(entity);
+                    self.push(entity);
                 }
             }
-            Event::Eof => break,
             _ => {}
         }
     }
-    Ok(text)
 }
 
 fn pdf_extraction(bytes: &[u8]) -> Extraction {
@@ -251,7 +337,7 @@ fn pdf_extraction(bytes: &[u8]) -> Extraction {
     if pages.is_empty() || visible < MIN_CHARS_PER_PAGE * pages.len() {
         return Extraction::no_text("Нет текста: похоже на скан");
     }
-    Extraction::ready(&pages.join("\n\n"))
+    Extraction::ready(pages.join("\n\n"), false)
 }
 
 #[cfg(test)]
@@ -497,19 +583,89 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_or_dying_parser_fails_instead_of_hanging() {
+    fn a_slow_text_read_fails_instead_of_hanging() {
         let slow = tauri::async_runtime::block_on(run_limited(Duration::from_millis(20), || {
             std::thread::sleep(Duration::from_millis(300));
-            Extraction::ready("поздно")
+            Extraction::ready("поздно".to_owned(), false)
         }));
         assert_eq!(slow.status, SourceStatus::Failed);
         assert!(slow.error.unwrap().contains("дольше"));
 
-        let fine = tauri::async_runtime::block_on(extract_in_background(
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("x.txt");
+        std::fs::write(&copy, b"ok text").unwrap();
+        let fine = tauri::async_runtime::block_on(extract_file(
             FileKind::Text,
             b"ok text".to_vec(),
+            &copy,
         ));
         assert_eq!(fine.text, "ok text");
+        // PDF and DOCX are read from the copy (here in-process: the unit
+        // tests' binary has no reader mode).
+        std::fs::write(&copy, docx("<w:p><w:r><w:t>из копии</w:t></w:r></w:p>")).unwrap();
+        let isolated =
+            tauri::async_runtime::block_on(extract_file(FileKind::Docx, Vec::new(), &copy));
+        assert_eq!(isolated.text, "из копии");
+    }
+
+    #[test]
+    fn normalize_takes_line_ends_nuls_and_edges_in_one_pass() {
+        assert_eq!(
+            normalize(" \r\n a\r\nb\rc\u{c}d\0e \n\t".to_owned()),
+            "a\nb\nc\nde"
+        );
+        assert_eq!(normalize("\r\r\n".to_owned()), "");
+        // Nothing to replace: the same buffer, trimmed in place.
+        let text = String::from("  текст  ");
+        let pointer = text.as_ptr();
+        let normalized = normalize(text);
+        assert_eq!(normalized, "текст");
+        assert_eq!(normalized.as_ptr(), pointer);
+    }
+
+    /// A DOCX of `paragraphs` paragraphs `Абзац N` (about 40 bytes of XML
+    /// each).
+    fn long_docx(paragraphs: usize) -> Vec<u8> {
+        let body: String = (0..paragraphs)
+            .map(|index| format!("<w:p><w:r><w:t>Абзац {index}</w:t></w:r></w:p>"))
+            .collect();
+        docx(&body)
+    }
+
+    #[test]
+    fn docx_reading_stops_at_the_text_cap() {
+        let bytes = long_docx(2_000);
+        let (text, cut) = docx_text(&bytes, MAX_DOCX_XML_BYTES, 100).unwrap();
+        assert!(cut);
+        // Stopped soon after the cap, not at the end of the document.
+        assert!(text.chars().count() <= 120, "{}", text.chars().count());
+        assert!(text.starts_with("Абзац 0\nАбзац 1\n"));
+        let (whole, cut) = docx_text(&bytes, MAX_DOCX_XML_BYTES, MAX_TEXT_CHARS).unwrap();
+        assert!(!cut);
+        assert!(whole.contains("Абзац 1999"));
+
+        // Past the cap the source says so.
+        let bytes = long_docx(30_000);
+        let extraction = extract(FileKind::Docx, &bytes);
+        assert_eq!(extraction.status, SourceStatus::Ready);
+        assert!(extraction.text_chars as usize <= MAX_TEXT_CHARS);
+        assert!(extraction.truncated);
+    }
+
+    #[test]
+    fn docx_xml_over_its_cap_is_read_up_to_it_and_truncated() {
+        let bytes = long_docx(1_000);
+        // The XML is cut in the middle of an element: what came is kept.
+        let (text, cut) = docx_text(&bytes, 4_000, MAX_TEXT_CHARS).unwrap();
+        assert!(cut);
+        assert!(text.starts_with("Абзац 0\n"));
+        assert!(!text.contains("Абзац 999"));
+        // The whole XML within the cap is not cut.
+        let (_, cut) = docx_text(&bytes, 10_000_000, MAX_TEXT_CHARS).unwrap();
+        assert!(!cut);
+        // A broken XML within the cap still fails.
+        let broken = docx("<w:p><w:r><w:t>текст</w:x></w:p>");
+        assert!(docx_text(&broken, MAX_DOCX_XML_BYTES, MAX_TEXT_CHARS).is_err());
     }
 
     #[test]

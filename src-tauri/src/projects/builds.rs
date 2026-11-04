@@ -1,6 +1,7 @@
 //! Which projects have a brief build running (projects-people-brief
-//! design.md, decisions 4 and 7), and how to stop one. In memory: a build
-//! does not survive the app, so neither does its `building` state.
+//! design.md, decisions 4, 7 and 8), how to stop one, and which inputs
+//! failed lately. In memory: a build does not survive the app, so neither
+//! does its `building` state or a failure.
 
 use std::{
     collections::HashMap,
@@ -8,6 +9,7 @@ use std::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use tokio::sync::oneshot;
@@ -17,9 +19,21 @@ use crate::{
     storage::projects::{BriefState, Project},
 };
 
+/// How long `brief_prepare` leaves inputs alone after a build of them
+/// failed: each attempt is a paid agent call. A manual build still runs.
+pub const FAILED_BACKOFF: Duration = Duration::from_secs(60 * 60);
+
 /// Managed as Tauri state; clones share the set.
 #[derive(Debug, Clone, Default)]
-pub struct BriefBuilds(Arc<Mutex<HashMap<String, Control>>>);
+pub struct BriefBuilds(Arc<Mutex<Builds>>);
+
+#[derive(Debug, Default)]
+struct Builds {
+    running: HashMap<String, Control>,
+    /// Per project: the fingerprint of the inputs its last build failed on,
+    /// and when.
+    failed: HashMap<String, (String, Instant)>,
+}
 
 /// How a running build is stopped from outside its task.
 #[derive(Debug)]
@@ -32,7 +46,7 @@ struct Control {
 }
 
 impl BriefBuilds {
-    fn set(&self) -> MutexGuard<'_, HashMap<String, Control>> {
+    fn state(&self) -> MutexGuard<'_, Builds> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -42,14 +56,14 @@ impl BriefBuilds {
     /// `DataChanged` after claiming and after dropping it so the windows
     /// re-read `briefState`.
     pub fn start(&self, project_id: &str) -> Option<BuildSlot> {
-        let mut set = self.set();
-        if set.contains_key(project_id) {
+        let mut state = self.state();
+        if state.running.contains_key(project_id) {
             return None;
         }
         let (cancel, cancelled) = oneshot::channel();
         let process = TreeSlot::default();
         let flag = Arc::new(AtomicBool::new(false));
-        set.insert(
+        state.running.insert(
             project_id.to_owned(),
             Control {
                 cancel: Some(cancel),
@@ -63,18 +77,36 @@ impl BriefBuilds {
             cancel: Some(cancelled),
             process,
             cancelled: flag,
+            fingerprint: None,
         })
     }
 
     pub fn is_building(&self, project_id: &str) -> bool {
-        self.set().contains_key(project_id)
+        self.state().running.contains_key(project_id)
+    }
+
+    /// A build of these inputs of the project failed less than
+    /// [`FAILED_BACKOFF`] ago: `brief_prepare` does not try them again.
+    pub fn failed_lately(&self, project_id: &str, fingerprint: &str) -> bool {
+        self.state()
+            .failed
+            .get(project_id)
+            .is_some_and(|(failed, at)| failed == fingerprint && at.elapsed() < FAILED_BACKOFF)
+    }
+
+    /// Makes the project's last failure `by` older (the backoff in tests).
+    #[cfg(test)]
+    pub fn age_failure(&self, project_id: &str, by: Duration) {
+        if let Some((_, at)) = self.state().failed.get_mut(project_id) {
+            *at = at.checked_sub(by).unwrap_or(*at);
+        }
     }
 
     /// Stops the project's build: kills the agent's process tree and ends
     /// its call. `false` when none runs.
     pub fn cancel(&self, project_id: &str) -> bool {
-        let mut set = self.set();
-        let Some(control) = set.get_mut(project_id) else {
+        let mut state = self.state();
+        let Some(control) = state.running.get_mut(project_id) else {
             return false;
         };
         control.cancelled.store(true, Ordering::SeqCst);
@@ -88,7 +120,7 @@ impl BriefBuilds {
     /// The app's exit: kills every build's CLI (it runs in its own process
     /// group and would outlive the app).
     pub fn shutdown(&self) {
-        for control in self.set().values() {
+        for control in self.state().running.values() {
             control.cancelled.store(true, Ordering::SeqCst);
             control.process.kill();
         }
@@ -118,6 +150,8 @@ pub struct BuildSlot {
     cancel: Option<oneshot::Receiver<()>>,
     process: TreeSlot,
     cancelled: Arc<AtomicBool>,
+    /// What the build is made from, once read.
+    fingerprint: Option<String>,
 }
 
 impl BuildSlot {
@@ -139,11 +173,38 @@ impl BuildSlot {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
+
+    /// The flag [`BriefBuilds::cancel`] sets, for a check under the
+    /// database lock just before saving.
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancelled)
+    }
+
+    /// The fingerprint of the inputs this build is made from.
+    pub fn set_fingerprint(&mut self, fingerprint: String) {
+        self.fingerprint = Some(fingerprint);
+    }
+
+    /// The build failed: `brief_prepare` leaves its inputs alone for a while.
+    /// Nothing is kept when the inputs were not read yet.
+    pub fn failed(&self) {
+        if let Some(fingerprint) = &self.fingerprint {
+            self.builds.state().failed.insert(
+                self.project_id.clone(),
+                (fingerprint.clone(), Instant::now()),
+            );
+        }
+    }
+
+    /// The build saved a brief: an earlier failure is forgotten.
+    pub fn succeeded(&self) {
+        self.builds.state().failed.remove(&self.project_id);
+    }
 }
 
 impl Drop for BuildSlot {
     fn drop(&mut self) {
-        self.builds.set().remove(&self.project_id);
+        self.builds.state().running.remove(&self.project_id);
     }
 }
 
@@ -179,5 +240,33 @@ mod tests {
         assert!(builds.cancel("a"));
         drop(slot);
         assert!(!builds.cancel("a"));
+    }
+
+    #[test]
+    fn a_failure_is_remembered_per_inputs_for_the_backoff() {
+        let builds = BriefBuilds::default();
+        let mut slot = builds.start("a").unwrap();
+        // Before the inputs were read nothing is kept.
+        slot.failed();
+        assert!(!builds.failed_lately("a", "f1"));
+        slot.set_fingerprint("f1".to_owned());
+        slot.failed();
+        drop(slot);
+        assert!(builds.failed_lately("a", "f1"));
+        assert!(!builds.failed_lately("a", "f2"));
+        assert!(!builds.failed_lately("b", "f1"));
+
+        builds.age_failure("a", FAILED_BACKOFF - Duration::from_secs(60));
+        assert!(builds.failed_lately("a", "f1"));
+        builds.age_failure("a", Duration::from_secs(61));
+        assert!(!builds.failed_lately("a", "f1"));
+
+        // A success forgets it.
+        let mut slot = builds.start("a").unwrap();
+        slot.set_fingerprint("f1".to_owned());
+        slot.failed();
+        assert!(builds.failed_lately("a", "f1"));
+        slot.succeeded();
+        assert!(!builds.failed_lately("a", "f1"));
     }
 }

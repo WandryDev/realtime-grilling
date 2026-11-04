@@ -223,7 +223,8 @@ fn a_build_saves_a_fresh_brief_with_stages_in_order() {
     assert!(stdin.contains("Единая система приёма звонков"), "{stdin}");
     assert!(stdin.contains("- Ольга Демченко — CEO."), "{stdin}");
     assert!(
-        stdin.contains("### F1. ТЗ.md\n\nОчередь звонков"),
+        stdin.contains("name=\"ТЗ.md\" nonce=\"")
+            && stdin.contains("\">\nОчередь звонков, перезвон через 5 минут\n</document nonce=\""),
         "{stdin}"
     );
     // The prompt file goes with the build.
@@ -345,7 +346,10 @@ fn shortened_materials_mark_the_brief() {
     assert!(saved.brief_truncated);
     let stdin = fake.read("stdin");
     assert!(stdin.contains("Материалы сокращены"));
-    assert!(stdin.contains("### F2. Переписка.txt (сокращён)\n\nНАЧАЛО"));
+    assert!(
+        stdin.contains("<document id=\"F2\" name=\"Переписка.txt\" note=\"сокращён\" nonce=\"")
+    );
+    assert!(stdin.contains("\">\nНАЧАЛО"));
     assert!(stdin.chars().count() <= super::input::BUDGET_CHARS);
 }
 
@@ -392,4 +396,34 @@ fn prepare_refreshes_an_outdated_brief() {
     }
     assert_eq!(host.get(&project.id).brief_state, BriefState::Fresh);
     assert_eq!(fake.runs(), 1);
+}
+
+/// Deleting the project stops its build: the agent is killed and the build
+/// ends `cancelled`, not with an error about a missing project.
+#[test]
+fn deleting_the_project_cancels_its_build() {
+    let host = TestHost::new(None);
+    let builds = BriefBuilds::default();
+    let project = host.project();
+    let fake = Fake::new(&reply());
+    let running = run::start(&host, &builds, &project.id, Some(fake.agent("hang"))).unwrap();
+    let child = fake.child_pid();
+
+    block_on(crate::projects::delete(
+        host.storage(),
+        &host.sink,
+        &builds,
+        &project.id,
+    ))
+    .unwrap();
+    block_on(running).unwrap();
+    assert_killed(child);
+    let last = host.progress().pop().unwrap();
+    assert_eq!(last.state, BriefStageState::Cancelled);
+    assert!(
+        host.progress()
+            .iter()
+            .all(|event| !matches!(event.state, BriefStageState::Failed { .. }))
+    );
+    assert!(!builds.is_building(&project.id));
 }

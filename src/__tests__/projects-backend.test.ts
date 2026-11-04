@@ -30,6 +30,56 @@ describe("ProjectsBackend.layerMock", () => {
     }).pipe(Effect.provide(BackendMock))
   );
 
+  it.effect("sends the stages as Rust does: each runs, then is done", () =>
+    Effect.gen(function* () {
+      const backend = yield* ProjectsBackend;
+      const seen = yield* Effect.forkChild(
+        Stream.runCollect(
+          backend.progress.pipe(
+            Stream.takeUntil(
+              (item) =>
+                item.stage === BRIEF_BUILD_STAGES &&
+                item.state.status === "done"
+            )
+          )
+        ),
+        { startImmediately: true }
+      );
+      const owner = yield* Effect.forkChild(
+        Stream.runCollect(backend.buildBrief("telemedia")),
+        { startImmediately: true }
+      );
+      yield* TestClock.adjust("1 second");
+      // Another window joins the build: it ends with the build, not a stage.
+      const follower = yield* Effect.forkChild(
+        Stream.runCollect(backend.buildBrief("telemedia")),
+        { startImmediately: true }
+      );
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(owner);
+      const expected = Array.from(
+        { length: BRIEF_BUILD_STAGES },
+        (_, index) => [
+          {
+            projectId: "telemedia",
+            stage: index + 1,
+            state: { status: "running" },
+          },
+          {
+            projectId: "telemedia",
+            stage: index + 1,
+            state: { status: "done" },
+          },
+        ]
+      ).flat();
+      assert.deepStrictEqual(Array.from(yield* Fiber.join(seen)), expected);
+      assert.deepStrictEqual(
+        Array.from(yield* Fiber.join(follower)),
+        [2, 2, 3, 3, 4, 4, 5]
+      );
+    }).pipe(Effect.provide(BackendMock))
+  );
+
   it.effect("exports markdown into the Grill folder", () =>
     Effect.gen(function* () {
       const backend = yield* ProjectsBackend;
@@ -127,6 +177,26 @@ describe("ProjectsBackend.layerMock over the mock database", () => {
         (yield* projects.get("telemedia")).briefState,
         "fresh"
       );
+    }).pipe(Effect.provide(MockServices))
+  );
+
+  it.effect("stops the build of a deleted project", () =>
+    Effect.gen(function* () {
+      const backend = yield* ProjectsBackend;
+      const projects = yield* ProjectsData;
+      const project = yield* projects.create({
+        description: "Запись к врачу",
+        name: "Ромашка",
+      });
+      const fiber = yield* Effect.forkChild(
+        Effect.exit(backend.refreshBrief(project.id))
+      );
+      yield* TestClock.adjust("2 seconds");
+      yield* projects.remove(project.id);
+      yield* TestClock.adjust("5 seconds");
+      const exit = yield* Fiber.join(fiber);
+      assert.isTrue(Exit.isFailure(exit));
+      assert.include(JSON.stringify(exit), "BriefCancelled");
     }).pipe(Effect.provide(MockServices))
   );
 

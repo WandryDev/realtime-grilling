@@ -2,6 +2,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -74,6 +75,9 @@ const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshSources } = await import("@/data/sources");
 const { toast } = await import("@/components/ui/toast");
+const { useAddDocuments } = await import("@/features/projects/api");
+const { DESCRIPTION_LIMIT_HINT, DESCRIPTION_MAX_CHARS, NOTES_MAX_CHARS } =
+  await import("@/data/project-limits");
 
 const PROJECT = "019a0000-0000-7000-8000-000000000001";
 const SOURCE = "019a0000-0000-7000-8000-0000000000d1";
@@ -81,6 +85,7 @@ const HOUR_MS = 3_600_000;
 const OLGA = /Ольга Николаевна/u;
 const KEY_DOCUMENT = /Техническое задание/u;
 const NEXT = /Далее/u;
+const COUNTER = /^33 \/ 50\s000$/u;
 
 const BRIEF: Brief = {
   glossary: [{ definition: "Пациент без карты", term: "Первичка" }],
@@ -98,8 +103,20 @@ function invokedWith(command: string) {
     .map((call) => call.args);
 }
 
-function progress(stage: number, state: BriefProgress["state"]) {
-  act(() => fake.emit("brief-progress", { projectId: PROJECT, stage, state }));
+function progress(
+  stage: number,
+  state: BriefProgress["state"],
+  projectId = PROJECT
+) {
+  act(() => fake.emit("brief-progress", { projectId, stage, state }));
+}
+
+/** Stages `from…to` as `Stages::advance` in run.rs sends them. */
+function stagesDone(from: number, to: number, projectId = PROJECT) {
+  for (let stage = from; stage <= to; stage += 1) {
+    progress(stage, { status: "running" }, projectId);
+    progress(stage, { status: "done" }, projectId);
+  }
 }
 
 /** The stores outlive a test: read the reset tables. */
@@ -147,7 +164,9 @@ describe("project page: the brief", () => {
       expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
     );
     progress(1, { status: "running" });
+    progress(1, { status: "done" });
     progress(2, { status: "running" });
+    // The first stage's `done` is not the end of the build.
     expect(await screen.findByText("Собираю бриф: этап 2 из 5")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Остановить" }));
@@ -206,8 +225,14 @@ describe("project page: the brief", () => {
     expect(
       await screen.findByRole("progressbar", { name: "Обновление брифа" })
     ).toBeTruthy();
+    progress(3, { status: "done" });
     progress(4, { status: "running" });
     expect(await screen.findByText("Собираю бриф: этап 4 из 5")).toBeTruthy();
+    progress(4, { status: "done" });
+    // Still building: only the last stage's `done` ends it.
+    expect(
+      screen.getByRole("progressbar", { name: "Обновление брифа" })
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Остановить" }));
     await waitFor(() =>
       expect(invokedWith("brief_cancel")).toEqual([{ projectId: PROJECT }])
@@ -230,6 +255,67 @@ describe("project page: the brief", () => {
       })
     ).toBeTruthy();
     expect(screen.getByText("Обновлён только что")).toBeTruthy();
+  });
+
+  it("tells «готов» only at the end, and a failure at stage 4", async () => {
+    const add = vi.spyOn(toast, "add");
+    openProjectPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Собрать бриф" })
+    );
+    await waitFor(() =>
+      expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
+    );
+
+    stagesDone(1, 3);
+    progress(4, { status: "running" });
+    expect(await screen.findByText("Собираю бриф: этап 4 из 5")).toBeTruthy();
+    expect(add).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success" })
+    );
+
+    progress(4, { message: "Агент ответил не по схеме", status: "failed" });
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "Агент ответил не по схеме",
+          title: "Не удалось собрать бриф",
+          type: "error",
+        })
+      )
+    );
+    expect(add).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success" })
+    );
+    // The build is over: the page offers to build again.
+    expect(
+      await screen.findByRole("button", { name: "Собрать бриф" })
+    ).toBeTruthy();
+  });
+
+  it("says nothing about the build of a deleted project", async () => {
+    const add = vi.spyOn(toast, "add");
+    openProjectPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Собрать бриф" })
+    );
+    await waitFor(() =>
+      expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
+    );
+    stagesDone(1, 1);
+    progress(2, { status: "running" });
+
+    // Deleted in another window while the save ran: the save fails on the
+    // missing project (a cancel after the commit ends it quietly too).
+    fake.db.projects.length = 0;
+    progress(2, { message: `Проект ${PROJECT} не найден`, status: "failed" });
+    await waitFor(() =>
+      expect(invokedWith("projects_get")).toEqual([{ id: PROJECT }])
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(add).not.toHaveBeenCalled();
   });
 
   it("exports the brief into the folder picked in Finder", async () => {
@@ -341,12 +427,45 @@ describe("project page: what is not the brief", () => {
     await waitFor(() => expect(within(list).queryByText("ТЗ.docx")).toBeNull());
   });
 
+  it("forgets the files turned away when another project opens", async () => {
+    const other = "019a0000-0000-7000-8000-000000000002";
+    fake.answers.set("project_sources_add", (args) =>
+      (args.paths as string[]).map((path) => ({
+        name: path.split("/").at(-1) ?? path,
+        path,
+        result: {
+          message: "Поддерживаются .md, .txt, .pdf и .docx",
+          outcome: "rejected",
+          reason: "unsupportedType",
+        },
+      }))
+    );
+    const { rerender, result } = renderHook(
+      ({ id }: { id: string }) => useAddDocuments(id),
+      { initialProps: { id: PROJECT } }
+    );
+    await act(() => result.current.add(["/Users/dima/смета.xlsx"]));
+    expect(result.current.rejected).toEqual([
+      { message: "Поддерживаются .md, .txt, .pdf и .docx", name: "смета.xlsx" },
+    ]);
+
+    rerender({ id: other });
+    expect(result.current.rejected).toEqual([]);
+    // Back to the first project: the old rejection is gone too.
+    rerender({ id: PROJECT });
+    expect(result.current.rejected).toEqual([]);
+  });
+
   it("saves the manager's notes", async () => {
     openProjectPage();
 
-    fireEvent.change(await screen.findByLabelText("Заметки менеджера"), {
+    const field = await screen.findByLabelText("Заметки менеджера");
+    // The limit Rust keeps (projects_update refuses longer notes).
+    expect(field.getAttribute("maxlength")).toBe(String(NOTES_MAX_CHARS));
+    fireEvent.change(field, {
       target: { value: "Решения по amoCRM принимает Игорь" },
     });
+    expect(screen.getByText(COUNTER)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Сохранить заметки" }));
 
     await waitFor(() =>
@@ -465,7 +584,16 @@ describe("new project wizard", () => {
 
   it("saves documents, people and notes, then builds the brief", async () => {
     fake.answers.set("plugin:dialog|open", () => ["/Users/dima/ТЗ.docx"]);
-    fillWizard();
+    render(<NewProjectPage />);
+    const description = screen.getByLabelText("Описание");
+    expect(description.getAttribute("maxlength")).toBe(
+      String(DESCRIPTION_MAX_CHARS)
+    );
+    expect(screen.getByText(DESCRIPTION_LIMIT_HINT)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Название"), {
+      target: { value: "Пекарня" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: NEXT }));
     expect(
       screen.getByRole("heading", { name: "Откуда брать контекст" })
     ).toBeTruthy();
@@ -512,15 +640,17 @@ describe("new project wizard", () => {
     ]);
     expect(invokedWith("brief_build")).toEqual([{ projectId: draft }]);
 
-    act(() => {
-      for (const stage of [1, 2, 3]) {
-        fake.emit("brief-progress", {
-          projectId: draft,
-          stage,
-          state: { status: "running" },
-        });
-      }
-    });
+    // The exact events of run.rs: every stage runs, then is done.
+    progress(1, { status: "running" }, draft);
+    progress(1, { status: "done" }, draft);
+    expect(
+      await screen.findByRole("progressbar", {
+        name: "Сбор брифа, этап 2 из 5",
+      })
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Бриф готов" })).toBeNull();
+    stagesDone(2, 2, draft);
+    progress(3, { status: "running" }, draft);
     expect(
       await screen.findByRole("progressbar", {
         name: "Сбор брифа, этап 3 из 5",
@@ -528,16 +658,70 @@ describe("new project wizard", () => {
     ).toBeTruthy();
     expect(screen.getByText("Агент читает материалы")).toBeTruthy();
 
-    act(() =>
-      fake.emit("brief-progress", {
-        projectId: draft,
-        stage: 5,
-        state: { status: "done" },
-      })
-    );
+    progress(3, { status: "done" }, draft);
+    stagesDone(4, 4, draft);
+    progress(5, { status: "running" }, draft);
+    expect(screen.queryByRole("heading", { name: "Бриф готов" })).toBeNull();
+    progress(5, { status: "done" }, draft);
     expect(
       await screen.findByRole("heading", { name: "Бриф готов" })
     ).toBeTruthy();
+  });
+
+  it("makes one draft for two quick drops", async () => {
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    const draft = "019a0000-0000-7000-8000-0000000000aa";
+    fake.answers.set("projects_create", async (args) => {
+      await gate;
+      const input = args.input as { name: string };
+      const project = fakeProject(draft, input.name);
+      fake.db.projects.push(project);
+      fake.dataChanged({
+        change: "created",
+        entity: "project",
+        id: draft,
+        projectId: draft,
+      });
+      return structuredClone(project);
+    });
+    fake.answers.set("project_sources_add", (args) =>
+      (args.paths as string[]).map((path) => {
+        const name = path.split("/").at(-1) ?? path;
+        const source = fakeSource(`doc-${name}`, String(args.projectId), name);
+        fake.db.sources.push(source);
+        return { name, path, result: { outcome: "added", source } };
+      })
+    );
+    fillWizard();
+    await waitFor(() => expect(drops.handler).not.toBeNull());
+
+    // The second file comes before the project of the first is saved.
+    act(() =>
+      drops.handler?.({
+        payload: { paths: ["/Users/dima/ТЗ.docx"], type: "drop" },
+      })
+    );
+    act(() =>
+      drops.handler?.({
+        payload: { paths: ["/Users/dima/переписка.pdf"], type: "drop" },
+      })
+    );
+    await act(async () => {
+      release();
+      await gate;
+    });
+
+    await waitFor(() =>
+      expect(invokedWith("project_sources_add")).toHaveLength(2)
+    );
+    expect(invokedWith("projects_create")).toHaveLength(1);
+    expect(fake.db.projects.filter((item) => item.id === draft)).toHaveLength(
+      1
+    );
+    expect(invokedWith("project_sources_add")).toEqual([
+      { paths: ["/Users/dima/ТЗ.docx"], projectId: draft },
+      { paths: ["/Users/dima/переписка.pdf"], projectId: draft },
+    ]);
   });
 
   it("collapses the build to the background with a toast when ready", async () => {
@@ -548,13 +732,15 @@ describe("new project wizard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Свернуть в фон" }));
     expect(nav.push).toHaveBeenCalledWith("/");
-    act(() =>
-      fake.emit("brief-progress", {
-        projectId: created,
-        stage: 5,
-        state: { status: "done" },
-      })
+    stagesDone(1, 4, created);
+    progress(5, { status: "running" }, created);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(add).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success" })
     );
+    progress(5, { status: "done" }, created);
     await waitFor(() =>
       expect(add).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -582,12 +768,12 @@ describe("new project wizard", () => {
     await finishWizard();
     const created = fake.db.projects.at(-1)?.id ?? "";
 
-    act(() =>
-      fake.emit("brief-progress", {
-        projectId: created,
-        stage: 2,
-        state: { message: "Claude Code не вошёл в аккаунт", status: "failed" },
-      })
+    stagesDone(1, 3, created);
+    progress(4, { status: "running" }, created);
+    progress(
+      4,
+      { message: "Claude Code не вошёл в аккаунт", status: "failed" },
+      created
     );
     expect(
       await screen.findByText("Claude Code не вошёл в аккаунт", {
@@ -597,5 +783,6 @@ describe("new project wizard", () => {
     expect(
       screen.getByRole("button", { name: "Собрать ещё раз" })
     ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Бриф готов" })).toBeNull();
   });
 });

@@ -7,11 +7,18 @@ import {
   type ProjectOverview,
   type ProjectUpdate,
 } from "@/bindings";
+import {
+  DESCRIPTION_MAX_CHARS,
+  DESCRIPTION_TOO_LONG,
+  NOTES_MAX_CHARS,
+  NOTES_TOO_LONG,
+} from "@/data/project-limits";
 import { type BackendError, call } from "@/effect/tauri";
 
 import {
   briefStateOf,
   compareIds,
+  limitedText,
   MockDatabase,
   notFound,
   orCurrent,
@@ -21,7 +28,8 @@ import {
 /*
  * Projects in the local database. `layerTauri` calls the Rust commands,
  * `layerMock` keeps the same contract in memory (MockDatabase): UUID v7
- * ids, `Invalid` for an empty name, `NotFound`, a cascade delete (people,
+ * ids, `Invalid` for an empty name or a description / notes over their
+ * limits (`../project-limits.ts`), `NotFound`, a cascade delete (people,
  * calls, documents) and one `DataChanged` per write. The brief state is
  * computed on every read; a brief given in `create` / `update` is not the
  * agent's and reads as `outdated`.
@@ -76,8 +84,15 @@ export class ProjectsData extends Context.Service<
 
       const get = (id: string) => Effect.map(stored(id), read);
 
+      const description = (text: string) =>
+        limitedText(text, DESCRIPTION_MAX_CHARS, DESCRIPTION_TOO_LONG);
+      const notes = (text: string) =>
+        limitedText(text, NOTES_MAX_CHARS, NOTES_TOO_LONG);
+
       const create = Effect.fnUntraced(function* (input: ProjectCreate) {
         const name = yield* requiredName(input.name);
+        const checkedDescription = yield* description(input.description ?? "");
+        const checkedNotes = yield* notes(input.notes ?? "");
         const { id, now } = yield* database.stamp;
         const brief = input.brief ?? null;
         const project: Project = {
@@ -86,10 +101,10 @@ export class ProjectsData extends Context.Service<
           briefState: "none",
           briefTruncated: false,
           createdAt: now,
-          description: input.description?.trim() ?? "",
+          description: checkedDescription,
           id,
           name,
-          notes: input.notes?.trim() ?? "",
+          notes: checkedNotes,
           openQuestions: 0,
           updatedAt: now,
         };
@@ -106,13 +121,19 @@ export class ProjectsData extends Context.Service<
         const name = Predicate.isNullish(patch.name)
           ? current.name
           : yield* requiredName(patch.name);
+        const checkedDescription = Predicate.isNullish(patch.description)
+          ? current.description
+          : yield* description(patch.description);
+        const checkedNotes = Predicate.isNullish(patch.notes)
+          ? current.notes
+          : yield* notes(patch.notes);
         const updatedAt = yield* database.touch(current.updatedAt);
         const project: Project = {
           ...current,
           brief: orCurrent(patch.brief, current.brief),
-          description: patch.description?.trim() ?? current.description,
+          description: checkedDescription,
           name,
-          notes: patch.notes?.trim() ?? current.notes,
+          notes: checkedNotes,
           updatedAt,
         };
         if (patch.brief !== undefined) {

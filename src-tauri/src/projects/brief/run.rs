@@ -7,14 +7,22 @@
 //! documents (and the fingerprint), 2 starting the agent, 3 the agent reads
 //! (its first delta), 4 the agent writes (its first `input_json_delta` or
 //! `StructuredOutput`), 5 checking and saving. Only a reply that is a brief
-//! replaces the old one, with the fingerprint read before the call. The
-//! project's `DataChanged` goes out when the build starts and when it ends.
+//! replaces the old one, with the fingerprint read before the call, and
+//! only when no cancel came first: the cancel flag is checked again under
+//! the database lock just before saving. The project's `DataChanged` goes
+//! out when the build starts and when it ends.
+//!
+//! Every stage sends `done` when the next one starts; the build ends with
+//! `(5, done)`, or with `failed` or `cancelled` at the stage it reached.
 
 use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -132,7 +140,9 @@ pub fn start<H: BriefHost>(
 
 /// Before a call (decision 8): starts a build in the background when the
 /// brief is `outdated`, or `none` while there is something to build it
-/// from, the agent is ready and no build runs. `true` when it started one.
+/// from, the agent is ready and no build runs. Inputs a build failed on
+/// within [`FAILED_BACKOFF`](crate::projects::builds::FAILED_BACKOFF) are
+/// left alone: each try is a paid call. `true` when it started one.
 pub async fn prepare<H: BriefHost>(
     host: &Arc<H>,
     builds: &BriefBuilds,
@@ -148,14 +158,20 @@ pub async fn prepare<H: BriefHost>(
     let needed = storage
         .read(move |db| {
             let project = projects::get(db, &id)?;
-            Ok(match project.brief_state {
+            let needed = match project.brief_state {
                 BriefState::Outdated => true,
                 BriefState::None => has_materials(db, &project)?,
                 BriefState::Fresh | BriefState::Building => false,
-            })
+            };
+            needed
+                .then(|| brief_inputs::fingerprint(db, &id))
+                .transpose()
         })
         .await?;
-    if !needed {
+    let Some(fingerprint) = needed else {
+        return Ok(false);
+    };
+    if builds.failed_lately(project_id, &fingerprint) {
         return Ok(false);
     }
     let Ok(agent) = host.agent().await else {
@@ -186,13 +202,17 @@ async fn build<H: BriefHost>(host: &Arc<H>, slot: &mut BuildSlot, agent: Option<
         current: Mutex::new(0),
     });
     match attempt(host.as_ref(), slot, agent, &stages).await {
-        Ok(()) => stages.finish(),
+        Ok(()) => {
+            slot.succeeded();
+            stages.finish();
+        }
         Err(End::Cancelled) => stages.end(BriefStageState::Cancelled),
         Err(End::Failed(message)) => {
             eprintln!(
                 "grill: the brief of {} was not built: {message}",
                 slot.project_id()
             );
+            slot.failed();
             stages.end(BriefStageState::Failed { message });
         }
     }
@@ -225,12 +245,13 @@ async fn attempt<H: BriefHost>(
         .read(move |db| brief_inputs::read(db, &id))
         .await
         .map_err(|error| failed(error.to_string()))?;
+    slot.set_fingerprint(inputs.fingerprint.clone());
     if inputs.is_empty() {
         return Err(failed(
             "Не из чего собирать бриф: добавьте описание, заметки, людей или документы",
         ));
     }
-    let message = input::compose(&inputs);
+    let message = input::compose(&inputs).map_err(End::Failed)?;
     unless_cancelled(slot)?;
 
     stages.advance(2);
@@ -280,22 +301,47 @@ async fn attempt<H: BriefHost>(
     brief.resolve_documents(&message.documents);
     let id = slot.project_id().to_owned();
     let (fingerprint, truncated) = (inputs.fingerprint, message.truncated);
-    storage
+    let cancelled = slot.cancel_flag();
+    let saved = storage
         .write(host, move |db| {
-            // A document may have gone during the build.
-            let ready: Vec<String> = sources::list(db, &id)?
-                .into_iter()
-                .filter(|source| source.status == SourceStatus::Ready)
-                .map(|source| source.id)
-                .collect();
-            brief.keep_documents(&ready);
-            let value = serde_json::to_value(&brief)?;
-            projects::save_brief(db, &id, &value, &fingerprint, truncated)?;
-            // The project's event goes when the build ends.
-            Ok(((), Vec::new()))
+            save(db, &id, &cancelled, brief, &fingerprint, truncated)
+                .map(|saved| (saved, Vec::new()))
         })
         .await
-        .map_err(|error| failed(error.to_string()))
+        .map_err(|error| failed(error.to_string()))?;
+    if saved { Ok(()) } else { Err(End::Cancelled) }
+}
+
+/// Saves the brief under the database lock, unless the build was cancelled
+/// (the flag is set before the agent is killed, so a cancel that came after
+/// the reply is seen here) or the project was deleted meanwhile. `false`
+/// when nothing was saved. The project's event goes when the build ends.
+fn save(
+    db: &rusqlite::Connection,
+    id: &str,
+    cancelled: &AtomicBool,
+    mut brief: Brief,
+    fingerprint: &str,
+    truncated: bool,
+) -> CommandResult<bool> {
+    if cancelled.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    match projects::exists(db, id) {
+        Ok(()) => {}
+        Err(CommandError::NotFound { .. }) => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    // A document may have gone during the build.
+    let ready: Vec<String> = sources::list(db, id)?
+        .into_iter()
+        .filter(|source| source.status == SourceStatus::Ready)
+        .map(|source| source.id)
+        .collect();
+    brief.keep_documents(&ready);
+    let value = serde_json::to_value(&brief)?;
+    projects::save_brief(db, id, &value, fingerprint, truncated)?;
+    Ok(true)
 }
 
 /// The cost and the time of a build, for tuning the budget (design.md,

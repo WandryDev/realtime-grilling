@@ -4,6 +4,7 @@
 
 pub mod extract;
 pub mod files;
+pub mod isolated;
 
 use std::path::Path;
 
@@ -11,7 +12,7 @@ use serde::Serialize;
 use specta::Type;
 
 use self::{
-    extract::{FileKind, extract_in_background},
+    extract::{Extraction, FileKind, extract_file},
     files::ProjectFiles,
 };
 use super::sha256_hex;
@@ -154,7 +155,10 @@ async fn add_one(
             .map_err(|error| {
                 CommandError::storage(format!("Не удалось сохранить копию документа: {error}"))
             })?;
-    let extraction = extract_in_background(kind, bytes).await;
+    let extraction = match files.resolve(&stored_path) {
+        Ok(copy) => extract_file(kind, bytes, &copy).await,
+        Err(error) => Extraction::failed(format!("Не удалось прочитать файл: {error}")),
+    };
 
     let new = NewSource {
         id: source_id,

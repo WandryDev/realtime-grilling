@@ -113,17 +113,10 @@ pub async fn projects_update(
 pub async fn projects_delete(
     app: AppHandle,
     storage: State<'_, Storage>,
+    builds: State<'_, BriefBuilds>,
     id: String,
 ) -> CommandResult<()> {
-    let project_id = id.clone();
-    storage
-        .write(&app, move |db| projects::delete(db, &id))
-        .await?;
-    // The project's calls took their recordings with them; now their files,
-    // and the copies of its documents.
-    storage.sweep_recordings().await;
-    project_sources::remove_project_files(&storage, &project_id);
-    Ok(())
+    crate::projects::delete(&storage, &app, &builds, &id).await
 }
 
 /// Per project: open questions of its recordings and when the last one

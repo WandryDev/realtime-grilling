@@ -7,9 +7,18 @@ import type {
 } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DESCRIPTION_LIMIT_HINT,
+  DESCRIPTION_MAX_CHARS,
+} from "@/data/project-limits";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { MainWindow, TitlebarSearch } from "@/features/shell/main-window";
 
@@ -249,10 +258,12 @@ export function ProjectStep({
           defaultValue={
             live || invalid ? undefined : NEW_PROJECT_DRAFT.description
           }
+          maxLength={DESCRIPTION_MAX_CHARS}
           onChange={onDescriptionChange}
           placeholder="Чем занимается клиент и что мы делаем"
           value={live ? description : undefined}
         />
+        <FieldDescription>{DESCRIPTION_LIMIT_HINT}</FieldDescription>
       </Field>
     </WizardForm>
   );

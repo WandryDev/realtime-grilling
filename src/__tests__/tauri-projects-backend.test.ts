@@ -5,8 +5,9 @@ import type { ProjectsBackend as Backend } from "@/features/projects/backend";
 
 /*
  * ProjectsBackend.layerTauri over the fake IPC (./helpers/fake-tauri.ts):
- * `brief_build` returns at once and the stages come as `BriefProgress`;
- * the stream follows the project's own until `done`, `failed` or
+ * `brief_build` returns at once and the stages come as `BriefProgress`,
+ * each stage `running` then `done` as Rust sends them; the stream follows
+ * the project's own until the last stage's `done`, `failed` or
  * `cancelled`. The folder for the export comes from the dialog plugin.
  */
 
@@ -77,19 +78,41 @@ describe("ProjectsBackend.layerTauri", () => {
       command: "brief_build",
     });
 
+    // What `Stages::advance` in run.rs sends: every stage runs, then is done.
     progress(1, { status: "running" });
-    progress(2, { status: "running" });
+    progress(1, { status: "done" });
     // Another project's build is not this one.
     progress(5, { status: "done" }, OTHER);
-    progress(3, { status: "running" });
-    progress(4, { status: "running" });
+    await Promise.resolve();
+    // A stage's `done` is not the end of the build.
+    expect(fake.handlers.get("brief-progress")?.size).toBe(1);
+    for (const stage of [2, 3, 4]) {
+      progress(stage, { status: "running" });
+      progress(stage, { status: "done" });
+    }
     progress(5, { status: "running" });
+    await Promise.resolve();
+    expect(fake.handlers.get("brief-progress")?.size).toBe(1);
     progress(5, { status: "done" });
 
     const stages = await Effect.runPromise(Fiber.join(fiber));
-    expect(Array.from(stages)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(Array.from(stages)).toEqual([0, 1, 1, 2, 2, 3, 3, 4, 4, 5]);
     // The listener goes with the stream.
     expect(fake.handlers.get("brief-progress")?.size).toBe(0);
+  });
+
+  it("fails when the agent fails after stages are done", async () => {
+    const fiber = await startBuild();
+    for (const stage of [1, 2, 3]) {
+      progress(stage, { status: "running" });
+      progress(stage, { status: "done" });
+    }
+    progress(4, { status: "running" });
+    progress(4, { message: "Агент ответил не по схеме", status: "failed" });
+
+    const exit = await Effect.runPromise(Effect.exit(Fiber.join(fiber)));
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(JSON.stringify(exit)).toContain("Агент ответил не по схеме");
   });
 
   it("ends with BriefCancelled when the build is stopped", async () => {

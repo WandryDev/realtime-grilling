@@ -123,6 +123,31 @@ fn with_state(
 }
 
 const EMPTY_NAME: &str = "Название проекта не может быть пустым";
+/// Longest description, in characters: it goes whole into every brief build.
+pub const MAX_DESCRIPTION_CHARS: usize = 5_000;
+/// Longest notes, in characters: they go whole into every brief build.
+pub const MAX_NOTES_CHARS: usize = 50_000;
+
+/// `text` trimmed, `Invalid` when longer than `max` characters.
+fn limited(text: &str, max: usize, too_long: &str) -> CommandResult<String> {
+    let text = text.trim();
+    if text.chars().count() > max {
+        return Err(CommandError::invalid(too_long));
+    }
+    Ok(text.to_owned())
+}
+
+fn description_text(text: &str) -> CommandResult<String> {
+    limited(
+        text,
+        MAX_DESCRIPTION_CHARS,
+        "Описание длиннее 5 000 символов",
+    )
+}
+
+fn notes_text(text: &str) -> CommandResult<String> {
+    limited(text, MAX_NOTES_CHARS, "Заметки длиннее 50 000 символов")
+}
 
 pub fn list(connection: &Connection) -> CommandResult<Vec<Project>> {
     let mut statement = connection.prepare(&format!("{SELECT} ORDER BY p.created_at, p.id"))?;
@@ -164,6 +189,8 @@ pub fn create(
     input: ProjectCreate,
 ) -> CommandResult<(Project, Vec<DataChanged>)> {
     let name = required(&input.name, EMPTY_NAME)?;
+    let description = description_text(&input.description.unwrap_or_default())?;
+    let notes = notes_text(&input.notes.unwrap_or_default())?;
     let id = new_id();
     let now = now_ms();
     let built_at = input.brief.as_ref().map(|_| now);
@@ -174,8 +201,8 @@ pub fn create(
         params![
             id,
             name,
-            input.description.unwrap_or_default().trim(),
-            input.notes.unwrap_or_default().trim(),
+            description,
+            notes,
             input.brief.map(Json),
             built_at,
             now
@@ -196,12 +223,14 @@ pub fn update(
         Some(name) => required(&name, EMPTY_NAME)?,
         None => current.name,
     };
-    let description = patch
-        .description
-        .map_or(current.description, |text| text.trim().to_owned());
-    let notes = patch
-        .notes
-        .map_or(current.notes, |text| text.trim().to_owned());
+    let description = match patch.description {
+        Some(text) => description_text(&text)?,
+        None => current.description,
+    };
+    let notes = match patch.notes {
+        Some(text) => notes_text(&text)?,
+        None => current.notes,
+    };
     connection.execute(
         "UPDATE projects
             SET name = ?2, description = ?3, notes = ?4, updated_at = MAX(?5, updated_at + 1)

@@ -37,7 +37,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   NativeSelect,
@@ -48,6 +53,10 @@ import {
   SegmentedControlItem,
 } from "@/components/ui/segmented-control";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DESCRIPTION_LIMIT_HINT,
+  DESCRIPTION_MAX_CHARS,
+} from "@/data/project-limits";
 import { cn } from "@/lib/utils";
 
 import { CloseIcon, TrashIcon } from "../icons";
@@ -782,8 +791,10 @@ export function EditProjectDialog({
             <Textarea
               className="min-h-24"
               defaultValue={description}
+              maxLength={DESCRIPTION_MAX_CHARS}
               name="description"
             />
+            <FieldDescription>{DESCRIPTION_LIMIT_HINT}</FieldDescription>
           </Field>
           <DialogFooter className="pt-1 [&>button]:text-sm">
             <DialogClose render={<Button variant="secondary" />}>

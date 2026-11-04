@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { SourceAddResult } from "@/bindings";
 
 import { toast } from "@/components/ui/toast";
+import { ProjectsData } from "@/data/services/projects";
 import { addProjectSources } from "@/data/sources";
 import { createStore } from "@/data/store";
 import { refreshMockStores } from "@/data/synced-store";
@@ -15,6 +16,8 @@ import {
   BRIEF_BUILD_STAGES,
   type DocumentDrop,
   type ExportTarget,
+  endsBuild,
+  finishedStages,
   ProjectsBackend,
 } from "./backend";
 import type { RejectedDocument } from "./components/documents-block";
@@ -72,6 +75,27 @@ function cancelBuild(projectId: string) {
   cancelBuilds.delete(projectId);
 }
 
+/** The build of a deleted project: no state, no toast. */
+function forgetBuild(projectId: string) {
+  buildsStore.set((builds) => {
+    if (!(projectId in builds)) {
+      return builds;
+    }
+    const { [projectId]: _deleted, ...rest } = builds;
+    return rest;
+  });
+  refreshMockStores();
+}
+
+/** Whether the project is gone (its build ends with it). */
+const projectDeleted = (projectId: string) =>
+  ProjectsData.use((projects) => projects.get(projectId)).pipe(
+    Effect.match({
+      onFailure: (error) => error.kind === "NotFound",
+      onSuccess: () => false,
+    })
+  );
+
 const buildBrief = Effect.fn("buildBrief")(
   function* (projectId: string) {
     const backend = yield* ProjectsBackend;
@@ -101,7 +125,12 @@ const buildBrief = Effect.fn("buildBrief")(
   (effect, projectId) =>
     effect.pipe(
       Effect.catchTag("BriefError", (error) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          // Deleting a project stops its build: nothing to tell about.
+          if (yield* projectDeleted(projectId)) {
+            forgetBuild(projectId);
+            return;
+          }
           patchBuild(projectId, { error: error.message, status: "failed" });
           refreshMockStores();
           toast.add({
@@ -111,9 +140,14 @@ const buildBrief = Effect.fn("buildBrief")(
           });
         })
       ),
-      // Stopped here ("Остановить") or in another window: the old brief stays.
+      // Stopped here ("Остановить"), in another window, or the project was
+      // deleted: the old brief stays.
       Effect.catchTag("BriefCancelled", () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          if (yield* projectDeleted(projectId)) {
+            forgetBuild(projectId);
+            return;
+          }
           patchBuild(projectId, { status: "stopped" });
           refreshMockStores();
         })
@@ -195,11 +229,12 @@ function followProgress() {
     ProjectsBackend.use((backend) =>
       Stream.runForEach(backend.progress, (progress) =>
         Effect.sync(() => {
-          const running = progress.state.status === "running";
+          // Every stage sends its own `done`; only the build's end stops it.
+          const running = !endsBuild(progress);
           progressStore.set((current) => ({
             ...current,
             [progress.projectId]: {
-              finished: running ? progress.stage - 1 : BRIEF_BUILD_STAGES,
+              finished: finishedStages(progress),
               running,
             },
           }));
@@ -298,14 +333,30 @@ function splitResults(results: SourceAddResult[]) {
   return { duplicates, rejected };
 }
 
+const NONE_REJECTED = {
+  items: [] as RejectedDocument[],
+  projectId: null as string | null,
+};
+
 /**
  * Adds files to a project and keeps what was not taken, to show next to
  * the list; a duplicate gets a toast. Shared by the page and the wizard;
  * `add` takes the project when it was created just now.
  */
 export function useAddDocuments(projectId: string | null) {
-  const [rejected, setRejected] = useState<RejectedDocument[]>([]);
+  // Kept with the project they were turned away from: another project
+  // (the page reused for another id) starts with none.
+  const [turnedAway, setTurnedAway] = useState<{
+    items: RejectedDocument[];
+    projectId: string | null;
+  }>(NONE_REJECTED);
   const [adding, setAdding] = useState(false);
+  const otherProject = turnedAway.projectId !== projectId;
+  if (otherProject && turnedAway !== NONE_REJECTED) {
+    // Not shown again when the page comes back to that project.
+    setTurnedAway(NONE_REJECTED);
+  }
+  const rejected = otherProject ? NONE_REJECTED.items : turnedAway.items;
 
   const add = useCallback(
     async (paths: string[], target: string | null = projectId) => {
@@ -319,7 +370,7 @@ export function useAddDocuments(projectId: string | null) {
         return;
       }
       const split = splitResults(results);
-      setRejected(split.rejected);
+      setTurnedAway({ items: split.rejected, projectId: target });
       if (split.duplicates.length > 0) {
         toast.add({
           description: split.duplicates.join(", "),

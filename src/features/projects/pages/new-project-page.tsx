@@ -661,18 +661,26 @@ function useWizardDocuments({
   const documents = useProjectSources(savedId);
   const { add, adding, rejected } = useAddDocuments(savedId);
 
-  const ensureDraft = useCallback(async () => {
+  // One draft however fast files come: every add awaits the same
+  // `createProject` (two drops before it resolves must not make two).
+  const draft = useRef<Promise<string | null> | null>(null);
+  const ensureDraft = useCallback(() => {
     if (savedId) {
-      return savedId;
+      return Promise.resolve(savedId);
     }
-    const id = await createProject({
+    draft.current ??= createProject({
       description: description.trim(),
       name: name.trim(),
+    }).then((id) => {
+      if (id) {
+        onDraft(id);
+      } else {
+        // Failed (a toast says why): the next file tries again.
+        draft.current = null;
+      }
+      return id ?? null;
     });
-    if (id) {
-      onDraft(id);
-    }
-    return id ?? null;
+    return draft.current;
   }, [description, name, onDraft, savedId]);
 
   const addPaths = useCallback(

@@ -1461,6 +1461,68 @@ mod brief_state {
         assert_eq!(json["briefTruncated"], false);
     }
 
+    /// They go whole into every brief build: past the limit nothing is
+    /// written and the screen gets why.
+    #[test]
+    fn notes_and_description_have_a_limit() {
+        use crate::storage::projects::{MAX_DESCRIPTION_CHARS, MAX_NOTES_CHARS};
+
+        let fx = Fixture::new();
+        let too_long = |create: ProjectCreate| {
+            fx.write(move |db| projects::create(db, create))
+                .unwrap_err()
+        };
+        let error = too_long(ProjectCreate {
+            name: "Телемедиа".to_owned(),
+            notes: Some("я".repeat(MAX_NOTES_CHARS + 1)),
+            ..ProjectCreate::default()
+        });
+        assert_eq!(
+            error,
+            CommandError::invalid("Заметки длиннее 50 000 символов")
+        );
+        let error = too_long(ProjectCreate {
+            name: "Телемедиа".to_owned(),
+            description: Some("я".repeat(MAX_DESCRIPTION_CHARS + 1)),
+            ..ProjectCreate::default()
+        });
+        assert_eq!(
+            error,
+            CommandError::invalid("Описание длиннее 5 000 символов")
+        );
+
+        // At the limit, spaces around not counted.
+        let project = fx.project("Телемедиа");
+        let full = update(
+            &fx,
+            &project,
+            ProjectUpdate {
+                notes: Some(format!("  {}  ", "я".repeat(MAX_NOTES_CHARS))),
+                description: Some("д".repeat(MAX_DESCRIPTION_CHARS)),
+                ..ProjectUpdate::default()
+            },
+        );
+        assert_eq!(full.notes.chars().count(), MAX_NOTES_CHARS);
+        let id = project.id.clone();
+        let error = fx
+            .write(move |db| {
+                projects::update(
+                    db,
+                    &id,
+                    ProjectUpdate {
+                        name: Some("Другое".to_owned()),
+                        notes: Some("я".repeat(MAX_NOTES_CHARS + 1)),
+                        ..ProjectUpdate::default()
+                    },
+                )
+            })
+            .unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+        let kept = get(&fx, &project);
+        assert_eq!(kept.name, "Телемедиа", "nothing of the patch is written");
+        assert_eq!(kept.notes.chars().count(), MAX_NOTES_CHARS);
+    }
+
     #[test]
     fn a_built_brief_is_fresh_and_survives_a_reread() {
         let fx = Fixture::new();

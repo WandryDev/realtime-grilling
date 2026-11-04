@@ -11,6 +11,7 @@ import type {
   ProjectSource,
   Value,
 } from "@/bindings";
+import { charCount } from "@/data/project-limits";
 import { BackendError } from "@/effect/tauri";
 
 import { mockSeed } from "./mock-seed";
@@ -204,6 +205,19 @@ export function orCurrent<T>(patched: T | null | undefined, current: T | null) {
 }
 
 export const EMPTY_NAME = "Название не может быть пустым";
+
+/** Trimmed text of at most `max` characters, or `Invalid` with `message`. */
+export const limitedText = Effect.fnUntraced(function* (
+  text: string,
+  max: number,
+  message: string
+) {
+  const trimmed = text.trim();
+  if (charCount(trimmed) > max) {
+    return yield* invalid(message);
+  }
+  return trimmed;
+});
 
 /** A trimmed required name, or `Invalid`. */
 export const requiredName = Effect.fnUntraced(function* (name: string) {

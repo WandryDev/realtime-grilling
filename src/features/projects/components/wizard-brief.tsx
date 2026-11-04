@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription } from "@/components/ui/field";
 import { Progress, ProgressCaption } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { charCount, NOTES_MAX_CHARS } from "@/data/project-limits";
 import { cn } from "@/lib/utils";
 
 import { StepCheckIcon, WorkingRingIcon } from "../icons";
@@ -12,10 +13,15 @@ import { SourceMark } from "./source-mark";
 
 /* ---------------------------------------------- Step 4, заметки менеджера */
 
-/** The notes. With `onChange` the field is controlled by `value`. */
+const COUNT = new Intl.NumberFormat("ru-RU");
+
+/**
+ * The notes, at most `limit` characters (Rust refuses longer ones). With
+ * `onChange` the field is controlled by `value`.
+ */
 export function ManagerNotesField({
   className,
-  limit = 4000,
+  limit = NOTES_MAX_CHARS,
   onChange,
   value,
 }: {
@@ -41,7 +47,7 @@ export function ManagerNotesField({
           Видно только вам. Клиенту не показывается.
         </FieldDescription>
         <span className="text-muted-foreground font-mono text-xs tabular-nums">
-          {value.length} / {limit}
+          {COUNT.format(charCount(value))} / {COUNT.format(limit)}
         </span>
       </div>
     </Field>

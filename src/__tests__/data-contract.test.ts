@@ -3,6 +3,13 @@ import { Effect, Exit, type Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import type { DataChanged } from "@/bindings";
+import {
+  charCount,
+  DESCRIPTION_MAX_CHARS,
+  DESCRIPTION_TOO_LONG,
+  NOTES_MAX_CHARS,
+  NOTES_TOO_LONG,
+} from "@/data/project-limits";
 import { CallsData } from "@/data/services/calls";
 import { DataEvents } from "@/data/services/data-events";
 import { DataLayerMock } from "@/data/services/layers";
@@ -462,6 +469,67 @@ function dataContract(
           assert.strictEqual(
             (yield* projects.update(project.id, { name: "Р" })).notes,
             "Бюджет отдельно"
+          );
+        })
+      )
+    );
+
+    it.effect("caps the notes and the description, and writes nothing", () =>
+      run(
+        Effect.gen(function* () {
+          const projects = yield* ProjectsData;
+          const readChanges = yield* recordChanges;
+          // Exactly at the limit, counted after trimming, in characters.
+          const project = yield* projects.create({
+            description: ` ${"д".repeat(DESCRIPTION_MAX_CHARS)} `,
+            name: "Ромашка",
+            notes: `${"🙂".repeat(NOTES_MAX_CHARS)}\n`,
+          });
+          assert.strictEqual(
+            charCount(project.description),
+            DESCRIPTION_MAX_CHARS
+          );
+          assert.strictEqual(charCount(project.notes), NOTES_MAX_CHARS);
+          const before = (yield* readChanges).length;
+
+          const failure = (effect: Effect.Effect<unknown, BackendError>) =>
+            Effect.map(Effect.flip(effect), (error) => [
+              error.kind,
+              error.message,
+            ]);
+          const longNotes = "з".repeat(NOTES_MAX_CHARS + 1);
+          const longDescription = "о".repeat(DESCRIPTION_MAX_CHARS + 1);
+          assert.deepStrictEqual(
+            yield* failure(projects.update(project.id, { notes: longNotes })),
+            ["Invalid", NOTES_TOO_LONG]
+          );
+          assert.deepStrictEqual(
+            yield* failure(
+              projects.update(project.id, { description: longDescription })
+            ),
+            ["Invalid", DESCRIPTION_TOO_LONG]
+          );
+          const count = (yield* projects.list).length;
+          assert.deepStrictEqual(
+            yield* failure(
+              projects.create({ name: "Длинный", notes: longNotes })
+            ),
+            ["Invalid", NOTES_TOO_LONG]
+          );
+          assert.deepStrictEqual(
+            yield* failure(
+              projects.create({
+                description: longDescription,
+                name: "Длинный",
+              })
+            ),
+            ["Invalid", DESCRIPTION_TOO_LONG]
+          );
+          assert.strictEqual((yield* projects.list).length, count);
+          assert.strictEqual((yield* readChanges).length, before);
+          assert.strictEqual(
+            charCount((yield* projects.get(project.id)).notes),
+            NOTES_MAX_CHARS
           );
         })
       )

@@ -14,6 +14,14 @@ mod vad;
 
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent};
 
+/// The hidden mode of the app binary that reads one PDF or DOCX in a child
+/// process (`--extract-text <path> <ext>`, projects-people-brief design.md,
+/// decision 2): its exit code after it printed the text, `None` for a
+/// normal start.
+pub fn extract_text_child() -> Option<i32> {
+    projects::sources::isolated::child_main()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = bindings::builder();

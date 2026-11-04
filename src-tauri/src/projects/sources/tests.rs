@@ -326,6 +326,46 @@ fn removing_a_document_removes_its_copy() {
     assert!(matches!(error, CommandError::NotFound { .. }));
 }
 
+/// «Удалить документ» (design.md, decision 7): the brief saw the `ready`
+/// documents only, so removing one of them outdates it and removing a scan
+/// or a failed one does not.
+#[test]
+fn removing_a_ready_document_outdates_the_brief_and_a_scan_does_not() {
+    use crate::storage::projects::BriefState;
+
+    let fx = Fixture::new();
+    let project = fx.project("Телемедиа");
+    let ready = added(fx.add_one(&project, &fx.original("ТЗ.md", b"text")));
+    let scan = added(fx.add_one(&project, &fx.original("скан.pdf", &fixtures::pdf(&[None]))));
+    let broken = added(fx.add_one(&project, &fx.original("битый.docx", b"not a zip")));
+    assert_eq!(broken.status, SourceStatus::Failed);
+    let id = project.id.clone();
+    block_on(fx.storage.write(&fx.sink, move |db| {
+        let inputs = brief_inputs::read(db, &id)?;
+        projects::save_brief(
+            db,
+            &id,
+            &serde_json::json!({ "product": "x" }),
+            &inputs.fingerprint,
+            false,
+        )
+    }))
+    .unwrap();
+    let state = || {
+        let id = project.id.clone();
+        block_on(fx.storage.read(move |db| projects::get(db, &id)))
+            .unwrap()
+            .brief_state
+    };
+    assert_eq!(state(), BriefState::Fresh);
+
+    block_on(remove(&fx.storage, &fx.sink, scan.id.clone())).unwrap();
+    block_on(remove(&fx.storage, &fx.sink, broken.id.clone())).unwrap();
+    assert_eq!(state(), BriefState::Fresh);
+    block_on(remove(&fx.storage, &fx.sink, ready.id.clone())).unwrap();
+    assert_eq!(state(), BriefState::Outdated);
+}
+
 #[test]
 fn a_scan_does_not_change_the_inputs_of_the_brief() {
     let fx = Fixture::new();

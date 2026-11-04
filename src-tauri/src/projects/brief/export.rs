@@ -1,7 +1,13 @@
 //! The brief as Markdown in a folder the manager picked (design.md,
 //! decision 9): `<Проект> — бриф.md` with the sections of the project page.
+//! An existing file is never overwritten: the next free name `… (2).md`,
+//! `… (3).md` is taken instead, and a symlink at the name is refused.
 
-use std::path::PathBuf;
+use std::{
+    fs::OpenOptions,
+    io::{self, Write as _},
+    path::{Path, PathBuf},
+};
 
 use serde_json::Value;
 
@@ -12,6 +18,8 @@ use crate::{
 
 /// Characters Windows or macOS do not take in a file name.
 const FORBIDDEN: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+/// How many numbered names are tried before giving up.
+const MAX_COPIES: u32 = 999;
 
 /// Writes the project's brief into `folder` and returns the file's path.
 /// `NotFound` for an unknown project, `Invalid` without a brief or a
@@ -41,20 +49,52 @@ pub async fn export(storage: &Storage, project_id: &str, folder: &str) -> Comman
             folder.display()
         )));
     }
-    let path = folder.join(file_name(&name));
-    let written = path.clone();
-    tauri::async_runtime::spawn_blocking(move || std::fs::write(&written, markdown))
+    let path = tauri::async_runtime::spawn_blocking(move || write_new(&folder, &name, &markdown))
         .await
-        .map_err(|error| CommandError::external(error.to_string()))?
-        .map_err(|error| {
-            CommandError::external(format!("Не удалось записать {}: {error}", path.display()))
-        })?;
+        .map_err(|error| CommandError::external(error.to_string()))??;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// Writes `contents` into a new file [`file_name`] in `folder`, the next
+/// number when the name is taken: `create_new` never truncates an existing
+/// file and never follows a symlink. A symlink at a name is refused
+/// (`Invalid`): it would point the export somewhere else.
+fn write_new(folder: &Path, project: &str, contents: &str) -> CommandResult<PathBuf> {
+    let cannot = |path: &Path, error: io::Error| {
+        CommandError::external(format!("Не удалось записать {}: {error}", path.display()))
+    };
+    for copy in 1..=MAX_COPIES {
+        let path = folder.join(file_name(project, copy));
+        let file = OpenOptions::new().write(true).create_new(true).open(&path);
+        match file {
+            Ok(mut file) => {
+                file.write_all(contents.as_bytes())
+                    .and_then(|()| file.sync_all())
+                    .map_err(|error| cannot(&path, error))?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let link = std::fs::symlink_metadata(&path)
+                    .is_ok_and(|meta| meta.file_type().is_symlink());
+                if link {
+                    return Err(CommandError::invalid(format!(
+                        "{} — ссылка на другой файл, бриф туда не записан",
+                        path.display()
+                    )));
+                }
+            }
+            Err(error) => return Err(cannot(&path, error)),
+        }
+    }
+    Err(CommandError::invalid(format!(
+        "В папке уже есть {MAX_COPIES} брифов этого проекта: удалите старые"
+    )))
 }
 
 /// `<Проект> — бриф.md`, without what Windows and macOS forbid: `<>:"/\|?*`,
 /// control characters, and dots or spaces at the end of the name.
-pub fn file_name(project: &str) -> String {
+/// `copy` 1 is the name itself, the next ones are `<Проект> — бриф (2).md`…
+pub fn file_name(project: &str, copy: u32) -> String {
     let cleaned: String = project
         .chars()
         .filter(|char| !char.is_control() && !FORBIDDEN.contains(char))
@@ -66,7 +106,11 @@ pub fn file_name(project: &str) -> String {
     } else {
         cleaned
     };
-    format!("{project} — бриф.md")
+    if copy == 1 {
+        format!("{project} — бриф.md")
+    } else {
+        format!("{project} — бриф ({copy}).md")
+    }
 }
 
 /// The brief read loosely (a brief saved by `projects_update` may lack
