@@ -7,6 +7,8 @@ import { AgentStatus } from "@/components/ui/recording-indicator";
 import { TopicAnchor } from "@/components/ui/topic-anchor";
 import { cn } from "@/lib/utils";
 
+import { useCallActions } from "../call-actions";
+
 import type { AgentStatusData, TopicAnchorData } from "../types";
 
 /*
@@ -40,19 +42,28 @@ export function topicSectionId(prefix: string, topicId: string) {
 
 /**
  * Sticky row of topic anchors with the agent status on the right. With
- * `sectionIdPrefix` an anchor scrolls the panel to its topic.
+ * `sectionIdPrefix` an anchor scrolls the panel to its topic. After
+ * "Вернуться к темам" the last anchor brings the final check back
+ * (`finalCheckCount`). `usage` is the share of the Claude limit, muted
+ * before the status.
  */
 export function QuestionsNav({
   agent,
   anchors,
   className,
+  finalCheckCount,
   sectionIdPrefix,
+  usage,
 }: {
   agent: AgentStatusData;
   anchors: TopicAnchorData[];
   className?: string;
+  finalCheckCount?: number;
   sectionIdPrefix?: string;
+  usage?: string;
 }) {
+  const { onReturnToFinalCheck } = useCallActions();
+
   return (
     <div
       className={cn(
@@ -71,10 +82,29 @@ export function QuestionsNav({
             sectionIdPrefix={sectionIdPrefix}
           />
         ))}
+        {finalCheckCount === undefined ? null : (
+          <TopicAnchor
+            count={finalCheckCount}
+            countTone="neutral"
+            onClick={onReturnToFinalCheck}
+          >
+            К финальной проверке
+          </TopicAnchor>
+        )}
       </nav>
-      <AgentStatus state={agent.state} tone={agent.tone}>
-        {agent.label}
-      </AgentStatus>
+      <div className="flex shrink-0 items-center gap-3">
+        {usage ? (
+          <span
+            className="text-muted-foreground text-sm whitespace-nowrap tabular-nums"
+            title="Сколько использовано из лимита подписки Claude"
+          >
+            {usage}
+          </span>
+        ) : null}
+        <AgentStatus state={agent.state} tone={agent.tone}>
+          {agent.label}
+        </AgentStatus>
+      </div>
     </div>
   );
 }

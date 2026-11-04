@@ -20,19 +20,26 @@ import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
 import {
+  actOnQuestion,
+  type CallAgentUpdate,
   collectSummary,
+  questionsFromBackend,
   reconnectSource,
   requestSystemAudio,
   retryAgent,
+  retryAgentNow,
+  subscribeToCallAgent,
   subscribeToCallFeed,
   waitForTranscript,
 } from "../api";
+import { FINAL_CHECK_TOPIC_ID } from "../components/call-questions";
 import {
   FEED_LENGTH,
   feedCheckpoint,
   RECONNECTED_GITHUB,
 } from "../feed-script";
 import {
+  backendCall,
   createLiveCall,
   type LiveCallAction,
   type LiveCallState,
@@ -51,10 +58,14 @@ import type {
 
 /*
  * /call: the live call window. The feed from ../api streams the transcript,
- * topics, questions and context (in Tauri the transcript is the
- * recognizer's, the rest scripted); clicks change the questions
- * locally; "Завершить" stops the recording, collects the summary and
- * opens it.
+ * topics, questions and context; clicks change the questions locally;
+ * "Завершить" stops the recording, collects the summary and opens it.
+ *
+ * In Tauri the transcript is the recognizer's and the questions the
+ * backend's: the call state of the session's recording and the agent's
+ * status come from `subscribeToCallAgent`, the quick actions and
+ * «Повторить» go to the backend, which answers with a new state. Only
+ * "Вернуться к темам" stays on the screen.
  *
  * "Микрофон освободился" comes from the microphone watch while the call is
  * live: the app's name and the time it let go, the countdown from the
@@ -108,24 +119,47 @@ function feedStart(demo: CallDemoState | undefined) {
 }
 
 /**
- * The window as it opens. In Tauri the transcript is the recognizer's, so
- * the starting call has none of the demo's phrases.
+ * The window as it opens. In Tauri the transcript is the recognizer's and
+ * the questions the backend's, so the starting call has none of the demo's.
  */
 function initialState(demo: CallDemoState | undefined): LiveCallState {
   if (demo) {
     return createLiveCall(CALL_SCREENS[demo]);
   }
-  const starting = startingCall();
-  if (!inTauri) {
-    return starting;
-  }
-  return {
-    ...starting,
-    data: {
-      ...starting.data,
-      transcript: { ...starting.data.transcript, items: [] },
-    },
+  return questionsFromBackend ? backendCall() : startingCall();
+}
+
+/** A backend update into the window. */
+function agentHandler(
+  dispatch: (action: LiveCallAction) => void,
+  startedAt: number | undefined
+) {
+  return (update: CallAgentUpdate) => {
+    const now = Date.now();
+    if (update.type === "status") {
+      dispatch({ now, status: update.status, type: "agent-status" });
+      return;
+    }
+    dispatch({
+      agent: update.agent,
+      now,
+      startedAt,
+      state: update.state,
+      type: "call-state",
+    });
   };
+}
+
+function actionFailed(description: string | null) {
+  if (description !== null) {
+    toast.add({ description, title: "Не получилось", type: "error" });
+  }
+}
+
+/** Id of the question pinned in the topic, if any. */
+function pinnedIn(state: LiveCallState, topicId: string) {
+  const { current } = state.data.questions;
+  return current?.id === topicId ? current.pinned?.id : undefined;
 }
 
 export function CallPage() {
@@ -177,8 +211,15 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const { autoEnd } = useSettings();
   const signal = useRecordingSignal();
 
-  const { callId } = session;
+  const { callId, recordingId, startedAt } = session;
   const finishing = Boolean(state.data.finishing);
+  const fromBackend = state.backend !== null;
+
+  // The latest state for the handlers that read it (the pinned question).
+  const latest = useRef(state);
+  useEffect(() => {
+    latest.current = state;
+  }, [state]);
   const projectName = project?.name ?? state.data.call.project;
 
   // Opened without a call in progress: start the demo call. Either way the
@@ -221,6 +262,14 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       },
     });
   }, [finishing, playFeedEvent]);
+
+  // The backend's questions of the session's recording
+  useEffect(() => {
+    if (!(fromBackend && recordingId)) {
+      return;
+    }
+    return subscribeToCallAgent(recordingId, agentHandler(dispatch, startedAt));
+  }, [fromBackend, recordingId, startedAt]);
 
   // The meeting app and the microphone: a release while the call is live
   // offers to end it, the app taking the microphone back hides the offer.
@@ -276,6 +325,20 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
 
   const retry = useCallback(() => {
     dispatch({ type: "agent-retrying" });
+    if (fromBackend) {
+      // The agent's next status says how it went; a refused retry gets
+      // none, so the indicator goes back to the last one.
+      if (recordingId) {
+        const failed = (description: string | null) => {
+          if (description !== null) {
+            dispatch({ now: Date.now(), type: "agent-retry-failed" });
+          }
+          actionFailed(description);
+        };
+        retryAgentNow(recordingId).then(failed, failed);
+      }
+      return;
+    }
     track(
       retryAgent(() => {
         dispatch({ type: "agent-recovered" });
@@ -286,7 +349,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
         });
       })
     );
-  }, [track]);
+  }, [fromBackend, recordingId, track]);
 
   // Zero on the mic countdown ends the call; zero on the agent's retries
   const micExpired = state.micLeft === 0;
@@ -296,7 +359,8 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     }
   }, [end, micExpired]);
 
-  const autoRetry = state.agentRetryIn === 0;
+  // The backend retries by itself; the demo agent needs the nudge.
+  const autoRetry = state.agentRetryIn === 0 && !fromBackend;
   useEffect(() => {
     if (autoRetry) {
       retry();
@@ -372,20 +436,50 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   }, [callId, router]);
 
   const onQuestionAction = useCallback(
-    (topicId: string, questionId: string, action: QuestionQuickAction) =>
-      dispatch({ action, questionId, topicId, type: "question" }),
-    []
+    (topicId: string, questionId: string, action: QuestionQuickAction) => {
+      if (!fromBackend) {
+        dispatch({ action, questionId, topicId, type: "question" });
+        return;
+      }
+      // One pinned question a topic, as on the screen: the old one goes
+      // back to the list first.
+      const pinned =
+        action === "pin" && topicId !== FINAL_CHECK_TOPIC_ID
+          ? pinnedIn(latest.current, topicId)
+          : undefined;
+      const unpinFirst = pinned
+        ? actOnQuestion(pinned, "unpin")
+        : Promise.resolve(null);
+      unpinFirst
+        .then((failed) => failed ?? actOnQuestion(questionId, action))
+        .then(actionFailed, actionFailed);
+    },
+    [fromBackend]
   );
 
   const onRestore = useCallback(
-    (topicId: string, entryId: string) =>
-      dispatch({ entryId, topicId, type: "restore" }),
-    []
+    (topicId: string, entryId: string) => {
+      if (fromBackend) {
+        actOnQuestion(entryId, "restore").then(actionFailed, actionFailed);
+        return;
+      }
+      dispatch({ entryId, topicId, type: "restore" });
+    },
+    [fromBackend]
   );
 
   const onUnpin = useCallback(
-    (topicId: string) => dispatch({ topicId, type: "unpin" }),
-    []
+    (topicId: string) => {
+      if (!fromBackend) {
+        dispatch({ topicId, type: "unpin" });
+        return;
+      }
+      const pinned = pinnedIn(latest.current, topicId);
+      if (pinned) {
+        actOnQuestion(pinned, "unpin").then(actionFailed, actionFailed);
+      }
+    },
+    [fromBackend]
   );
 
   const actions = useMemo<CallScreenActions>(
@@ -399,6 +493,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       onQuestionAction,
       onReconnect,
       onRestore,
+      onReturnToFinalCheck: () => dispatch({ type: "return-final-check" }),
       onToggleTranscript: () => dispatch({ type: "toggle-transcript" }),
       onUnpin,
     }),

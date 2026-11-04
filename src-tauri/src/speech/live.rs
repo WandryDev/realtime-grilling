@@ -148,6 +148,7 @@ impl PhraseSink for TranscriptSink {
     fn recording_started(&self, recording_id: &str) -> TranscriptionStatus {
         let status = self.initial_status();
         self.session(recording_id, status);
+        self.0.host.live_started(recording_id);
         status
     }
 

@@ -39,6 +39,14 @@ pub const SPEECH_BENCHMARK: &str = "speechBenchmark";
 /// «Язык звонка»: `ru`, `uk` or `both` (speech-recognition design.md,
 /// decision 7). Not stored by default: the frontend's default is `ru`.
 pub const CALL_LANGUAGE: &str = "callLanguage";
+/// «Сколько вопросов показывать»: `"1"`, `"3"` or `"5"` (agent-fast-loop
+/// design.md, decision 7). Stored as the frontend writes it.
+pub const QUESTION_COUNT: &str = "questionCount";
+/// Visible questions when `questionCount` is missing or unreadable.
+pub const DEFAULT_QUESTION_COUNT: usize = 3;
+/// «Как часто предлагать вопросы»: `rare`, `normal` or `often`
+/// (agent-fast-loop design.md, decision 2). Stored as the frontend writes it.
+pub const QUESTION_FREQUENCY: &str = "questionFrequency";
 
 pub const SETTINGS_ID: &str = "settings";
 
@@ -209,4 +217,31 @@ pub fn call_language(settings: &SettingsMap) -> CallLanguage {
         .and_then(Value::as_str)
         .and_then(CallLanguage::parse)
         .unwrap_or_default()
+}
+
+/// The least time between the starts of two agent calls by
+/// `questionFrequency`: `rare` 45 s, `normal` 20 s, `often` 10 s. Anything
+/// else is `normal`.
+pub fn question_interval(settings: &SettingsMap) -> std::time::Duration {
+    let seconds = match settings.get(QUESTION_FREQUENCY).and_then(Value::as_str) {
+        Some("rare") => 45,
+        Some("often") => 10,
+        _ => 20,
+    };
+    std::time::Duration::from_secs(seconds)
+}
+
+/// `questionCount` as a number of visible questions: `1`, `3` or `5`, as a
+/// string (how the frontend stores it) or a number. Anything else is 3.
+pub fn question_count(settings: &SettingsMap) -> usize {
+    let count = match settings.get(QUESTION_COUNT) {
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        Some(Value::Number(number)) => number.as_u64(),
+        _ => None,
+    };
+    match count {
+        Some(1) => 1,
+        Some(5) => 5,
+        _ => DEFAULT_QUESTION_COUNT,
+    }
 }

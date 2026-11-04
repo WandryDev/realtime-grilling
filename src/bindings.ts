@@ -32,21 +32,6 @@ export const commands = {
 	/**  Adds a person of the call's project; another project's person is `Invalid`. */
 	callParticipantsAdd: (callId: string, personId: string) => typedError<Call, CommandError>(__TAURI_INVOKE("call_participants_add", { callId, personId })),
 	callParticipantsRemove: (callId: string, personId: string) => typedError<Call, CommandError>(__TAURI_INVOKE("call_participants_remove", { callId, personId })),
-	topicsList: (callId: string) => typedError<Topic[], CommandError>(__TAURI_INVOKE("topics_list", { callId })),
-	topicsGet: (id: string) => typedError<Topic, CommandError>(__TAURI_INVOKE("topics_get", { id })),
-	topicsCreate: (input: TopicCreate) => typedError<Topic, CommandError>(__TAURI_INVOKE("topics_create", { input })),
-	topicsUpdate: (id: string, patch: TopicUpdate) => typedError<Topic, CommandError>(__TAURI_INVOKE("topics_update", { id, patch })),
-	topicsDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("topics_delete", { id })),
-	taskCardsList: (callId: string) => typedError<TaskCard[], CommandError>(__TAURI_INVOKE("task_cards_list", { callId })),
-	taskCardsGet: (id: string) => typedError<TaskCard, CommandError>(__TAURI_INVOKE("task_cards_get", { id })),
-	taskCardsCreate: (input: TaskCardCreate) => typedError<TaskCard, CommandError>(__TAURI_INVOKE("task_cards_create", { input })),
-	taskCardsUpdate: (id: string, patch: TaskCardUpdate) => typedError<TaskCard, CommandError>(__TAURI_INVOKE("task_cards_update", { id, patch })),
-	taskCardsDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("task_cards_delete", { id })),
-	questionsList: (callId: string) => typedError<Question[], CommandError>(__TAURI_INVOKE("questions_list", { callId })),
-	questionsGet: (id: string) => typedError<Question, CommandError>(__TAURI_INVOKE("questions_get", { id })),
-	questionsCreate: (input: QuestionCreate) => typedError<Question, CommandError>(__TAURI_INVOKE("questions_create", { input })),
-	questionsUpdate: (id: string, patch: QuestionUpdate) => typedError<Question, CommandError>(__TAURI_INVOKE("questions_update", { id, patch })),
-	questionsDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("questions_delete", { id })),
 	/**
 	 *  The transcripts of a call's recordings, recording after recording, both
 	 *  channels in time order; refined where the second pass is done.
@@ -65,6 +50,25 @@ export const commands = {
 	 *  `NotFound` for an unknown recording.
 	 */
 	transcriptState: (recordingId: string) => typedError<TranscriptState, CommandError>(__TAURI_INVOKE("transcript_state", { recordingId })),
+	/**
+	 *  Everything a window shows about a recording's call: topics, cards,
+	 *  questions with their place in the visible list (`visible`, `rank` 0 =
+	 *  the main one), the final check, and the agent's state. Read again on
+	 *  `CallStateChanged`. `NotFound` for an unknown recording.
+	 */
+	callStateGet: (recordingId: string) => typedError<CallStateView, CommandError>(__TAURI_INVOKE("call_state_get", { recordingId })),
+	/**
+	 *  «Закрепить» / «Открепить» / «Скрыть» / «Задал» / «Вернуть» on a
+	 *  question; every window gets `CallStateChanged`. `NotFound` for an
+	 *  unknown question, `Invalid` for an action its state doesn't allow.
+	 */
+	questionsAct: (id: string, action: QuestionAction) => typedError<null, CommandError>(__TAURI_INVOKE("questions_act", { id, action })),
+	/**
+	 *  «Повторить»: calls the agent of the recording now, or checks it again
+	 *  when it was not ready. `NotFound` when the recording's live pass doesn't
+	 *  run.
+	 */
+	agentRetry: (recordingId: string) => typedError<null, CommandError>(__TAURI_INVOKE("agent_retry", { recordingId })),
 	/**
 	 *  Stored preferences over the defaults of the keys Rust acts on
 	 *  (`onboardingCompleted`, `launchAtLogin`, `hideOnShare`, `shortcuts`,
@@ -260,9 +264,11 @@ export const commands = {
 /** Events */
 export const events = {
 	agentInstallProgress: makeEvent<AgentInstallProgress, AgentInstallProgress>("agent-install-progress"),
+	agentStatus: makeEvent<AgentStatus, AgentStatus>("agent-status"),
 	audioLevel: makeEvent<AudioLevel, AudioLevel>("audio-level"),
 	audioLevelStopped: makeEvent<AudioLevelStopped, AudioLevelStopped>("audio-level-stopped"),
 	callSessionChanged: makeEvent<CallSessionChanged, CallSessionChanged>("call-session-changed"),
+	callStateChanged: makeEvent<CallStateChanged, CallStateChanged>("call-state-changed"),
 	dataChanged: makeEvent<DataChanged, DataChanged>("data-changed"),
 	micActivityChanged: makeEvent<MicActivityChanged, MicActivityChanged>("mic-activity-changed"),
 	navigate: makeEvent<Navigate, Navigate>("navigate"),
@@ -286,11 +292,43 @@ export type AgentInstallProgress = {
 	progress: number,
 };
 
+/**  Where the agent of a recording is. */
+export type AgentLoopState = 
+/**  Waits for the next phrase of «Остальные». */
+{ kind: "idle" } | 
+/**  A call runs. */
+{ kind: "thinking" } | 
+/**
+ *  The last call failed. `retryAt` (Unix ms): when the next call starts
+ *  by itself; `null` when it waits for `agent_retry`.
+ */
+{ kind: "error"; message: string; retryAt: number | null } | 
+/**
+ *  Claude Code is not signed in: no calls until it is (a status check
+ *  in Settings, or `agent_retry`).
+ */
+{ kind: "needsLogin" } | 
+/**
+ *  The subscription limit is used up; `resetsAt` (Unix ms) when known.
+ *  Calls resume after it.
+ */
+{ kind: "rateLimited"; resetsAt: number | null };
+
 export type AgentState = { status: "notInstalled" } | { status: "needsLogin"; version: string } | { status: "ready"; version: string; 
 /**  `pro`, `max`, `team`…; `null` when the CLI doesn't say. */
 subscriptionType: string | null } | 
 /**  The text for "Скопировать для поддержки". */
 { status: "error"; message: string };
+
+/**
+ *  The agent's state for a recording, with the last known share of the
+ *  subscription limit used (0–1).
+ */
+export type AgentStatus = {
+	recordingId: string,
+	state: AgentLoopState,
+	utilization?: number | null,
+};
 
 /**
  *  The level of a source, ~10 times a second, to the windows that
@@ -409,6 +447,37 @@ export type CallSessionChanged = {
 
 export type CallSessionStatus = "idle" | "live" | "finishing";
 
+/**  Everything the windows and the agent need about a recording's call. */
+export type CallState = {
+	recordingId: string,
+	/**  In order. */
+	topics: Topic[],
+	currentTopicId: string | null,
+	/**  In topic order. */
+	cards: TaskCard[],
+	/**  Every question of the recording, oldest first. */
+	questions: Question[],
+	/**  Set once the agent started the final check. */
+	finalCheck: FinalCheck | null,
+};
+
+/**
+ *  The call state of a recording changed (a patch was applied, a quick
+ *  action or `questionCount` changed the list): read `call_state_get`
+ *  again.
+ */
+export type CallStateChanged = {
+	recordingId: string,
+};
+
+/**
+ *  `call_state_get`: the whole state of the recording's call and its
+ *  agent.
+ */
+export type CallStateView = {
+	agent: AgentStatus,
+} & CallState;
+
 export type CallStatus = 
 /**  Recording. */
 "live" | 
@@ -440,6 +509,35 @@ export type CaptureFailure =
 "noDevice" | 
 /**  The device exists but could not be opened. */
 "busy";
+
+/**  A field of a task card with what it is based on. */
+export type CardField = {
+	field: CardLens,
+	value: string,
+	evidence: Evidence[],
+	updatedAt: number,
+};
+
+/**
+ *  A lens of the task card (`docs/concept.md`): what a card field, and a
+ *  question about it, is about. Stable ascii ids; the screens show them in
+ *  Russian.
+ */
+export type CardLens = 
+/**  Цель: why the business needs it. */
+"goal" | 
+/**  Пользователи: who uses it and whom it touches. */
+"users" | 
+/**  Сценарии: the main flows. */
+"scenarios" | 
+/**  Крайние случаи. */
+"edgeCases" | 
+/**  Интеграции: systems and data. */
+"integrations" | 
+/**  Ограничения: deadlines, budget, law, technology. */
+"constraints" | 
+/**  Критерии готовности. */
+"acceptance";
 
 export type Change = "created" | "updated" | "deleted";
 
@@ -512,6 +610,45 @@ export type ErrorReason =
 "http" | 
 /**  The file is installed but whisper.cpp did not load it. */
 "load";
+
+/**
+ *  Where a question, a card field or an answer comes from: the source and a
+ *  short quote of it.
+ */
+export type Evidence = {
+	source: EvidenceSource,
+	id: string,
+	quote: string,
+};
+
+/**  What a quote comes from. */
+export type EvidenceSource = 
+/**  A transcript segment of the recording (`id`: the segment id). */
+"segment" | 
+/**  The project: its description `P1` or a brief item `B1…Bn`. */
+"project";
+
+/**
+ *  The final check (decision 8): the most important open questions of all
+ *  topics.
+ */
+export type FinalCheck = {
+	startedAt: number,
+	/**
+	 *  Top `questionCount` open questions of all topics by priority, then
+	 *  oldest first.
+	 */
+	questionIds: string[],
+};
+
+/**  Why a question is asked. */
+export type GapType = 
+/**  Nothing is known about the card field yet. */
+"empty" | 
+/**  The client said something that is only assumed. */
+"assumption" | 
+/**  Two phrases of the client disagree; the evidence names both. */
+"contradiction";
 
 export type InstallStage = "downloading" | "installing" | 
 /**  The installer finished; the app checks the CLI. */
@@ -650,51 +787,45 @@ export type ProjectUpdate = {
 
 export type Question = {
 	id: string,
-	callId: string,
+	recordingId: string,
+	callId: string | null,
 	topicId: string | null,
 	cardId: string | null,
 	text: string,
-	status: QuestionStatus,
-	/**  Higher comes first. */
+	description: string,
+	/**  The field of the topic's card the question is about. */
+	cardField: CardLens | null,
+	gapType: GapType,
+	/**  1–3, higher comes first. */
 	priority: number,
+	evidence: Evidence[],
+	/**  The quote of the answer, once `answered`. */
+	answerEvidence: Evidence[] | null,
+	status: QuestionStatus,
+	pinned: boolean,
+	/**  When it became visible; `null` while it waits or after it left. */
+	shownAt: number | null,
+	/**  In the visible list of the call window and the overlay. */
+	visible: boolean,
 	/**
-	 *  Why the agent asks: quotes, contradictions, sources. Its shape belongs
-	 *  to the frontend for now.
+	 *  Place in the visible list from 0 (the main question); `null` when
+	 *  not visible.
 	 */
-	evidence: Value,
+	rank: number | null,
 	createdAt: number,
 	updatedAt: number,
 };
 
-export type QuestionCreate = {
-	callId: string,
-	text: string,
-	/**  A topic of the same call. */
-	topicId?: string | null,
-	/**  A task card of the same call. */
-	cardId?: string | null,
-	/**  `open` when absent. */
-	status?: QuestionStatus | null,
-	priority?: number | null,
-	/**  `[]` when absent. */
-	evidence?: Value | null,
-};
+/**  «Закрепить», «Открепить», «Скрыть», «Задал», «Вернуть». */
+export type QuestionAction = "pin" | "unpin" | "hide" | "asked" | "restore";
 
-export type QuestionStatus = "open" | "answered" | "dismissed";
-
-export type QuestionUpdate = {
-	text?: string | null,
-	status?: QuestionStatus | null,
-	priority?: number | null,
-	evidence?: Value | null,
-	/**
-	 *  Moves the question to another topic of the same call; `null`
-	 *  detaches it, absent leaves it as it is.
-	 */
-	topicId?: string | null,
-	/**  Like `topicId`, for a task card of the same call. */
-	cardId?: string | null,
-};
+export type QuestionStatus = "open" | 
+/**  The agent saw the answer (`answerEvidence`). */
+"answered" | 
+/**  The manager hid it; the agent must not suggest it again. */
+"hidden" | 
+/**  The manager marked it asked. */
+"asked";
 
 /**
  *  Sent to every window on every change of [`RecordingStatus`]: start,
@@ -805,62 +936,33 @@ export type SpeechModel = {
  */
 export type SpeechModelChanged = SpeechModel;
 
-/**  The task card of a topic. */
+/**  The task card of a topic (one per topic). */
 export type TaskCard = {
 	id: string,
 	topicId: string,
-	/**  The topic's call. */
-	callId: string,
+	recordingId: string,
+	callId: string | null,
 	title: string,
-	/**
-	 *  The card's fields with their facts. Its shape belongs to the frontend
-	 *  until the agent writes cards (tasks 6 and 8).
-	 */
-	fields: Value,
+	/**  In the order they were first set. */
+	fields: CardField[],
 	decision: TaskCardDecision,
 	createdAt: number,
 	updatedAt: number,
 };
 
-export type TaskCardCreate = {
-	topicId: string,
-	title?: string | null,
-	/**  `[]` when absent. */
-	fields?: Value | null,
-	/**  `pending` when absent. */
-	decision?: TaskCardDecision | null,
-};
-
 export type TaskCardDecision = "pending" | "accepted" | "discarded";
 
-export type TaskCardUpdate = {
-	title?: string | null,
-	/**  Replaces all fields. */
-	fields?: Value | null,
-	decision?: TaskCardDecision | null,
-};
-
-/**  A topic of a call: its task card and questions hang off it. */
+/**  A topic of the conversation. */
 export type Topic = {
 	id: string,
-	callId: string,
+	recordingId: string,
+	/**  The recording's call when the topic was written. */
+	callId: string | null,
 	title: string,
-	/**  Order within the call, ascending. */
+	/**  Order within the recording, ascending. */
 	position: number,
 	createdAt: number,
 	updatedAt: number,
-};
-
-export type TopicCreate = {
-	callId: string,
-	title: string,
-	/**  After the last topic when absent. */
-	position?: number | null,
-};
-
-export type TopicUpdate = {
-	title?: string | null,
-	position?: number | null,
 };
 
 /**

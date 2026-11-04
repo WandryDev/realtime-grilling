@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -142,6 +142,25 @@ describe("/overlay", () => {
     advance(FIRST_QUESTION_MS);
     expect(screen.getByText(FIRST_FEED_QUESTION)).toBeTruthy();
     expect(screen.getByText("слушаю")).toBeTruthy();
+  });
+
+  it("hides a question: the next one takes the main place", () => {
+    open(OverlayPage);
+    const main = "Записывать в CRM сам звонок или только факт и длительность?";
+    const next = "Мобильное приложение входит в первый этап?";
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: main })).getByRole("button", {
+        name: "Скрыть вопрос",
+      })
+    );
+
+    expect(screen.queryByRole("group", { name: main })).toBeNull();
+    expect(
+      within(screen.getByRole("group", { name: next })).getByText(
+        "Новый, только что"
+      )
+    ).toBeTruthy();
   });
 
   it("collapses into the pill and shows new questions under it", () => {

@@ -106,6 +106,74 @@ impl Tree {
     }
 }
 
+/// Where the [`Tree`] of a running call can be reached from outside its
+/// task, so the app's exit kills it at once: after `process::exit` no task
+/// runs and no destructor (`kill_on_drop`) fires, and the CLI, in its own
+/// process group, gets no signal when the app dies. Cheap to clone; all
+/// clones are the same slot.
+#[derive(Clone, Default)]
+pub struct TreeSlot(Arc<Mutex<SlotState>>);
+
+#[derive(Default)]
+struct SlotState {
+    tree: Option<Arc<Tree>>,
+    killed: bool,
+}
+
+impl TreeSlot {
+    fn state(&self) -> std::sync::MutexGuard<'_, SlotState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Keeps `tree` reachable until the guard is dropped (the process has
+    /// ended). A slot killed already kills it at once.
+    pub fn hold(&self, tree: Arc<Tree>) -> HeldTree<'_> {
+        let mut state = self.state();
+        if state.killed {
+            tree.kill();
+        }
+        state.tree = Some(tree);
+        HeldTree(self)
+    }
+
+    /// Kills the tree held now, and any tree held later. Doesn't block.
+    pub fn kill(&self) {
+        let mut state = self.state();
+        state.killed = true;
+        if let Some(tree) = &state.tree {
+            tree.kill();
+        }
+    }
+}
+
+impl std::fmt::Debug for TreeSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state();
+        f.debug_struct("TreeSlot")
+            .field("held", &state.tree.is_some())
+            .field("killed", &state.killed)
+            .finish()
+    }
+}
+
+/// Clones are equal: the same slot.
+impl PartialEq for TreeSlot {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for TreeSlot {}
+
+/// [`TreeSlot::hold`] until dropped.
+pub struct HeldTree<'a>(&'a TreeSlot);
+
+impl Drop for HeldTree<'_> {
+    fn drop(&mut self) {
+        self.0.state().tree = None;
+    }
+}
+
 /// Spawns a command from [`command`] with its [`Tree`].
 pub fn spawn(command: &mut Command) -> io::Result<(Child, Tree)> {
     let child = command.spawn()?;

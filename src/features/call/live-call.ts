@@ -1,5 +1,13 @@
+import type { AgentStatus, CallState } from "@/bindings";
+import { plural } from "@/lib/plural";
 import { routes } from "@/lib/routes";
 
+import {
+  AGENT_LISTENING,
+  toAgentQuestions,
+  toAgentStatusView,
+  withFooters,
+} from "./agent-state";
 import { SUMMARY_STAGES } from "./backend";
 import { FINAL_CHECK_TOPIC_ID } from "./components/call-questions";
 import { CALL_SCREENS } from "./mock";
@@ -25,11 +33,34 @@ import type {
  * State of the live call window and everything that changes it: feed events
  * from ./api, your clicks, the clock. Pure, so the reducer is easy to test;
  * `toScreenData` turns it into the props of <CallScreen>.
+ *
+ * Two sources of questions. The demo script (browser, tests) sends them as
+ * feed events and the clicks change them here, with `stash` for «Вернуть».
+ * In Tauri the backend keeps them (`backend`): every read of its call state
+ * replaces the topics through ./agent-state.ts, the clicks go to the
+ * backend and nothing is stashed.
  */
+
+/** The backend's questions and agent (Tauri). */
+export interface BackendQuestions {
+  /** When the recording started, ms since the epoch: footer times. */
+  startedAt?: number;
+  /** The last call state read; null before the first. */
+  state: CallState | null;
+  /**
+   * The agent's last status from the backend; null before the first. A
+   * «Повторить» the backend refused goes back to it.
+   */
+  status: AgentStatus | null;
+  /** Call second the agent started thinking; null while it doesn't. */
+  thinkingSince: number | null;
+}
 
 export interface LiveCallState {
   /** Seconds before the agent retries by itself ("Сам попробую через"). */
   agentRetryIn: number | null;
+  /** Tauri: the questions are the backend's; null: the demo script's. */
+  backend: BackendQuestions | null;
   /** What the screen draws, minus the ticking numbers. */
   data: CallScreenData;
   /** Call length in seconds. */
@@ -58,6 +89,18 @@ export type LiveCallAction =
   | { topicId: string; type: "unpin" }
   | { type: "toggle-transcript" }
   | { type: "leave-final-check" }
+  | { type: "return-final-check" }
+  | {
+      /** The agent's state read with it, unless a newer status came. */
+      agent?: AgentStatus;
+      /** Now, ms since the epoch. */
+      now: number;
+      /** When the recording started, ms since the epoch. */
+      startedAt?: number;
+      state: CallState;
+      type: "call-state";
+    }
+  | { now: number; status: AgentStatus; type: "agent-status" }
   | {
       /** The app that let the microphone go, if known. */
       app: string | null;
@@ -74,6 +117,8 @@ export type LiveCallAction =
   | { stage: number; type: "finish-stage" }
   | { type: "finish-cancel" }
   | { type: "agent-retrying" }
+  /** The backend refused «Повторить» (the live pass is over, say). */
+  | { now: number; type: "agent-retry-failed" }
   | { type: "agent-recovered" }
   | { itemId: string; type: "reconnect-start" }
   | { item: ContextItem; type: "reconnect-done" }
@@ -87,6 +132,9 @@ const MIC_RELEASED_TITLE = "Микрофон больше не использу�
 const MIC_COUNTDOWN_LABEL = "Завершу сам через";
 
 const NEW_QUESTION_STATUS = "Новый, только что";
+
+/** Thinking this long reads "думаю дольше обычного", not an error. */
+export const SLOW_THINKING_SECONDS = 25;
 
 /* Time */
 
@@ -127,24 +175,13 @@ function wallClock(at: number) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function plural(count: number, one: string, few: string, many: string) {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) {
-    return one;
-  }
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
-    return few;
-  }
-  return many;
-}
-
 /* Initial state */
 
 export function createLiveCall(data: CallScreenData): LiveCallState {
   const { banner } = data.questions;
   return {
     agentRetryIn: parseTime(banner?.hint?.time),
+    backend: null,
     data,
     elapsed: parseTime(data.call.time) ?? 0,
     micLeft: data.micReleased ? parseTime(data.micReleased.countdown) : null,
@@ -158,6 +195,23 @@ export function startingCall() {
   return createLiveCall(CALL_SCREENS.starting);
 }
 
+/**
+ * The call as it starts in Tauri: the transcript is the recognizer's, the
+ * questions the backend's, so none of the demo's yet.
+ */
+export function backendCall(): LiveCallState {
+  const starting = startingCall();
+  return {
+    ...starting,
+    backend: { state: null, status: null, thinkingSince: null },
+    data: {
+      ...starting.data,
+      questions: { agent: LIVE_AGENT, anchors: [], empty: AGENT_LISTENING },
+      transcript: { ...starting.data.transcript, items: [] },
+    },
+  };
+}
+
 /* Questions */
 
 function openCount(topic: TopicData) {
@@ -167,7 +221,7 @@ function openCount(topic: TopicData) {
 /** Anchors follow the topics: final check, current, previous, "Без темы". */
 function withAnchors(questions: QuestionsData): QuestionsData {
   const anchors: TopicAnchorData[] = [];
-  const { current, finalCheck, noTopic, previous } = questions;
+  const { current, earlier = [], finalCheck, noTopic, previous } = questions;
 
   if (finalCheck) {
     anchors.push({
@@ -178,7 +232,7 @@ function withAnchors(questions: QuestionsData): QuestionsData {
       label: finalCheck.title,
     });
   }
-  for (const topic of [current, previous]) {
+  for (const topic of [current, previous, ...earlier]) {
     if (topic) {
       const count = openCount(topic);
       anchors.push({
@@ -685,6 +739,116 @@ function finishDescription(state: LiveCallState, project: string) {
   return `${parts.join(", ")}. Обычно это до минуты, окно можно закрыть.`;
 }
 
+/* The backend's questions (Tauri) */
+
+/** The agent's footers on the transcript, after it changed. */
+function withAgentFooters(state: LiveCallState): LiveCallState {
+  const read = state.backend?.state;
+  if (!read) {
+    return state;
+  }
+  const { transcript } = state.data;
+  return {
+    ...state,
+    data: {
+      ...state.data,
+      transcript: {
+        ...transcript,
+        items: withFooters(
+          transcript.items,
+          read.questions,
+          state.backend?.startedAt
+        ),
+      },
+    },
+  };
+}
+
+/**
+ * A read of the backend's call state replaces the topics, the final check
+ * (kept aside while you are back at the topics) and the footers.
+ */
+function applyCallState(
+  before: LiveCallState,
+  action: Extract<LiveCallAction, { type: "call-state" }>
+): LiveCallState {
+  const state = action.agent
+    ? applyAgentStatus(before, action.agent, action.now)
+    : before;
+  const view = toAgentQuestions(action.state, { now: action.now });
+  const { questions } = state.data;
+  const parked = questions.parkedFinalCheck !== undefined;
+  const next: QuestionsData = {
+    ...questions,
+    current: view.current,
+    earlier: view.earlier,
+    empty: view.empty,
+    finalCheck: parked ? undefined : view.finalCheck,
+    noTopic: view.noTopic,
+    parkedFinalCheck: parked ? view.finalCheck : undefined,
+    previous: view.previous,
+  };
+  return withAgentFooters({
+    ...withQuestions(state, next),
+    backend: {
+      startedAt: action.startedAt,
+      state: action.state,
+      status: state.backend?.status ?? null,
+      thinkingSince: state.backend?.thinkingSince ?? null,
+    },
+  });
+}
+
+/**
+ * "Вернуться к темам" puts the final check aside, "К финальной проверке"
+ * brings it back.
+ */
+function parkFinalCheck(state: LiveCallState, park: boolean): LiveCallState {
+  const { questions } = state.data;
+  const finalCheck = questions.finalCheck ?? questions.parkedFinalCheck;
+  return withQuestions(state, {
+    ...questions,
+    finalCheck: park ? undefined : finalCheck,
+    parkedFinalCheck: park ? finalCheck : undefined,
+  });
+}
+
+/** The agent's state: the status, its banner and the retry countdown. */
+function applyAgentStatus(
+  state: LiveCallState,
+  status: AgentStatus,
+  now: number
+): LiveCallState {
+  const view = toAgentStatusView(status, now);
+  const backend = state.backend ?? {
+    state: null,
+    status: null,
+    thinkingSince: null,
+  };
+  const { questions } = state.data;
+  return {
+    ...state,
+    agentRetryIn: view.retryIn,
+    backend: {
+      ...backend,
+      status,
+      thinkingSince: view.thinking
+        ? (backend.thinkingSince ?? state.elapsed)
+        : null,
+    },
+    data: {
+      ...state.data,
+      questions: {
+        ...questions,
+        agent: view.agent,
+        banner: view.banner,
+        frozen: view.frozen,
+        usage: view.usage,
+      },
+    },
+  };
+}
+
 /* Reducer */
 
 const LIVE_AGENT = { state: "listening" } as const;
@@ -698,7 +862,7 @@ export function liveCallReducer(
 
   switch (action.type) {
     case "feed":
-      return applyFeed(state, action.event);
+      return withAgentFooters(applyFeed(state, action.event));
     case "tick":
       return {
         ...state,
@@ -737,7 +901,13 @@ export function liveCallReducer(
         },
       };
     case "leave-final-check":
-      return withQuestions(state, { ...questions, finalCheck: undefined });
+      return parkFinalCheck(state, true);
+    case "return-final-check":
+      return parkFinalCheck(state, false);
+    case "call-state":
+      return applyCallState(state, action);
+    case "agent-status":
+      return applyAgentStatus(state, action.status, action.now);
     case "mic-released":
       return data.finishing ? state : releaseMic(state, action);
     case "mic-continue":
@@ -802,6 +972,17 @@ export function liveCallReducer(
           },
         },
       };
+    case "agent-retry-failed": {
+      // No status will come: back to the last one, «переподключаюсь» gone.
+      const last = state.backend?.status;
+      if (last) {
+        return applyAgentStatus(state, last, action.now);
+      }
+      return {
+        ...state,
+        data: { ...data, questions: { ...questions, agent: LIVE_AGENT } },
+      };
+    }
     case "agent-recovered":
       return withQuestions(state, {
         ...questions,
@@ -880,10 +1061,29 @@ export function liveCallReducer(
   }
 }
 
+/** The agent's status, calm when it thinks longer than usual. */
+function agentNow(state: LiveCallState): QuestionsData {
+  const since = state.backend?.thinkingSince;
+  const { questions } = state.data;
+  if (
+    since === null ||
+    since === undefined ||
+    questions.agent.state !== "thinking" ||
+    state.elapsed - since < SLOW_THINKING_SECONDS
+  ) {
+    return questions;
+  }
+  return {
+    ...questions,
+    agent: { ...questions.agent, label: "думаю дольше обычного" },
+  };
+}
+
 /** Props of <CallScreen>: the state plus the ticking numbers. */
 export function toScreenData(state: LiveCallState): CallScreenData {
   const { agentRetryIn, data, elapsed, micLeft, micTotal } = state;
   const { banner } = data.questions;
+  const questions = agentNow(state);
 
   return {
     ...data,
@@ -899,12 +1099,12 @@ export function toScreenData(state: LiveCallState): CallScreenData {
     questions:
       banner?.hint?.time && agentRetryIn !== null
         ? {
-            ...data.questions,
+            ...questions,
             banner: {
               ...banner,
               hint: { ...banner.hint, time: formatCountdown(agentRetryIn) },
             },
           }
-        : data.questions,
+        : questions,
   };
 }

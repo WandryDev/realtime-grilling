@@ -33,6 +33,7 @@ const { routes } = await import("@/lib/routes");
 
 const PINNED_LABEL = /^Закреплён вами в/u;
 const FINAL_CHECK_ANCHOR = /^Финальная проверка/u;
+const RETURN_TO_FINAL_CHECK = /^К финальной проверке/u;
 
 const AMO_QUESTION = "Используем текущую интеграцию с amoCRM или делаем новую?";
 
@@ -228,6 +229,21 @@ describe("/call", () => {
     expect(
       screen.queryByRole("button", { name: FINAL_CHECK_ANCHOR })
     ).toBeNull();
+  });
+
+  it("brings the final check back after leaving it", () => {
+    openCall("final-check");
+
+    fireEvent.click(screen.getByRole("button", { name: "Вернуться к темам" }));
+    expect(screen.queryByText("Похоже, разговор идёт к концу")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: RETURN_TO_FINAL_CHECK })
+    );
+    expect(screen.getByText("Похоже, разговор идёт к концу")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: FINAL_CHECK_ANCHOR })
+    ).toBeTruthy();
   });
 
   it("reconnects GitHub", () => {

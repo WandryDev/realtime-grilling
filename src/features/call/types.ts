@@ -32,6 +32,13 @@ export interface TranscriptFooter {
   time?: string;
 }
 
+/** The stored transcript segment a phrase is (the recognizer's feed). */
+export interface TranscriptSegmentRef {
+  id: string;
+  /** Offset from the start of the recording. */
+  startMs: number;
+}
+
 export type TranscriptItem =
   | { id: string; kind: "topic"; time: string; title: string }
   | {
@@ -40,6 +47,8 @@ export type TranscriptItem =
       kind: "client";
       /** The phrase is still being spoken or transcribed. */
       live?: "speaking" | "transcribing";
+      /** The segment the agent's evidence names; none in the demo. */
+      segment?: TranscriptSegmentRef;
       text: string;
     }
   | {
@@ -47,6 +56,7 @@ export type TranscriptItem =
       kind: "me";
       /** Your phrase is still being transcribed. */
       live?: "transcribing";
+      segment?: TranscriptSegmentRef;
       text: string;
     }
   /** Client speech without audio: a dashed placeholder with its length. */
@@ -151,6 +161,8 @@ export interface AgentStatusData {
 }
 
 export interface AgentBannerAction {
+  /** A link instead of a handler: "Настройки → Агент". */
+  href?: string;
   /** What the button does, for the call window's handler. */
   id?: string;
   label: string;
@@ -186,14 +198,24 @@ export interface QuestionsData {
   anchors: TopicAnchorData[];
   banner?: AgentBannerData;
   current?: TopicData;
+  /** Topics before `previous`, the newest first (the agent's topics). */
+  earlier?: TopicData[];
   empty?: ListeningEmptyData;
   finalCheck?: FinalCheckData;
   /** The agent stopped: questions stay readable but gray out. */
   frozen?: boolean;
   /** Question shown in its hover state with the quick actions. */
   hoveredId?: string;
+  /** "Без темы": questions waiting for a convenient moment. */
   noTopic?: TopicData;
+  /**
+   * The final check after "Вернуться к темам": "К финальной проверке"
+   * brings it back.
+   */
+  parkedFinalCheck?: FinalCheckData;
   previous?: TopicData;
+  /** Share of the Claude subscription limit used, "лимит 42%". */
+  usage?: string;
 }
 
 /* Context */
@@ -334,6 +356,8 @@ export interface CallScreenActions {
   onReconnect?: (itemId: string) => void;
   /** "Вернуть" on a history row. */
   onRestore?: (topicId: string, entryId: string) => void;
+  /** "К финальной проверке" after leaving it. */
+  onReturnToFinalCheck?: () => void;
   /** "свернуть" and "Развернуть расшифровку". */
   onToggleTranscript?: () => void;
   /** "Открепить". */

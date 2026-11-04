@@ -1,9 +1,13 @@
-import type { ComponentProps, ReactNode } from "react";
+"use client";
+
+import { type ComponentProps, type ReactNode, useCallback } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Counter } from "@/components/ui/counter";
 import {
   Question,
+  QuestionAction,
+  QuestionActions,
   QuestionContent,
   QuestionDescription,
   QuestionStatus,
@@ -145,18 +149,43 @@ export function PastTopicsButton({
   );
 }
 
+const HIDE_LABEL = "Скрыть вопрос";
+
+/**
+ * "Скрыть вопрос", revealed on hover or keyboard focus of its question:
+ * the agent won't suggest it again, the call window lists it as hidden.
+ */
+function HideAction({ onHide }: { onHide: () => void }) {
+  return (
+    <QuestionActions className="items-center">
+      <QuestionAction
+        aria-label={HIDE_LABEL}
+        className="text-muted-foreground hover:text-foreground"
+        onClick={onHide}
+        size="icon-sm"
+        title={HIDE_LABEL}
+      >
+        <EyeOffIcon />
+      </QuestionAction>
+    </QuestionActions>
+  );
+}
+
 /*
  * The newest question on a soft orange card, a step smaller than in the call
  * window: 16px padding, 20px title. `label` is "Новый, только что" or, in
- * the final check, the question's topic.
+ * the final check, the question's topic. With `onHide` it offers
+ * "Скрыть вопрос".
  */
 export function OverlayMainQuestion({
   className,
   label,
+  onHide,
   title,
 }: {
   className?: string;
   label: ReactNode;
+  onHide?: () => void;
   title: ReactNode;
 }) {
   return (
@@ -169,18 +198,34 @@ export function OverlayMainQuestion({
           {title}
         </QuestionTitle>
       </QuestionContent>
+      {onHide ? <HideAction onHide={onHide} /> : null}
     </Question>
   );
 }
 
-/** A compact question row: topic (final check), title, mark or reason. */
+/** Where the main question would be: the agent is still listening. */
+export function OverlayListening({ className }: { className?: string }) {
+  return (
+    <p className={cn("text-muted-foreground px-4 py-3 text-base", className)}>
+      Слушаю. Вопросы появятся, когда станет понятна тема.
+    </p>
+  );
+}
+
+/**
+ * A compact question row: topic (final check), title, mark or reason.
+ * With `onHide` it offers "Скрыть вопрос".
+ */
 export function OverlayQuestion({
   className,
+  onHide,
   question,
 }: {
   className?: string;
+  onHide?: (id: string) => void;
   question: OverlayQuestionItem;
 }) {
+  const hide = useCallback(() => onHide?.(question.id), [onHide, question.id]);
   return (
     <Question className={cn("px-4", className)} variant="compact">
       <QuestionContent>
@@ -199,6 +244,7 @@ export function OverlayQuestion({
           <QuestionDescription>{question.description}</QuestionDescription>
         ) : null}
       </QuestionContent>
+      {onHide ? <HideAction onHide={hide} /> : null}
     </Question>
   );
 }

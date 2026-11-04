@@ -35,12 +35,13 @@ function duration(ms: number) {
 
 function phraseItem(
   recordingId: string,
-  phrase: Pick<TranscriptSegment, "channel" | "startMs" | "text">
+  phrase: Pick<TranscriptSegment, "channel" | "id" | "startMs" | "text">
 ): TranscriptItem {
   const id = phraseItemId(recordingId, phrase.channel, phrase.startMs);
+  const segment = { id: phrase.id, startMs: phrase.startMs };
   return phrase.channel === "me"
-    ? { id, kind: "me", text: phrase.text }
-    : { id, kind: "client", text: phrase.text };
+    ? { id, kind: "me", segment, text: phrase.text }
+    : { id, kind: "client", segment, text: phrase.text };
 }
 
 function missingLabel(channel: TranscriptChannel) {

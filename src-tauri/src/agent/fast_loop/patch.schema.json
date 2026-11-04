@@ -1,0 +1,120 @@
+{
+  "title": "Patch",
+  "description": "Changes to the call state since the last call. An empty ops list is a valid patch.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ops"],
+  "properties": {
+    "ops": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          { "$ref": "#/$defs/topic" },
+          { "$ref": "#/$defs/card" },
+          { "$ref": "#/$defs/question" },
+          { "$ref": "#/$defs/answered" },
+          { "$ref": "#/$defs/finalCheck" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "topic": {
+      "description": "Create a topic (with title) and make it current, or switch to an existing topic (with topicId).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "action"],
+      "properties": {
+        "op": { "type": "string", "enum": ["topic"] },
+        "action": { "type": "string", "enum": ["create", "switch"] },
+        "topicId": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] }
+      }
+    },
+    "card": {
+      "description": "Set a field of the current topic's task card.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "field", "value", "evidence"],
+      "properties": {
+        "op": { "type": "string", "enum": ["card"] },
+        "field": { "$ref": "#/$defs/cardLens" },
+        "value": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "question": {
+      "description": "A new question about a field of the current topic's card. A contradiction cites both segments.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "title",
+        "description",
+        "cardField",
+        "gapType",
+        "priority",
+        "evidence"
+      ],
+      "properties": {
+        "op": { "type": "string", "enum": ["question"] },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "cardField": { "$ref": "#/$defs/cardLens" },
+        "gapType": {
+          "type": "string",
+          "enum": ["empty", "assumption", "contradiction"]
+        },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "answered": {
+      "description": "An open or asked question was answered; the evidence quotes the answer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "questionId", "evidence"],
+      "properties": {
+        "op": { "type": "string", "enum": ["answered"] },
+        "questionId": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "finalCheck": {
+      "description": "The conversation is coming to an end: start the final check.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": { "type": "string", "enum": ["finalCheck"] }
+      }
+    },
+    "cardLens": {
+      "description": "A lens of the task card: goal, users, scenarios, edgeCases, integrations, constraints, acceptance.",
+      "type": "string",
+      "enum": [
+        "goal",
+        "users",
+        "scenarios",
+        "edgeCases",
+        "integrations",
+        "constraints",
+        "acceptance"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "id", "quote"],
+        "properties": {
+          "source": { "type": "string", "enum": ["segment", "project"] },
+          "id": { "type": "string" },
+          "quote": { "type": "string" }
+        }
+      }
+    }
+  }
+}

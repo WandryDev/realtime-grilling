@@ -27,6 +27,8 @@ pub trait SpeechHost: Send + Sync + 'static {
     fn model_failed(&self, model: ModelId, message: &str);
     /// The live pass of `recording_id` recognizes, or why not.
     fn transcription_changed(&self, recording_id: &str, status: TranscriptionStatus);
+    /// The live pass of `recording_id` starts (the recording started).
+    fn live_started(&self, _recording_id: &str) {}
     /// The live pass of a stopped recording is over: its last phrase is
     /// answered. The second pass may start.
     fn live_finished(&self, recording_id: &str);

@@ -89,11 +89,13 @@ windows-core = "0.62"
 [dev-dependencies]
 tempfile = "3"
 # The local HTTP server of the model download tests.
-tokio = { version = "1", features = ["net"] }
+tokio = { version = "1", features = ["net", "test-util"] }
 # Speech fixtures for the VAD tests (tests/fixtures/*.wav).
 hound = "3.5"
 # Mock runtime: capability (ACL) checks against the real config in tests.
 tauri = { version = "2", features = ["test"] }
+# The patch schema of the fast loop against its serde types.
+jsonschema = { version = "0.60", default-features = false }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

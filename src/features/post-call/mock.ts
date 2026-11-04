@@ -6,6 +6,7 @@
  */
 
 import { PROJECTS } from "@/features/mock/projects";
+import { CARD_LENS_LABELS } from "@/lib/card-lens";
 
 /* ------------------------------------------------------------ Звонок */
 
@@ -312,7 +313,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "goal",
-      label: "Цель",
+      label: CARD_LENS_LABELS.goal,
     },
     {
       facts: [
@@ -333,7 +334,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "users",
-      label: "Кто пользуется",
+      label: CARD_LENS_LABELS.users,
     },
     {
       facts: [
@@ -350,7 +351,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "scenario",
-      label: "Основной сценарий",
+      label: CARD_LENS_LABELS.scenarios,
     },
     {
       facts: [
@@ -368,7 +369,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "edge-cases",
-      label: "Крайние случаи",
+      label: CARD_LENS_LABELS.edgeCases,
     },
     {
       facts: [
@@ -389,7 +390,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "integrations",
-      label: "Интеграции",
+      label: CARD_LENS_LABELS.integrations,
     },
     {
       facts: [
@@ -404,7 +405,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "constraints",
-      label: "Ограничения",
+      label: CARD_LENS_LABELS.constraints,
     },
     {
       facts: [
@@ -419,7 +420,7 @@ export const TASK_CARD: TaskCardData = {
         },
       ],
       id: "done-criteria",
-      label: "Критерии готовности",
+      label: CARD_LENS_LABELS.acceptance,
     },
   ],
   id: "calls",
@@ -445,7 +446,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "goal",
-      label: "Цель",
+      label: CARD_LENS_LABELS.goal,
     },
     {
       facts: [
@@ -460,7 +461,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "users",
-      label: "Кто пользуется",
+      label: CARD_LENS_LABELS.users,
     },
     {
       facts: [
@@ -477,7 +478,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "scenario",
-      label: "Основной сценарий",
+      label: CARD_LENS_LABELS.scenarios,
     },
     {
       facts: [
@@ -489,7 +490,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "edge-cases",
-      label: "Крайние случаи",
+      label: CARD_LENS_LABELS.edgeCases,
     },
     {
       facts: [
@@ -506,7 +507,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "integrations",
-      label: "Интеграции",
+      label: CARD_LENS_LABELS.integrations,
     },
     {
       facts: [
@@ -518,7 +519,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "constraints",
-      label: "Ограничения",
+      label: CARD_LENS_LABELS.constraints,
     },
     {
       facts: [
@@ -533,7 +534,7 @@ export const TASK_CARD_CRM: TaskCardData = {
         },
       ],
       id: "done-criteria",
-      label: "Критерии готовности",
+      label: CARD_LENS_LABELS.acceptance,
     },
   ],
   id: "crm",

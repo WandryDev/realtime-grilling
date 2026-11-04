@@ -781,6 +781,154 @@ mod tests {
     }
 
     #[test]
+    fn migration_0004_keeps_the_recordings_and_transcript_of_0003() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let before = [
+            M::up(include_str!("../../migrations/0001_init.sql")),
+            M::up(include_str!("../../migrations/0002_recordings.sql")),
+            M::up(include_str!(
+                "../../migrations/0003_transcript_by_recording.sql"
+            )),
+        ];
+        let of_call = "0190d1a0-0000-7000-8000-000000000001";
+        let loose = "0190d1a0-0000-7000-8000-000000000002";
+        let (project_id, call_id) = {
+            let connection = open(&path, &Migrations::from_slice(&before)).unwrap();
+            let project_id = project(&connection, "Acme");
+            let call_id = call(&connection, &project_id);
+            for (id, call) in [(of_call, Some(call_id.as_str())), (loose, None)] {
+                connection
+                    .execute(
+                        "INSERT INTO recordings
+                           (id, call_id, project_id, status, started_at, ended_at, me_file,
+                            others_file, created_at, updated_at, transcript_state)
+                         VALUES (?1, ?2, ?3, 'finished', 0, 10, 'a', 'b', 0, 0, 'refined')",
+                        params![id, call, call.map(|_| project_id.as_str())],
+                    )
+                    .unwrap();
+                connection
+                    .execute(
+                        "INSERT INTO transcript_segments
+                           (id, recording_id, call_id, pass, channel, start_ms, end_ms, text,
+                            created_at, updated_at)
+                         VALUES (?1 || '-s', ?1, ?2, 'live', 'others', 0, 1, 'алло', 0, 0)",
+                        params![id, call],
+                    )
+                    .unwrap();
+            }
+            // The old tables by call: never filled by the app, dropped by 0004.
+            connection
+                .execute_batch(&format!(
+                    "INSERT INTO topics (id, call_id, title, position, created_at, updated_at)
+                       VALUES ('t', '{call_id}', 'Тема', 0, 0, 0);
+                     INSERT INTO questions (id, call_id, topic_id, text, created_at, updated_at)
+                       VALUES ('q', '{call_id}', 't', 'Вопрос', 0, 0);"
+                ))
+                .unwrap();
+            assert!(super::super::has_call_state(&connection));
+            assert_eq!(super::super::call_state_rows(&connection), Some(2));
+            (project_id, call_id)
+        };
+
+        let connection = open(&path, &MIGRATIONS).unwrap();
+        assert!(!super::super::has_call_state(&connection));
+        assert_eq!(super::super::call_state_rows(&connection), None);
+        let count = |table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        assert_eq!((count("topics"), count("questions")), (0, 0));
+
+        // The recordings and their transcript are as they were.
+        let recording = get(&connection, of_call).unwrap();
+        assert_eq!(recording.call_id.as_deref(), Some(call_id.as_str()));
+        assert_eq!(recording.project_id.as_deref(), Some(project_id.as_str()));
+        assert_eq!(recording.transcript_state, TranscriptState::Refined);
+        assert_eq!(recording.status, RecordingState::Finished);
+        assert_eq!(get(&connection, loose).unwrap().call_id, None);
+        for id in [of_call, loose] {
+            let segments = crate::storage::transcript::for_recording(&connection, id).unwrap();
+            assert_eq!(segments.len(), 1);
+            assert_eq!(segments[0].text, "алло");
+        }
+        let violations: i64 = connection
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+
+        // The new tables work on the migrated rows; deleting a recording
+        // deletes its topics, cards, questions and agent calls.
+        use crate::storage::call_state::{
+            self, AgentCallInput, AgentCallOutcome, CardLens, Evidence, EvidenceSource, GapType,
+            NewQuestion, ValidatedOp, ValidatedPatch,
+        };
+        let evidence = vec![Evidence {
+            source: EvidenceSource::Segment,
+            id: format!("{of_call}-s"),
+            quote: "алло".to_owned(),
+        }];
+        let patch = ValidatedPatch {
+            ops: vec![
+                ValidatedOp::CreateTopic {
+                    title: "Тема".to_owned(),
+                },
+                ValidatedOp::SetCardField {
+                    field: CardLens::Goal,
+                    value: "Цель".to_owned(),
+                    evidence: evidence.clone(),
+                },
+                ValidatedOp::AddQuestion(NewQuestion {
+                    text: "Вопрос".to_owned(),
+                    description: String::new(),
+                    card_field: CardLens::Goal,
+                    gap_type: GapType::Empty,
+                    priority: 1,
+                    evidence,
+                }),
+            ],
+        };
+        for id in [of_call, loose] {
+            call_state::apply_patch(&connection, id, &patch).unwrap();
+            call_state::insert_agent_call(
+                &connection,
+                &AgentCallInput {
+                    recording_id: id.to_owned(),
+                    outcome: Some(AgentCallOutcome::Ok),
+                    ..AgentCallInput::default()
+                },
+            )
+            .unwrap();
+        }
+        let state = call_state::get(&connection, of_call).unwrap();
+        assert_eq!(state.topics[0].call_id.as_deref(), Some(call_id.as_str()));
+        assert_eq!(
+            state.questions[0].call_id.as_deref(),
+            Some(call_id.as_str())
+        );
+        assert_eq!(calls::get(&connection, &call_id).unwrap().open_questions, 1);
+        delete(&connection, of_call).unwrap();
+        for table in ["topics", "task_cards", "questions", "agent_calls"] {
+            assert_eq!(count(table), 1, "{table}: only the loose recording's");
+        }
+        assert_eq!(
+            call_state::get(&connection, loose).unwrap().questions.len(),
+            1
+        );
+        let violations: i64 = connection
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+    }
+
+    #[test]
     fn rejects_an_unknown_status() {
         let connection = open_in_memory().unwrap();
         let error = connection

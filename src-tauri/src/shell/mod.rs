@@ -116,6 +116,8 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     if !std::env::args().any(|arg| arg == AUTOSTART_ARG) {
         show_entry(app.handle());
     }
+    // Before the recorder: its live pass starts the agent's schedulers.
+    app.manage(crate::agent::fast_loop::app::for_app(app.handle()));
     let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer());
     app.manage(recorder.clone());
     // After the recorder: it pauses while recording. Queues what a previous
@@ -207,10 +209,17 @@ fn forget_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
 }
 
 /// Keeps the app alive when the last window goes away; only "Выйти" exits.
-/// On exit closes a running recording and stops the microphone watcher.
+/// On exit stops the agent's calls (killing its CLI), closes a running
+/// recording and stops the microphone watcher.
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     match event {
         RunEvent::Exit => {
+            // First: the agent's CLI runs in its own process group and would
+            // outlive the app.
+            if let Some(fast_loop) = app.try_state::<crate::agent::fast_loop::scheduler::FastLoop>()
+            {
+                fast_loop.shutdown();
+            }
             crate::recording::stop_on_exit(app);
             crate::audio::mic_watch::stop(app);
         }

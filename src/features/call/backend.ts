@@ -1,5 +1,14 @@
-import { Context, Effect, Layer, Stream } from "effect";
+import { Context, Effect, Layer, Queue, Stream } from "effect";
 
+import {
+  type AgentStatus,
+  type CallState,
+  commands,
+  events,
+  type QuestionAction,
+} from "@/bindings";
+import { createReadOrder } from "@/data/synced-store";
+import { type BackendError, call, subscribe } from "@/effect/tauri";
 import { RecordingBackend } from "@/features/recording/backend";
 import { SpeechBackend } from "@/features/speech/backend";
 
@@ -19,8 +28,10 @@ import type { CallFeedEvent } from "./types";
  *
  * `layerTauri` takes the transcript from the recognizer (the recording
  * running now, read first, then its events) and whether recognition works
- * from the recording status; topics, questions and context stay on the
- * script, without its transcript, until the agent comes (task 6).
+ * from the recording status. Topics, questions, the final check and the
+ * agent's state are the backend's (`agent`, agent-fast-loop design.md,
+ * decision 11); the script only plays its context cards until the slow
+ * loop comes.
  */
 
 /**
@@ -57,18 +68,99 @@ function playScript(
   );
 }
 
-const TRANSCRIPT_EVENTS: ReadonlySet<CallFeedEvent["type"]> = new Set([
-  "transcript",
-  "transcript-pending",
-  "transcript-remove",
-  "transcript-lag",
-]);
-
-/** The script's agent: everything but the transcript, which is real. */
-const AGENT_SCRIPT: readonly FeedStep[] = CALL_SCRIPT.map((step) => ({
+/** The script's context cards: the transcript and the questions are real. */
+const CONTEXT_SCRIPT: readonly FeedStep[] = CALL_SCRIPT.map((step) => ({
   ...step,
-  events: step.events.filter((event) => !TRANSCRIPT_EVENTS.has(event.type)),
+  events: step.events.filter((event) => event.type === "context"),
 }));
+
+/**
+ * What the backend says about the questions of a recording: its whole
+ * call state (with the agent's state, unless a newer status already came)
+ * or a new status of the agent.
+ */
+export type CallAgentUpdate =
+  | {
+      readonly agent?: AgentStatus;
+      readonly state: CallState;
+      readonly type: "state";
+    }
+  | { readonly status: AgentStatus; readonly type: "status" };
+
+type AgentTrigger =
+  | { readonly read: number; readonly type: "read" }
+  | {
+      readonly read: number;
+      readonly status: AgentStatus;
+      readonly type: "status";
+    };
+
+/** Scopes of the read order: the call state and the agent's status. */
+const STATE_SCOPE = "state";
+const STATUS_SCOPE = "agent";
+
+/**
+ * The call state of `recordingId`: read once listening, then again on every
+ * `CallStateChanged`, with the `AgentStatus` events in between. Reads may
+ * finish out of order; an older one never replaces a newer state, and its
+ * agent never replaces a newer status. A failed read keeps what is shown.
+ */
+function agentUpdates(
+  recordingId: string
+): Stream.Stream<CallAgentUpdate, BackendError> {
+  return Stream.suspend(() => {
+    const order = createReadOrder();
+    const triggers = Stream.callback<AgentTrigger, BackendError>((queue) =>
+      Effect.gen(function* () {
+        yield* subscribe(events.callStateChanged, (change) => {
+          if (change.recordingId === recordingId) {
+            Queue.offerUnsafe(queue, { read: order.start(), type: "read" });
+          }
+        });
+        yield* subscribe(events.agentStatus, (status) => {
+          if (status.recordingId === recordingId) {
+            Queue.offerUnsafe(queue, {
+              read: order.start(),
+              status,
+              type: "status",
+            });
+          }
+        });
+        Queue.offerUnsafe(queue, { read: order.start(), type: "read" });
+      })
+    );
+
+    const readState = (read: number) =>
+      call(() => commands.callStateGet(recordingId)).pipe(
+        Effect.map(({ agent, ...state }): CallAgentUpdate | null => {
+          if (!order.accept(read, STATE_SCOPE)) {
+            return null;
+          }
+          return order.accept(read, STATUS_SCOPE)
+            ? { agent, state, type: "state" }
+            : { state, type: "state" };
+        }),
+        Effect.catch(() => Effect.succeed(null))
+      );
+
+    return triggers.pipe(
+      Stream.mapEffect(
+        (trigger) => {
+          if (trigger.type === "read") {
+            return readState(trigger.read);
+          }
+          return Effect.sync((): CallAgentUpdate | null =>
+            order.accept(trigger.read, STATUS_SCOPE)
+              ? { status: trigger.status, type: "status" }
+              : null
+          );
+        },
+        { concurrency: "unbounded", unordered: true }
+      ),
+      Stream.filter((update): update is CallAgentUpdate => update !== null)
+    );
+  });
+}
 
 const collectSummary = Stream.range(2, SUMMARY_STAGES).pipe(
   Stream.mapEffect((stage) => Effect.as(Effect.sleep(SUMMARY_STAGE_MS), stage))
@@ -84,8 +176,28 @@ export class CallBackend extends Context.Service<
      * ready right away; the last one is `SUMMARY_STAGES`.
      */
     readonly collectSummary: Stream.Stream<number>;
-    /** Restarts the agent session after it stopped answering. */
-    readonly retryAgent: Effect.Effect<void>;
+    /**
+     * The backend's questions of a recording (Tauri). The mock has none:
+     * its questions come with the script's feed.
+     */
+    readonly agent: (
+      recordingId: string
+    ) => Stream.Stream<CallAgentUpdate, BackendError>;
+    /**
+     * «Закрепить» / «Открепить» / «Скрыть» / «Задал» / «Вернуть». The
+     * mock does nothing: the window changes the scripted list itself.
+     */
+    readonly actOnQuestion: (
+      id: string,
+      action: QuestionAction
+    ) => Effect.Effect<void, BackendError>;
+    /**
+     * «Повторить»: the agent of the recording calls again now. The mock
+     * recovers after a moment.
+     */
+    readonly retryAgent: (
+      recordingId: string | null
+    ) => Effect.Effect<void, BackendError>;
     /** Reconnects an integration that lost its access (GitHub). */
     readonly reconnectSource: Effect.Effect<void>;
     /** Opens the privacy settings and waits for the permission. */
@@ -95,11 +207,13 @@ export class CallBackend extends Context.Service<
   }
 >()("grill/features/call/CallBackend") {
   static readonly layerMock = Layer.succeed(CallBackend, {
+    actOnQuestion: () => Effect.void,
+    agent: () => Stream.empty,
     collectSummary,
     feed: (from: number) => playScript(CALL_SCRIPT, from),
     reconnectSource: Effect.sleep(SOURCE_RECONNECT_MS),
     requestSystemAudio: Effect.sleep(SYSTEM_AUDIO_GRANT_MS),
-    retryAgent: Effect.sleep(AGENT_RETRY_MS),
+    retryAgent: () => Effect.sleep(AGENT_RETRY_MS),
     waitForTranscript: Effect.sleep(TRANSCRIPT_CATCH_UP_MS),
   });
 
@@ -169,12 +283,18 @@ export class CallBackend extends Context.Service<
       );
 
       return CallBackend.of({
+        actOnQuestion: (id: string, action: QuestionAction) =>
+          call(() => commands.questionsAct(id, action)).pipe(Effect.asVoid),
+        agent: agentUpdates,
         collectSummary,
         feed: (from: number) =>
-          Stream.merge(playScript(AGENT_SCRIPT, from), live),
+          Stream.merge(playScript(CONTEXT_SCRIPT, from), live),
         reconnectSource: Effect.sleep(SOURCE_RECONNECT_MS),
         requestSystemAudio: Effect.sleep(SYSTEM_AUDIO_GRANT_MS),
-        retryAgent: Effect.sleep(AGENT_RETRY_MS),
+        retryAgent: (recordingId: string | null) =>
+          recordingId === null
+            ? Effect.void
+            : call(() => commands.agentRetry(recordingId)).pipe(Effect.asVoid),
         // The lag notice goes away with the recognizer's "caught up".
         waitForTranscript: Effect.never,
       });

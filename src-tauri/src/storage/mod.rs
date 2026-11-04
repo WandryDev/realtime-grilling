@@ -5,19 +5,17 @@
 //! database can't be opened or migrated the app still starts: the storage is
 //! an `Err` and every data command answers `Storage`.
 
+pub mod call_state;
 pub mod calls;
 pub mod json;
 pub mod people;
 pub mod projects;
-pub mod questions;
 #[allow(
     dead_code,
     reason = "create / finish / delete are for the RecordingManager (audio-capture task 4.5)"
 )]
 pub mod recordings;
 pub mod settings;
-pub mod task_cards;
-pub mod topics;
 #[allow(
     dead_code,
     reason = "append_live / replace_refined are for the TranscriptSink and the Refiner \
@@ -51,6 +49,9 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../migrations/0002_recordings.sql")),
     M::up(include_str!(
         "../../migrations/0003_transcript_by_recording.sql"
+    )),
+    M::up(include_str!(
+        "../../migrations/0004_call_state_by_recording.sql"
     )),
 ];
 
@@ -319,6 +320,7 @@ fn configure(connection: &Connection) -> Result<(), String> {
 
 fn migrate(connection: &mut Connection, migrations: &Migrations) -> Result<(), String> {
     let dropped = call_transcript_rows(connection);
+    let dropped_state = call_state_rows(connection);
     // All pending migrations run in one transaction: on failure the database
     // stays on its previous version.
     migrations
@@ -329,7 +331,34 @@ fn migrate(connection: &mut Connection, migrations: &Migrations) -> Result<(), S
             "grill: migration 0003 dropped {count} transcript segment(s) without a recording"
         );
     }
+    if let Some(count) = dropped_state.filter(|_| !has_call_state(connection)) {
+        eprintln!(
+            "grill: migration 0004 dropped {count} topic, task card and question row(s) \
+             without a recording"
+        );
+    }
     Ok(())
+}
+
+/// Rows of the topics, task cards and questions of 0001 (keyed by call, no
+/// recording), which 0004 drops; `None` when the tables are not those.
+fn call_state_rows(connection: &Connection) -> Option<i64> {
+    if !has_call_state(connection) {
+        return None;
+    }
+    connection
+        .query_row(
+            "SELECT (SELECT count(*) FROM topics) + (SELECT count(*) FROM task_cards)
+                  + (SELECT count(*) FROM questions)",
+            [],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+/// Whether `topics` exists without a `recording_id` column (0001's tables).
+fn has_call_state(connection: &Connection) -> bool {
+    has_columns_without(connection, "topics", "call_id", "recording_id")
 }
 
 /// Rows of the transcript of 0001 (keyed by call, no recording), which 0003
@@ -347,16 +376,21 @@ fn call_transcript_rows(connection: &Connection) -> Option<i64> {
 
 /// Whether `transcript_segments` exists without a `recording_id` column.
 fn has_call_transcript(connection: &Connection) -> bool {
+    has_columns_without(connection, "transcript_segments", "call_id", "recording_id")
+}
+
+/// Whether `table` has the column `with` and not the column `without`.
+fn has_columns_without(connection: &Connection, table: &str, with: &str, without: &str) -> bool {
     let columns = |name: &str| -> i64 {
         connection
             .query_row(
-                "SELECT count(*) FROM pragma_table_info('transcript_segments') WHERE name = ?1",
-                [name],
+                "SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2",
+                [table, name],
                 |row| row.get(0),
             )
             .unwrap_or(0)
     };
-    columns("call_id") == 1 && columns("recording_id") == 0
+    columns(with) == 1 && columns(without) == 0
 }
 
 /// `grill.db.bak-v<version>` next to the database.

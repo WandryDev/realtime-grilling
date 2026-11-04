@@ -23,10 +23,11 @@ use super::{
     status::TranscriptionStatus,
 };
 use crate::{
+    agent::fast_loop::scheduler::FastLoop,
     error::{CommandError, CommandResult},
     events::{DataChanged, EventSink},
     recording::RecordingManager,
-    storage::Storage,
+    storage::{Storage, transcript::TranscriptPass},
 };
 
 /// How long removing a model waits for the recognizer to let go of it.
@@ -222,6 +223,13 @@ pub struct AppSpeechHost<R: Runtime> {
 impl<R: Runtime> SpeechHost for AppSpeechHost<R> {
     fn emit(&self, event: TranscriptEvent) {
         event.emit(&self.app);
+        // The fast loop hears the live phrases (agent-fast-loop decision 2).
+        if let TranscriptEvent::Phrase(phrase) = &event
+            && phrase.pass == TranscriptPass::Live
+            && let Some(fast_loop) = self.app.try_state::<FastLoop>()
+        {
+            fast_loop.phrase(&phrase.recording_id, phrase.channel);
+        }
     }
 
     fn data_changed(&self, event: DataChanged) {
@@ -262,7 +270,16 @@ impl<R: Runtime> SpeechHost for AppSpeechHost<R> {
         }
     }
 
+    fn live_started(&self, recording_id: &str) {
+        if let Some(fast_loop) = self.app.try_state::<FastLoop>() {
+            fast_loop.live_started(recording_id);
+        }
+    }
+
     fn live_finished(&self, recording_id: &str) {
+        if let Some(fast_loop) = self.app.try_state::<FastLoop>() {
+            fast_loop.live_finished(recording_id);
+        }
         if let Some(refiner) = self.app.try_state::<Refiner>() {
             refiner.enqueue(recording_id);
         }

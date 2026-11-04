@@ -1,3 +1,7 @@
+"use client";
+
+import { useCallback } from "react";
+
 import {
   AgentStatus,
   type RecordingLevel,
@@ -10,6 +14,7 @@ import {
   OverlayFooter,
   OverlayHeader,
   OverlayHeading,
+  OverlayListening,
   OverlayMainQuestion,
   OverlayQuestion,
   PastTopicsButton,
@@ -34,6 +39,8 @@ import {
  *   with its topic
  * - collapsed: the pill with time, topic and open count; a new important
  *   question shows a card under it for 8 seconds
+ *
+ * With `onHide` every question offers "Скрыть вопрос" on hover.
  */
 export type CompactOverlayState = "default" | "final-check" | "collapsed";
 
@@ -46,15 +53,20 @@ export interface OverlayRecording {
 }
 
 export function CompactOverlay({
+  agentLabel,
   agentState = "listening",
+  agentTone,
   callHref,
   className,
   mainLabel = "Новый, только что",
   mainQuestion = OVERLAY_MAIN_QUESTION,
+  mainQuestionId,
+  finalCheckMore = OVERLAY.finalCheckMore,
   newQuestion,
   onCollapse,
   onDismissNewQuestion,
   onExpand,
+  onHide,
   onOpenNewQuestion,
   openQuestions = OVERLAY.openQuestions,
   pastTopics = OVERLAY.pastTopics,
@@ -65,14 +77,22 @@ export function CompactOverlay({
   time,
   topic = OVERLAY_TOPIC,
 }: {
+  /** The footer status in words, when the agent stopped ("нужен вход"). */
+  agentLabel?: string;
   /** The footer status: "слушаю" or "думаю над вопросами". */
   agentState?: AgentState;
+  agentTone?: "accent" | "muted" | "destructive";
   /** The header arrows and "прошлые" lead to the call window. */
   callHref?: string;
   className?: string;
   /** Over the main question, outside the final check. */
   mainLabel?: string;
-  mainQuestion?: string;
+  /** null: no question yet, the agent listens. */
+  mainQuestion?: string | null;
+  /** The id `onHide` gets for the main question. */
+  mainQuestionId?: string;
+  /** "ещё N в окне": final check questions that didn't fit. */
+  finalCheckMore?: number;
   /**
    * The card under the collapsed pill. Defaults to the main question
    * (previews); null hides it.
@@ -83,6 +103,8 @@ export function CompactOverlay({
   onDismissNewQuestion?: () => void;
   /** The pill's expand button. */
   onExpand?: () => void;
+  /** "Скрыть вопрос" of a question, by its id. */
+  onHide?: (id: string) => void;
   onOpenNewQuestion?: () => void;
   openQuestions?: number;
   pastTopics?: number;
@@ -97,6 +119,11 @@ export function CompactOverlay({
 }) {
   const finalCheck = state === "final-check";
   const callTime = time ?? (finalCheck ? OVERLAY.timeFinalCheck : OVERLAY.time);
+  const hideMain = useCallback(() => {
+    if (mainQuestionId !== undefined) {
+      onHide?.(mainQuestionId);
+    }
+  }, [mainQuestionId, onHide]);
 
   if (state === "collapsed") {
     const card = newQuestion === undefined ? mainQuestion : newQuestion;
@@ -110,7 +137,7 @@ export function CompactOverlay({
           topic={topic}
           warning={recording?.warning}
         />
-        {card === null ? null : (
+        {card === null || card === undefined ? null : (
           <NewQuestionCard
             onClose={onDismissNewQuestion}
             onOpen={onOpenNewQuestion}
@@ -146,20 +173,31 @@ export function CompactOverlay({
           title={topic}
         />
       )}
-      <OverlayMainQuestion
-        label={finalCheck ? topic : mainLabel}
-        title={mainQuestion}
-      />
+      {mainQuestion === null ? (
+        <OverlayListening />
+      ) : (
+        <OverlayMainQuestion
+          label={finalCheck ? topic : mainLabel}
+          onHide={onHide && mainQuestionId !== undefined ? hideMain : undefined}
+          title={mainQuestion}
+        />
+      )}
       {rows.map((question) => (
-        <OverlayQuestion key={question.id} question={question} />
+        <OverlayQuestion
+          key={question.id}
+          onHide={onHide}
+          question={question}
+        />
       ))}
       <OverlayFooter>
-        {finalCheck ? (
+        {finalCheck && finalCheckMore > 0 ? (
           <span className="text-muted-foreground text-sm">
-            ещё {OVERLAY.finalCheckMore} в окне
+            ещё {finalCheckMore} в окне
           </span>
         ) : (
-          <AgentStatus state={agentState} />
+          <AgentStatus state={agentState} tone={agentTone}>
+            {agentLabel}
+          </AgentStatus>
         )}
       </OverlayFooter>
     </FloatingSurface>

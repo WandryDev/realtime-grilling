@@ -3,7 +3,9 @@
 //! in. The status never calls the model. The app keeps no codes, passwords
 //! or tokens: the CLI owns them.
 
+pub mod claude_cli;
 pub mod discover;
+pub mod fast_loop;
 pub mod install;
 pub mod login;
 pub mod process;
@@ -222,6 +224,21 @@ pub async fn locate_and_check(
     }
     remember(storage, sink, saved.as_ref(), found.as_ref()).await;
     state
+}
+
+/// The CLI to call when its status is `ready`; otherwise that status.
+pub async fn ready_cli(
+    storage: &Storage,
+    sink: &impl EventSink,
+    env: &SearchEnv,
+    cwd: &Path,
+) -> Result<PathBuf, AgentState> {
+    match locate_and_check(storage, sink, env, cwd).await {
+        AgentState::Ready { .. } => saved_path(storage)
+            .await
+            .ok_or_else(|| AgentState::error("Claude Code не найден")),
+        state => Err(state),
+    }
 }
 
 /// Install and login in progress. Managed as Tauri state.

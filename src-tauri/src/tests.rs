@@ -8,14 +8,15 @@ use crate::{
     events::{Change, DataChanged, Entity, testing::RecordingSink},
     storage::{
         Storage,
+        call_state::{
+            self, CardLens, Evidence, EvidenceSource, GapType, NewQuestion, QuestionStatus,
+            ValidatedOp, ValidatedPatch,
+        },
         calls::{self, Call, CallCreate, CallStatus, CallUpdate},
         people::{self, Person, PersonCreate},
         projects::{self, Project, ProjectCreate, ProjectUpdate},
-        questions::{self, QuestionCreate, QuestionStatus, QuestionUpdate},
         recordings::{self, RecordingFiles, RecordingLinks},
         settings::{self, SettingsMap},
-        task_cards::{self, TaskCardCreate},
-        topics::{self, TopicCreate},
         transcript::{self, SegmentInput, TranscriptChannel, TranscriptPass, TranscriptSegment},
     },
 };
@@ -115,6 +116,41 @@ impl Fixture {
         let id = recording_id.to_owned();
         self.write(move |db| transcript::replace_refined(db, &id, segments))
             .unwrap()
+    }
+
+    /// A topic, its card field and an open question on the recording, as
+    /// the fast loop applies them. Returns the question id.
+    fn question(&self, recording_id: &str, text: &str) -> String {
+        let id = recording_id.to_owned();
+        let evidence = vec![Evidence {
+            source: EvidenceSource::Project,
+            id: "P1".to_owned(),
+            quote: "приём звонков".to_owned(),
+        }];
+        let patch = ValidatedPatch {
+            ops: vec![
+                ValidatedOp::CreateTopic {
+                    title: "Очередь".to_owned(),
+                },
+                ValidatedOp::SetCardField {
+                    field: CardLens::Goal,
+                    value: "Не терять звонки".to_owned(),
+                    evidence: evidence.clone(),
+                },
+                ValidatedOp::AddQuestion(NewQuestion {
+                    text: text.to_owned(),
+                    description: String::new(),
+                    card_field: CardLens::Goal,
+                    gap_type: GapType::Empty,
+                    priority: 2,
+                    evidence,
+                }),
+            ],
+        };
+        let applied = self
+            .write(move |db| Ok((call_state::apply_patch(db, &id, &patch)?, Vec::new())))
+            .unwrap();
+        applied.question_ids[0].clone()
     }
 
     fn transcript(&self, recording_id: &str) -> Vec<TranscriptSegment> {
@@ -237,41 +273,9 @@ fn deleting_a_project_removes_everything_of_it_and_nothing_else() {
         let project = fx.project(name);
         let person = fx.person(&project, "Ольга");
         let call = fx.call(&project, &[&person]);
-        let call_id = call.id.clone();
-        let topic = fx
-            .write(move |db| {
-                topics::create(
-                    db,
-                    TopicCreate {
-                        call_id,
-                        title: "Очередь".to_owned(),
-                        position: None,
-                    },
-                )
-            })
-            .unwrap();
-        let topic_id = topic.id.clone();
-        let card = fx
-            .write(move |db| {
-                task_cards::create(
-                    db,
-                    TaskCardCreate {
-                        topic_id,
-                        ..TaskCardCreate::default()
-                    },
-                )
-            })
-            .unwrap();
-        let input = QuestionCreate {
-            call_id: call.id.clone(),
-            text: "Что слышит клиент, когда все заняты?".to_owned(),
-            topic_id: Some(topic.id),
-            card_id: Some(card.id),
-            ..QuestionCreate::default()
-        };
-        fx.write(move |db| questions::create(db, input)).unwrap();
         let of_call = fx.recording(RecordingLinks::call(&call.id));
         fx.live(&of_call, segment(TranscriptChannel::Others, 0, "Алло"));
+        fx.question(&of_call, "Что слышит клиент, когда все заняты?");
         // A recording of the project before its call exists.
         let of_project = fx.recording(RecordingLinks {
             project_id: Some(project.id.clone()),
@@ -657,58 +661,21 @@ fn segment_times_are_validated() {
     assert_eq!(fx.count("transcript_segments"), 0);
 }
 
-#[test]
-fn questions_link_only_to_topics_and_cards_of_their_call() {
-    let fx = Fixture::new();
-    let project = fx.project("Телемедиа");
-    let first = fx.call(&project, &[]);
-    let second = fx.call(&project, &[]);
-    let call_id = second.id.clone();
-    let foreign_topic = fx
-        .write(move |db| {
-            topics::create(
-                db,
-                TopicCreate {
-                    call_id,
-                    title: "Чужая тема".to_owned(),
-                    position: None,
-                },
-            )
-        })
-        .unwrap();
-    let input = QuestionCreate {
-        call_id: first.id.clone(),
-        text: "Вопрос".to_owned(),
-        topic_id: Some(foreign_topic.id.clone()),
-        ..QuestionCreate::default()
-    };
-    let error = fx
-        .write(move |db| questions::create(db, input))
-        .unwrap_err();
-    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
-
-    let input = QuestionCreate {
-        call_id: first.id.clone(),
-        text: "  ".to_owned(),
-        ..QuestionCreate::default()
-    };
-    let error = fx
-        .write(move |db| questions::create(db, input))
-        .unwrap_err();
-    assert!(matches!(error, CommandError::Invalid { .. }), "empty text");
-}
-
+/// The open questions of a call's recordings are counted on the call and
+/// its project; answering one updates the counts.
 #[test]
 fn open_questions_are_counted_and_answering_updates_them() {
     let fx = Fixture::new();
     let project = fx.project("Телемедиа");
     let call = fx.call(&project, &[]);
-    let input = QuestionCreate {
-        call_id: call.id.clone(),
-        text: "Кто старший смены?".to_owned(),
-        ..QuestionCreate::default()
-    };
-    let question = fx.write(move |db| questions::create(db, input)).unwrap();
+    let recording = fx.recording(RecordingLinks::call(&call.id));
+    let question_id = fx.question(&recording, "Кто старший смены?");
+    // A recording without a call counts nowhere.
+    let loose = fx.recording(RecordingLinks {
+        project_id: Some(project.id.clone()),
+        ..RecordingLinks::default()
+    });
+    fx.question(&loose, "Сколько операторов?");
     let id = project.id.clone();
     assert_eq!(
         fx.read(move |db| projects::get(db, &id))
@@ -717,17 +684,22 @@ fn open_questions_are_counted_and_answering_updates_them() {
         1
     );
 
-    let question_id = question.id.clone();
-    let patch = QuestionUpdate {
-        status: Some(QuestionStatus::Answered),
-        ..QuestionUpdate::default()
+    let id = recording.clone();
+    let answered = ValidatedPatch {
+        ops: vec![ValidatedOp::MarkAnswered {
+            question_id: question_id.clone(),
+            evidence: vec![Evidence {
+                source: EvidenceSource::Project,
+                id: "P1".to_owned(),
+                quote: "старший".to_owned(),
+            }],
+        }],
     };
-    let answered = fx
-        .write(move |db| questions::update(db, &question_id, patch))
+    fx.write(move |db| Ok((call_state::apply_patch(db, &id, &answered)?, Vec::new())))
         .unwrap();
-    assert_eq!(answered.status, QuestionStatus::Answered);
-    assert_eq!(answered.created_at, question.created_at);
-    assert!(answered.updated_at > question.updated_at);
+    let id = recording.clone();
+    let state = fx.read(move |db| call_state::get(db, &id)).unwrap();
+    assert_eq!(state.questions[0].status, QuestionStatus::Answered);
     let id = call.id.clone();
     assert_eq!(
         fx.read(move |db| calls::get(db, &id))
@@ -735,54 +707,6 @@ fn open_questions_are_counted_and_answering_updates_them() {
             .open_questions,
         0
     );
-}
-
-#[test]
-fn topics_order_and_cards_follow_their_topic() {
-    let fx = Fixture::new();
-    let project = fx.project("Телемедиа");
-    let call = fx.call(&project, &[]);
-    let topic = |title: &str| {
-        let input = TopicCreate {
-            call_id: call.id.clone(),
-            title: title.to_owned(),
-            position: None,
-        };
-        fx.write(move |db| topics::create(db, input)).unwrap()
-    };
-    let calls_topic = topic("Приём звонков");
-    let crm_topic = topic("Интеграция с CRM");
-    assert_eq!((calls_topic.position, crm_topic.position), (0, 1));
-
-    let topic_id = crm_topic.id.clone();
-    let card = fx
-        .write(move |db| {
-            task_cards::create(
-                db,
-                TaskCardCreate {
-                    topic_id,
-                    fields: Some(json!([{ "id": "goal", "facts": [] }])),
-                    ..TaskCardCreate::default()
-                },
-            )
-        })
-        .unwrap();
-    assert_eq!(card.call_id, call.id, "the card takes its topic's call");
-
-    let input = QuestionCreate {
-        call_id: call.id.clone(),
-        text: "Что записывать в CRM?".to_owned(),
-        topic_id: Some(crm_topic.id.clone()),
-        card_id: Some(card.id.clone()),
-        ..QuestionCreate::default()
-    };
-    let question = fx.write(move |db| questions::create(db, input)).unwrap();
-    let topic_id = crm_topic.id.clone();
-    fx.write(move |db| topics::delete(db, &topic_id)).unwrap();
-    let question_id = question.id.clone();
-    let orphan = fx.read(move |db| questions::get(db, &question_id)).unwrap();
-    assert_eq!((orphan.topic_id, orphan.card_id), (None, None));
-    assert_eq!(fx.count("task_cards"), 0);
 }
 
 #[test]
@@ -869,44 +793,6 @@ fn null_clears_nullable_fields_and_absent_keeps_them() {
         .write(move |db| projects::update(db, &id, cleared))
         .unwrap();
     assert_eq!(cleared.brief, None);
-
-    // A question detached from its topic and card.
-    let topic_input = TopicCreate {
-        call_id: call.id.clone(),
-        title: "Запись".to_owned(),
-        ..TopicCreate::default()
-    };
-    let topic = fx.write(move |db| topics::create(db, topic_input)).unwrap();
-    let card_input = TaskCardCreate {
-        topic_id: topic.id.clone(),
-        ..TaskCardCreate::default()
-    };
-    let card = fx
-        .write(move |db| task_cards::create(db, card_input))
-        .unwrap();
-    let question_input = QuestionCreate {
-        call_id: call.id.clone(),
-        text: "Кто подтверждает запись?".to_owned(),
-        topic_id: Some(topic.id.clone()),
-        card_id: Some(card.id.clone()),
-        ..QuestionCreate::default()
-    };
-    let question = fx
-        .write(move |db| questions::create(db, question_input))
-        .unwrap();
-    let id = question.id.clone();
-    let reworded: QuestionUpdate = patch(json!({ "text": "Кто подтверждает?" }));
-    let reworded = fx
-        .write(move |db| questions::update(db, &id, reworded))
-        .unwrap();
-    assert_eq!(reworded.topic_id.as_ref(), Some(&topic.id));
-    assert_eq!(reworded.card_id.as_ref(), Some(&card.id));
-    let id = question.id.clone();
-    let detached: QuestionUpdate = patch(json!({ "topicId": null, "cardId": null }));
-    let detached = fx
-        .write(move |db| questions::update(db, &id, detached))
-        .unwrap();
-    assert_eq!((detached.topic_id, detached.card_id), (None, None));
 }
 
 #[test]
@@ -1354,6 +1240,15 @@ mod acl {
             ("overlay", "recording_start"),
             ("overlay", "recording_stop"),
             ("overlay", "recording_status"),
+            // Every window shows the call's questions, acts on them and
+            // retries the agent.
+            ("main", "call_state_get"),
+            ("main", "questions_act"),
+            ("main", "agent_retry"),
+            ("widget", "call_state_get"),
+            ("overlay", "call_state_get"),
+            ("overlay", "questions_act"),
+            ("overlay", "agent_retry"),
         ] {
             let result = invoke(label, command);
             assert!(!denied(&result), "{label} → {command}: {result:?}");
@@ -1398,6 +1293,9 @@ fn capabilities_match_the_command_list() {
         assert!(all.contains(command), "unknown command {command}");
     }
     for needed in [
+        "call_state_get",
+        "questions_act",
+        "agent_retry",
         "transcript_for_recording",
         "mic_activity_get",
         "recording_start",

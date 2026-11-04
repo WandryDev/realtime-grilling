@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/alert";
 import { ClaudeIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
+import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
 import { useCallActions } from "../call-actions";
 import { FlagIcon, SpeakerOffIcon } from "../icons";
@@ -98,8 +99,9 @@ function BannerButton({ action }: { action: AgentBannerAction }) {
           ? "bg-background hover:bg-background/70 px-3.5"
           : "hover:bg-background/50 px-2.5"
       )}
-      onClick={onClick}
+      onClick={action.href ? undefined : onClick}
       variant={action.variant}
+      {...linkButtonProps(action.href)}
     >
       {action.label}
     </Button>

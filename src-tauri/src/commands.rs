@@ -17,6 +17,11 @@ use crate::{
     agent::{
         self, AgentSessions, AgentState,
         discover::SearchEnv,
+        fast_loop::{
+            app::{self as fast_loop_app, call_state_changed},
+            events::CallStateView,
+            scheduler::FastLoop,
+        },
         install::{self, AgentInstallProgress},
         login,
     },
@@ -38,14 +43,12 @@ use crate::{
     },
     storage::{
         Storage,
+        call_state::{self, QuestionAction},
         calls::{self, Call, CallCreate, CallUpdate},
         people::{self, Person, PersonCreate, PersonUpdate},
         projects::{self, Project, ProjectCreate, ProjectUpdate},
-        questions::{self, Question, QuestionCreate, QuestionUpdate},
         recordings::{self, RecordingLinks, TranscriptState},
         settings::{self, SettingsMap},
-        task_cards::{self, TaskCard, TaskCardCreate, TaskCardUpdate},
-        topics::{self, Topic, TopicCreate, TopicUpdate},
         transcript::{self, TranscriptSegment},
     },
 };
@@ -273,166 +276,6 @@ pub async fn call_participants_remove(
         .await
 }
 
-/* Topics */
-
-#[tauri::command]
-#[specta::specta]
-pub async fn topics_list(
-    storage: State<'_, Storage>,
-    call_id: String,
-) -> CommandResult<Vec<Topic>> {
-    storage.read(move |db| topics::list(db, &call_id)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn topics_get(storage: State<'_, Storage>, id: String) -> CommandResult<Topic> {
-    storage.read(move |db| topics::get(db, &id)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn topics_create(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    input: TopicCreate,
-) -> CommandResult<Topic> {
-    storage
-        .write(&app, move |db| topics::create(db, input))
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn topics_update(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    id: String,
-    patch: TopicUpdate,
-) -> CommandResult<Topic> {
-    storage
-        .write(&app, move |db| topics::update(db, &id, patch))
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn topics_delete(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    id: String,
-) -> CommandResult<()> {
-    storage.write(&app, move |db| topics::delete(db, &id)).await
-}
-
-/* Task cards */
-
-#[tauri::command]
-#[specta::specta]
-pub async fn task_cards_list(
-    storage: State<'_, Storage>,
-    call_id: String,
-) -> CommandResult<Vec<TaskCard>> {
-    storage.read(move |db| task_cards::list(db, &call_id)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn task_cards_get(storage: State<'_, Storage>, id: String) -> CommandResult<TaskCard> {
-    storage.read(move |db| task_cards::get(db, &id)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn task_cards_create(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    input: TaskCardCreate,
-) -> CommandResult<TaskCard> {
-    storage
-        .write(&app, move |db| task_cards::create(db, input))
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn task_cards_update(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    id: String,
-    patch: TaskCardUpdate,
-) -> CommandResult<TaskCard> {
-    storage
-        .write(&app, move |db| task_cards::update(db, &id, patch))
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn task_cards_delete(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    id: String,
-) -> CommandResult<()> {
-    storage
-        .write(&app, move |db| task_cards::delete(db, &id))
-        .await
-}
-
-/* Questions */
-
-#[tauri::command]
-#[specta::specta]
-pub async fn questions_list(
-    storage: State<'_, Storage>,
-    call_id: String,
-) -> CommandResult<Vec<Question>> {
-    storage.read(move |db| questions::list(db, &call_id)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn questions_get(storage: State<'_, Storage>, id: String) -> CommandResult<Question> {
-    storage.read(move |db| questions::get(db, &id)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn questions_create(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    input: QuestionCreate,
-) -> CommandResult<Question> {
-    storage
-        .write(&app, move |db| questions::create(db, input))
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn questions_update(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    id: String,
-    patch: QuestionUpdate,
-) -> CommandResult<Question> {
-    storage
-        .write(&app, move |db| questions::update(db, &id, patch))
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn questions_delete(
-    app: AppHandle,
-    storage: State<'_, Storage>,
-    id: String,
-) -> CommandResult<()> {
-    storage
-        .write(&app, move |db| questions::delete(db, &id))
-        .await
-}
-
 /* Transcript */
 
 // Only the backend writes the transcript (speech recognition).
@@ -479,6 +322,54 @@ pub async fn transcript_state(
         .await
 }
 
+/* The call state (agent-fast-loop) */
+
+/// Everything a window shows about a recording's call: topics, cards,
+/// questions with their place in the visible list (`visible`, `rank` 0 =
+/// the main one), the final check, and the agent's state. Read again on
+/// `CallStateChanged`. `NotFound` for an unknown recording.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_state_get(
+    storage: State<'_, Storage>,
+    fast_loop: State<'_, FastLoop>,
+    recording_id: String,
+) -> CommandResult<CallStateView> {
+    let fast_loop = fast_loop.inner().clone();
+    storage
+        .read(move |db| fast_loop_app::view(db, &fast_loop, &recording_id))
+        .await
+}
+
+/// «Закрепить» / «Открепить» / «Скрыть» / «Задал» / «Вернуть» on a
+/// question; every window gets `CallStateChanged`. `NotFound` for an
+/// unknown question, `Invalid` for an action its state doesn't allow.
+#[tauri::command]
+#[specta::specta]
+pub async fn questions_act(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    id: String,
+    action: QuestionAction,
+) -> CommandResult<()> {
+    let recording_id = storage
+        .write(&app, move |db| {
+            Ok((call_state::act(db, &id, action)?, Vec::new()))
+        })
+        .await?;
+    call_state_changed(&app, &recording_id);
+    Ok(())
+}
+
+/// «Повторить»: calls the agent of the recording now, or checks it again
+/// when it was not ready. `NotFound` when the recording's live pass doesn't
+/// run.
+#[tauri::command]
+#[specta::specta]
+pub fn agent_retry(fast_loop: State<'_, FastLoop>, recording_id: String) -> CommandResult<()> {
+    fast_loop.retry(&recording_id)
+}
+
 /* Settings */
 
 /// Stored preferences over the defaults of the keys Rust acts on
@@ -522,6 +413,7 @@ pub async fn settings_update(
     patch: SettingsMap,
 ) -> CommandResult<SettingsUpdateResult> {
     settings::validate(&patch)?;
+    let count_changed = patch.contains_key(settings::QUESTION_COUNT);
     let _one_at_a_time = lock.0.lock().await;
     // As `speech_model_select`: a ready model, not changed while recording.
     let model = patch
@@ -557,6 +449,17 @@ pub async fn settings_update(
     );
     if model.is_some() {
         models.set_selected(settings::speech_model(&settings));
+    }
+    if count_changed {
+        // Every window shows the new number of questions at once.
+        let recordings = storage
+            .write(&app, |db| {
+                Ok((fast_loop_app::recompute_lists(db)?, Vec::new()))
+            })
+            .await?;
+        for recording_id in recordings {
+            call_state_changed(&app, &recording_id);
+        }
     }
     Ok(SettingsUpdateResult {
         settings,
@@ -715,9 +618,19 @@ async fn agent_cli(app: &AppHandle, storage: &Storage) -> CommandResult<PathBuf>
 pub async fn agent_status(
     app: AppHandle,
     storage: State<'_, Storage>,
+    fast_loop: State<'_, FastLoop>,
 ) -> CommandResult<AgentState> {
     let cwd = agent_workdir(&app);
-    Ok(agent::locate_and_check(&storage, &app, &SearchEnv::from_process(), &cwd).await)
+    let state = agent::locate_and_check(&storage, &app, &SearchEnv::from_process(), &cwd).await;
+    resume_calls(&fast_loop, &state);
+    Ok(state)
+}
+
+/// A ready agent resumes the calls of a recording that waited for it.
+fn resume_calls(fast_loop: &FastLoop, state: &AgentState) {
+    if matches!(state, AgentState::Ready { .. }) {
+        fast_loop.agent_ready();
+    }
 }
 
 /// "Установить": runs the official installer with `AgentInstallProgress`
@@ -810,6 +723,7 @@ pub async fn agent_login_submit(
     app: AppHandle,
     storage: State<'_, Storage>,
     sessions: State<'_, AgentSessions>,
+    fast_loop: State<'_, FastLoop>,
     code: String,
 ) -> CommandResult<AgentState> {
     let code = code.trim();
@@ -818,7 +732,9 @@ pub async fn agent_login_submit(
     }
     let session = sessions.take_login().await?;
     let cli = agent_cli(&app, &storage).await?;
-    agent::finish_login(session, code, &cli, &agent_workdir(&app)).await
+    let state = agent::finish_login(session, code, &cli, &agent_workdir(&app)).await?;
+    resume_calls(&fast_loop, &state);
+    Ok(state)
 }
 
 /// "Отменить": stops the login in progress (or still starting), if any.

@@ -36,12 +36,15 @@ export function CallQuestions({
     anchors,
     banner,
     current,
+    earlier = [],
     empty,
     finalCheck,
     frozen = false,
     hoveredId,
     noTopic,
+    parkedFinalCheck,
     previous,
+    usage,
   } = questions;
   const prefix = useId();
 
@@ -52,7 +55,11 @@ export function CallQuestions({
         <QuestionsNav
           agent={agent}
           anchors={anchors}
+          finalCheckCount={
+            parkedFinalCheck ? parkedFinalCheck.questions.length + 1 : undefined
+          }
           sectionIdPrefix={prefix}
+          usage={usage}
         />
       }
     >
@@ -79,6 +86,14 @@ export function CallQuestions({
           topic={previous}
         />
       ) : null}
+      {earlier.map((topic) => (
+        <EarlierTopic
+          className="pt-4"
+          id={topicSectionId(prefix, topic.id)}
+          key={topic.id}
+          topic={topic}
+        />
+      ))}
       {noTopic ? (
         <EarlierTopic
           className="pt-2"
