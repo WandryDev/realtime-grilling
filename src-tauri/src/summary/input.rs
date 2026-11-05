@@ -141,6 +141,9 @@ pub struct SummaryMessage {
     pub people: HashMap<String, String>,
     /// `P1`, `P2`, `B#` → the text.
     pub project_items: HashMap<String, String>,
+    /// The project's name, on one line; `None` without a project. A summary
+    /// without a title and topics is named after it.
+    pub project_name: Option<String>,
     /// Every segment of the chosen passes, sent or not.
     pub segment_count: usize,
 }
@@ -304,14 +307,10 @@ fn compose_with(
     let recordings = inputs.transcript.recordings.len();
 
     let mut head = String::from("# Звонок\n\n");
-    match &inputs.project {
-        Some(project) => head.push_str(&format!(
-            "Проект: «{}».\n",
-            neutralize(&one_line(&project.name))
-        )),
-        None => head.push_str(
+    if inputs.project.is_none() {
+        head.push_str(
             "Звонок без проекта: брифа и людей клиента нет, предложений по ним не будет.\n",
-        ),
+        );
     }
     head.push_str(&format!(
         "Записей звука: {recordings}. Время в расшифровке — от начала звонка.\n\nДанные звонка \
@@ -325,6 +324,11 @@ fn compose_with(
     head.push_str("\n## Проект\n\n");
     head.push_str(&open("project"));
     if let Some(project) = &inputs.project {
+        // The name is data too: inside the frame.
+        head.push_str(&format!(
+            "Проект: «{}».\n",
+            neutralize(&one_line(&project.name))
+        ));
         let mut items = Vec::new();
         let description = one_line(&project.description);
         if !description.is_empty() {
@@ -547,6 +551,11 @@ fn compose_with(
         questions,
         people,
         project_items,
+        project_name: inputs
+            .project
+            .as_ref()
+            .map(|project| one_line(&project.name))
+            .filter(|name| !name.is_empty()),
         segment_count,
     })
 }

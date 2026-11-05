@@ -552,9 +552,10 @@ fn a_build_saves_what_passes_the_checks() {
     let asked = state.questions.iter().find(|q| q.id == call.asked).unwrap();
     assert_eq!(asked.status, QuestionStatus::Answered);
     assert!(!asked.visible);
+    // H1: the segment's own words, not the agent's copy of them.
     assert_eq!(
         asked.answer_evidence.as_ref().unwrap()[0].quote,
-        "готово когда курс совпадает с банком"
+        "Готово, когда курс совпадает с банком"
     );
     let hidden = state
         .questions
@@ -916,4 +917,81 @@ fn a_crash_during_a_build_leaves_a_finished_call_to_build_again() {
     assert_eq!(kept.state, SummaryState::Failed);
     assert_eq!(kept.title, "Прежние итоги");
     assert!(kept.content.is_some());
+}
+
+/// M2: a rebuild does not propose again what the manager accepted or
+/// rejected; an accepted brief proposal is not noted twice.
+#[test]
+fn a_rebuild_does_not_propose_what_was_decided() {
+    use crate::storage::proposals::apply::{self, ProposalDecide};
+    let agent = ScriptedAgent::new(Ok(summary_reply()), Ok(proposals_reply()));
+    let host = TestHost::new(Some(agent.clone()));
+    let builds = SummaryBuilds::default();
+    let call = exchange(&host, CallStatus::Finished);
+    build(&host, &builds, &call.call);
+    let made = host
+        .storage()
+        .read_now(|db| proposals::list(db, &call.call))
+        .unwrap();
+    let field = |name: &str| made.iter().find(|p| p.field == name).unwrap().id.clone();
+    for (id, decision) in [
+        (field("glossary"), ProposalDecision::Accepted),
+        (field("tech"), ProposalDecision::Rejected),
+    ] {
+        let input = ProposalDecide {
+            decision,
+            edited: None,
+        };
+        tauri::async_runtime::block_on(
+            host.storage()
+                .write(host.as_ref(), move |db| apply::decide(db, &id, &input)),
+        )
+        .unwrap();
+    }
+
+    build(&host, &builds, &call.call);
+    let after = host
+        .storage()
+        .read_now(|db| proposals::list(db, &call.call))
+        .unwrap();
+    let pending: Vec<&str> = after
+        .iter()
+        .filter(|p| p.decision == ProposalDecision::Pending)
+        .map(|p| p.field.as_str())
+        .collect();
+    assert_eq!(pending, ["howToAsk"], "{after:#?}");
+    assert_eq!(after.len(), made.len());
+}
+
+/// L14: a reply whose every topic fails the checks fails the build; the
+/// previous summary stays.
+#[test]
+fn a_reply_with_nothing_true_keeps_the_previous_summary() {
+    let agent = ScriptedAgent::new(Ok(summary_reply()), Ok(proposals_reply()));
+    let host = TestHost::new(Some(agent.clone()));
+    let builds = SummaryBuilds::default();
+    let call = exchange(&host, CallStatus::Finished);
+    build(&host, &builds, &call.call);
+    let before = host.summary(&call.call);
+
+    let invented = json!({
+        "title": "Выдумка", "tldr": "", "answered": [], "next": [],
+        "topics": [{
+            "refs": [], "title": "Биткоин", "from": "S1", "to": "S1",
+            "points": [{ "text": "Принимают биткоин", "status": "fact",
+                         "evidence": [{ "id": "S2", "quote": "мы принимаем биткоин в кассе" }] }],
+            "card": { "title": "", "fields": [] }
+        }]
+    });
+    agent.set(Ok(invented), Ok(proposals_reply()));
+    host.progress.lock().unwrap().clear();
+    build(&host, &builds, &call.call);
+
+    let SummaryStageState::Failed { message } = host.last().state else {
+        panic!("{:?}", host.last());
+    };
+    assert!(message.contains("не прошла проверку"), "{message}");
+    let after = host.summary(&call.call);
+    assert_eq!(after.state, SummaryState::Failed);
+    assert_eq!(after.content, before.content);
 }

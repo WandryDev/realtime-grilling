@@ -16,7 +16,9 @@
 //! saves nothing. At its end the build closes the call (the call's
 //! manager does nothing unless the call is still finishing), unless it was
 //! aborted ("Отменить завершение", "Удалить все данные", a delete) or the
-//! app exits.
+//! app exits. An aborted build puts the summary row back as it was before
+//! it started (design.md, decision 1: nothing is saved), so a call that is
+//! live again has no «cancelled» summary.
 
 use std::{
     future::Future,
@@ -51,8 +53,8 @@ use crate::{
     speech::{events::TranscriptRefine, refiner::Refiner},
     storage::{
         Storage, calls, people, projects,
-        proposals::ProposalDecision,
-        summaries::{self, SummaryBuild},
+        proposals::{self, ProposalDecision},
+        summaries::{self, SummaryBuild, SummaryState},
     },
 };
 
@@ -190,7 +192,8 @@ async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot) {
         state: Mutex::new(StagesState::default()),
     };
     let call_id = slot.call_id().to_owned();
-    let outcome = attempt(host.as_ref(), &slot, &stages).await;
+    let mut before = None;
+    let outcome = attempt(host.as_ref(), &slot, &stages, &mut before).await;
     let (last, close) = match outcome {
         Ok(()) => (SummaryStageState::Done, true),
         Err(End::Failed(message)) => {
@@ -200,8 +203,15 @@ async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot) {
         }
         Err(End::Cancelled) => {
             let stop = slot.stopped();
-            if stop != Some(Stop::Shutdown) {
-                write_failed(host.as_ref(), &slot, CANCELLED).await;
+            match (stop, before) {
+                (Some(Stop::Shutdown), _) => {}
+                // Nothing is saved: the row as it was before the build
+                // (nothing to undo when it was not marked `building` yet).
+                (Some(Stop::Aborted), Some(before)) => {
+                    write_restored(host.as_ref(), &slot, before).await;
+                }
+                (Some(Stop::Aborted), None) => {}
+                _ => write_failed(host.as_ref(), &slot, CANCELLED).await,
             }
             (SummaryStageState::Cancelled, stop == Some(Stop::Stopped))
         }
@@ -214,6 +224,45 @@ async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot) {
     }
     if close {
         host.close_call(&call_id).await;
+    }
+}
+
+/// The summary row before the build: `None` without one, else its state
+/// and error.
+type Before = Option<(SummaryState, Option<String>)>;
+
+/// An aborted build: the summary row goes back to `before`, if this build
+/// is still the call's. A `building` row before it (a stopped build was
+/// still winding down) reads as `failed` / [`CANCELLED`].
+async fn write_restored<H: SummaryHost>(host: &H, slot: &BuildSlot, before: Before) {
+    let Some(storage) = host.storage() else {
+        return;
+    };
+    let (builds, call_id, generation) = (
+        slot.builds().clone(),
+        slot.call_id().to_owned(),
+        slot.generation(),
+    );
+    let written = storage
+        .write(host, move |db| {
+            if !builds.is_current(&call_id, generation) {
+                return Ok(((), Vec::new()));
+            }
+            let events = match before {
+                Some((SummaryState::Building, _)) => {
+                    summaries::save_failed(db, &call_id, CANCELLED)?.1
+                }
+                before => summaries::restore(db, &call_id, before)?,
+            };
+            Ok(((), events))
+        })
+        .await;
+    match written {
+        Ok(()) | Err(CommandError::NotFound { .. }) => {}
+        Err(error) => eprintln!(
+            "grill: the summary of {} was not put back: {error}",
+            slot.call_id()
+        ),
     }
 }
 
@@ -246,7 +295,14 @@ async fn write_failed<H: SummaryHost>(host: &H, slot: &BuildSlot, message: &str)
     }
 }
 
-async fn attempt<H: SummaryHost>(host: &H, slot: &BuildSlot, stages: &Stages) -> Result<(), End> {
+/// The build up to its save. `before` gets the summary row as it was when
+/// the build marked it `building`.
+async fn attempt<H: SummaryHost>(
+    host: &H,
+    slot: &BuildSlot,
+    stages: &Stages,
+    before: &mut Option<Before>,
+) -> Result<(), End> {
     stages.advance(SummaryStage::Transcript);
     let storage = host
         .storage()
@@ -257,18 +313,20 @@ async fn attempt<H: SummaryHost>(host: &H, slot: &BuildSlot, stages: &Stages) ->
     // The summary reads `building` from now on.
     let id = call_id.clone();
     let started = guard.clone();
-    let call = storage
+    let (call, was) = storage
         .write(host, move |db| {
             if !started.holds() {
                 return Ok((None, Vec::new()));
             }
             let call = calls::get(db, &id)?;
+            let was = summaries::state_of(db, &id)?;
             let (_, events) = summaries::start_building(db, &id)?;
-            Ok((Some(call), events))
+            Ok((Some((call, was)), events))
         })
         .await
         .map_err(storage_end)?
         .ok_or(End::Cancelled)?;
+    *before = Some(was);
     slot.set_project(call.project_id.clone());
 
     // The second pass of every recording, or a minute of silence.
@@ -315,6 +373,14 @@ async fn attempt<H: SummaryHost>(host: &H, slot: &BuildSlot, stages: &Stages) ->
     let reply = SummaryReply::from_reply(reply)
         .map_err(|error| failed(format!("Агент ответил не по схеме итогов: {error}")))?;
     let mut checked = validate::summary(reply, &message, pass);
+    if checked.nothing_left {
+        for reason in &checked.dropped {
+            eprintln!("grill: the summary of {call_id} dropped {reason}");
+        }
+        return Err(failed(
+            "Ни одна тема из ответа агента не прошла проверку цитат: прежние итоги остаются",
+        ));
+    }
     stages.update_counts(|counts| {
         counts.topics = u32::try_from(checked.summary.content.topics.len()).unwrap_or(u32::MAX);
     });
@@ -354,18 +420,22 @@ async fn attempt<H: SummaryHost>(host: &H, slot: &BuildSlot, stages: &Stages) ->
             if !saving.holds() {
                 return Ok((None, Vec::new()));
             }
-            // `before` from the brief and the profiles as they are now.
+            // `before` from the brief, the notes and the profiles as they
+            // are now; what the manager decided since stays decided.
             let call = calls::get(db, &id)?;
-            let (brief, people) = match &call.project_id {
-                Some(project_id) => (
-                    projects::get(db, project_id)?.brief,
-                    people::list(db, project_id)?,
-                ),
-                None => (None, Vec::new()),
+            let (brief, notes, people) = match &call.project_id {
+                Some(project_id) => {
+                    let project = projects::get(db, project_id)?;
+                    (project.brief, project.notes, people::list(db, project_id)?)
+                }
+                None => (None, String::new(), Vec::new()),
             };
+            let known = proposals::list(db, &id)?;
             let knowledge = Knowledge {
                 brief: brief.as_ref(),
+                notes: &notes,
                 people: &people,
+                proposals: &known,
             };
             let proposals = proposals.map(|reply| {
                 validate::proposals(reply, &message, has_project, &knowledge, &mut dropped)
@@ -458,7 +528,9 @@ async fn ask<H: SummaryHost>(
             proposals_schema_argument(),
         ),
     };
-    let name = format!("{}-{}", slot.call_id(), ask.name());
+    // The generation too: a stopped build winding down must not remove
+    // the file of the next build of the call.
+    let name = format!("{}-{}-{}", slot.call_id(), slot.generation(), ask.name());
     let prompt = PromptFile::write(&host.prompt_dir(), &name, rules)
         .map_err(|error| failed(format!("Не удалось записать промпт итогов: {error}")))?;
     let user_message = message.for_call(closing);
@@ -540,8 +612,9 @@ impl Stages {
             counts,
         };
         self.builds
-            .record(&self.call_id, self.generation, &progress);
-        (self.emit)(progress);
+            .announce(&self.call_id, self.generation, progress, |progress| {
+                (self.emit)(progress);
+            });
     }
 
     /// Ends the running stage and starts `stage`.

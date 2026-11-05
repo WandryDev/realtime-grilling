@@ -11,6 +11,12 @@ pub const MIN_QUOTE_WORDS: usize = 3;
 /// … and at least this many letters and digits (fewer only when its source
 /// has fewer).
 pub const MIN_QUOTE_CHARS: usize = 10;
+/// Words that turn a phrase into its opposite: a quote must keep them as
+/// they are, and must not add or drop one.
+const NEGATIONS: [&str; 4] = ["не", "нет", "ни", "без"];
+/// Of [`NEGATIONS`], those that negate the word after them: a quote that
+/// starts right after one dropped it.
+const LEADING_NEGATIONS: [&str; 3] = ["не", "ни", "без"];
 
 /// Lower case, `ё` → `е`, punctuation as spaces, spaces collapsed.
 pub fn normalize(text: &str) -> String {
@@ -26,13 +32,53 @@ pub fn normalize(text: &str) -> String {
     spaced.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A word of [`normalize`]d text and the bytes of the original it comes
+/// from.
+struct Word {
+    chars: Vec<char>,
+    start: usize,
+    end: usize,
+}
+
+/// The words of `text` as [`normalize`] splits them, with where they are.
+fn spans(text: &str) -> Vec<Word> {
+    let mut found: Vec<Word> = Vec::new();
+    let mut current: Option<Word> = None;
+    for (at, original) in text.char_indices() {
+        let end = at + original.len_utf8();
+        for lower in original.to_lowercase() {
+            let mapped = if lower == 'ё' { 'е' } else { lower };
+            if mapped.is_alphanumeric() {
+                let word = current.get_or_insert(Word {
+                    chars: Vec::new(),
+                    start: at,
+                    end,
+                });
+                word.chars.push(mapped);
+                word.end = end;
+            } else if let Some(word) = current.take() {
+                found.push(word);
+            }
+        }
+    }
+    found.extend(current);
+    found
+}
+
 /// The words of [`normalize`]d text.
 pub fn words(text: &str) -> Vec<Vec<char>> {
-    normalize(text)
-        .split(' ')
-        .filter(|word| !word.is_empty())
-        .map(|word| word.chars().collect())
-        .collect()
+    spans(text).into_iter().map(|word| word.chars).collect()
+}
+
+fn is_one_of(word: &[char], list: &[&str]) -> bool {
+    list.iter()
+        .any(|known| known.chars().eq(word.iter().copied()))
+}
+
+/// A negation or a word with a digit: «не будем» is not «будем», «50» is
+/// not «5», so such a word matches only itself.
+fn exact_only(word: &[char]) -> bool {
+    word.iter().any(|c| c.is_numeric()) || is_one_of(word, &NEGATIONS)
 }
 
 /// 1 − distance / longer length: 1 for equal words, 0 for nothing alike.
@@ -63,6 +109,11 @@ fn letters(words: &[Vec<char>]) -> usize {
     words.iter().map(Vec::len).sum()
 }
 
+/// The letters and digits of `text`.
+pub fn letter_count(text: &str) -> usize {
+    letters(&words(text))
+}
+
 /// Whether `quote` is long enough to stand for `source`: at least
 /// `min(`[`MIN_QUOTE_WORDS`]`, words of the source)` words and
 /// `min(`[`MIN_QUOTE_CHARS`]`, letters of the source)` letters and digits.
@@ -80,21 +131,53 @@ pub fn quote_long_enough(quote: &str, source: &str) -> bool {
 /// (each [`WORD_SIMILARITY`] alike). A source shorter than the quote is one
 /// window; the missing words count as not found. An empty quote is not
 /// found.
+///
+/// Negations (не, нет, ни, без) and words with digits match only exactly,
+/// both ways: a window fails when such a word of the quote or of the
+/// window is not the same word at the same place, and when the window
+/// starts right after «не», «ни» or «без» (the quote dropped it). «мы будем
+/// подключать» is not found in «мы не будем подключать», «5 операторов» is
+/// not found in «50 операторов».
 pub fn quote_matches(quote: &str, source: &str) -> bool {
+    quote_span(quote, source).is_some()
+}
+
+/// The text of `source` that [`quote_matches`] found for `quote`, from its
+/// first to its last word, as the source has it: what the client said,
+/// not the agent's wording of it.
+pub fn quote_span<'a>(quote: &str, source: &'a str) -> Option<&'a str> {
     let quote = words(quote);
-    let source = words(source);
-    if quote.is_empty() || source.is_empty() {
-        return false;
+    let found = spans(source);
+    if quote.is_empty() || found.is_empty() {
+        return None;
     }
-    let size = quote.len().min(source.len());
+    let size = quote.len().min(found.len());
     let needed = QUOTE_WORDS * quote.len() as f64;
-    source.windows(size).any(|window| {
-        let matched = window
-            .iter()
-            .zip(&quote)
-            .filter(|(word, quoted)| word_similarity(word, quoted) >= WORD_SIMILARITY)
-            .count();
-        matched as f64 >= needed - f64::EPSILON
+    (0..=found.len() - size).find_map(|start| {
+        if start > 0 && is_one_of(&found[start - 1].chars, &LEADING_NEGATIONS) {
+            return None;
+        }
+        let window = &found[start..start + size];
+        let mut matched = 0;
+        for (index, quoted) in quote.iter().enumerate() {
+            match window.get(index) {
+                Some(word) if exact_only(&word.chars) || exact_only(quoted) => {
+                    if word.chars != *quoted {
+                        return None;
+                    }
+                    matched += 1;
+                }
+                Some(word) => {
+                    if word_similarity(&word.chars, quoted) >= WORD_SIMILARITY {
+                        matched += 1;
+                    }
+                }
+                None if exact_only(quoted) => return None,
+                None => {}
+            }
+        }
+        (f64::from(matched) >= needed - f64::EPSILON)
+            .then(|| &source[window[0].start..window[size - 1].end])
     })
 }
 
@@ -180,6 +263,53 @@ mod tests {
         assert!(quote_long_enough("Да.", "Да."));
         assert!(quote_long_enough("нет не нужно", "Нет, не нужно."));
         assert!(!quote_long_enough("нет", "Нет, не нужно."));
+    }
+
+    /// A quote that drops «не» or changes a number says the opposite of
+    /// the client: not found, whichever words are around.
+    #[test]
+    fn negations_and_numbers_match_only_exactly() {
+        let refused = "Нет, мы не будем подключать 1С в этом году.";
+        assert!(!quote_matches(
+            "мы будем подключать 1С в этом году",
+            refused
+        ));
+        assert!(!quote_matches("будем подключать 1С в этом году", refused));
+        assert!(
+            quote_matches("мы не будем подключать 1С в том году", refused),
+            "the negation kept, the rest still fuzzy: found"
+        );
+        // Adding one is as wrong as dropping one.
+        assert!(!quote_matches("у нас сейчас не пять операторов", SEGMENT));
+        assert!(!quote_matches("пять операторов без смены", SEGMENT));
+        let counted = "У нас 50 операторов, а заявок 1000 в день.";
+        assert!(!quote_matches("у нас 5 операторов", counted));
+        assert!(!quote_matches("а заявок 2000 в день", counted));
+        assert!(quote_matches("у нас 50 операторов", counted));
+        assert!(quote_matches("а заявок 1000 в день", counted));
+        // The fuzzy words around stay fuzzy.
+        assert!(quote_matches("у нас 50 операторав", counted));
+        assert!(quote_matches("мы не будем подключать 1С", refused));
+    }
+
+    /// The span is the source's own text, punctuation and case included.
+    #[test]
+    fn the_span_is_the_client_s_words() {
+        assert_eq!(
+            quote_span("пять операторав в смену", SEGMENT),
+            Some("пять операторов в смену")
+        );
+        assert_eq!(
+            quote_span("у нас сейчас пять", SEGMENT),
+            Some("у нас сейчас пять")
+        );
+        assert_eq!(quote_span("Ну у нас", SEGMENT), Some("Ну, у нас"));
+        assert_eq!(
+            quote_span("иногда шесть если сезон", SEGMENT),
+            Some("иногда шесть, если сезон")
+        );
+        assert_eq!(quote_span("Ещё раз", "Всё — ЕЩЁ раз!"), Some("ЕЩЁ раз"));
+        assert_eq!(quote_span("десять менеджеров", SEGMENT), None);
     }
 
     #[test]

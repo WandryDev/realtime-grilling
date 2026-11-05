@@ -166,12 +166,28 @@ impl SummaryBuilds {
             .is_some_and(|control| control.generation == generation && control.stop.is_none())
     }
 
-    /// Keeps the progress of the build `generation`, for a window opening
-    /// late; nothing once it is not the call's build.
-    pub fn record(&self, call_id: &str, generation: u64, progress: &SummaryProgress) {
-        self.with(call_id, generation, |control| {
-            control.last = Some(progress.clone());
-        });
+    /// Sends the progress of the build `generation` (`emit`) and keeps it
+    /// for a window opening late, under the lock: nothing once another
+    /// build has the call, so a stopped build that winds down never tells
+    /// the windows about the call after the new build's first stage. A
+    /// build whose slot is gone still sends its end while no other build has
+    /// the call.
+    pub fn announce(
+        &self,
+        call_id: &str,
+        generation: u64,
+        progress: SummaryProgress,
+        emit: impl FnOnce(SummaryProgress),
+    ) {
+        let mut state = self.state();
+        match state.running.get_mut(call_id) {
+            Some(control) if control.generation == generation => {
+                control.last = Some(progress.clone());
+            }
+            Some(_) => return,
+            None => {}
+        }
+        emit(progress);
     }
 
     fn with<T>(

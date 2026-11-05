@@ -232,7 +232,13 @@ fn the_message_of_a_call_with_two_recordings() {
     let message = compose(&inputs).unwrap();
     let text = &message.text;
 
-    assert!(text.contains("Проект: «Обменник»."), "{text}");
+    // L18: the name is inside the project's frame.
+    let frame = format!(
+        "<project nonce=\"{}\">\nПроект: «Обменник».\n",
+        message.nonce
+    );
+    assert!(text.contains(&frame), "{text}");
+    assert_eq!(message.project_name.as_deref(), Some("Обменник"));
     assert!(text.contains("Записей звука: 2."), "{text}");
     assert!(
         text.contains("P1 (описание): Обменник валют для туристов"),

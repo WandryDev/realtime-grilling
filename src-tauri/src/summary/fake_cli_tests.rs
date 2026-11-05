@@ -30,7 +30,7 @@ use crate::{
         calls::{self, CallStatus},
         now_ms, projects,
         recordings::{self, RecordingFiles, RecordingLinks},
-        summaries::{SummaryState, SummaryTranscriptPass},
+        summaries::{self, SummaryState, SummaryTranscriptPass},
         transcript::{TranscriptChannel, append_live},
     },
 };
@@ -406,11 +406,15 @@ fn resuming_kills_the_build() {
     assert!(app.host.closed().is_empty(), "nothing closes the call");
     assert_eq!(app.calls.current().status, CallSessionStatus::Live);
     assert_eq!(app.status(&call), CallStatus::Live);
-    let summary = app.host.summary(&call);
-    assert_eq!(
-        (summary.state, summary.error.as_deref(), &summary.content),
-        (SummaryState::Failed, Some(CANCELLED), &None)
-    );
+    // L7: nothing is saved, the row as it was before the build: none, so
+    // the live call has no summary.
+    let id = call.clone();
+    let stored = app
+        .host
+        .storage()
+        .read_now(move |db| summaries::get(db, &id))
+        .unwrap();
+    assert_eq!(stored, None);
     assert_eq!(app.host.last().state, SummaryStageState::Cancelled);
 }
 

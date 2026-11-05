@@ -236,15 +236,30 @@ fn a_stopped_build_gives_its_place_to_a_new_one() {
         state: SummaryStageState::Running,
         counts: None,
     };
-    builds.record("a", old.generation(), &progress);
+    let sent = std::sync::Mutex::new(Vec::new());
+    let send = |generation| {
+        builds.announce("a", generation, progress.clone(), |progress| {
+            sent.lock().unwrap().push(progress);
+        });
+    };
+    // M4: the old build's events reach no window once the new one runs.
+    send(old.generation());
     assert_eq!(builds.progress("a"), None);
-    builds.record("a", new.generation(), &progress);
-    assert_eq!(builds.progress("a"), Some(progress));
+    assert!(sent.lock().unwrap().is_empty());
+    send(new.generation());
+    assert_eq!(builds.progress("a"), Some(progress.clone()));
+    assert_eq!(sent.lock().unwrap().len(), 1);
 
+    let (old_generation, new_generation) = (old.generation(), new.generation());
     drop(old);
     assert!(builds.is_building("a"));
+    send(old_generation);
+    assert_eq!(sent.lock().unwrap().len(), 1, "still not the old one's");
     drop(new);
     assert!(!builds.is_building("a"));
+    // A build that ended tells its end while no other has the call.
+    send(new_generation);
+    assert_eq!(sent.lock().unwrap().len(), 2);
 }
 
 #[test]
