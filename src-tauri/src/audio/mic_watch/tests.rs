@@ -12,6 +12,8 @@ use super::{state::RELEASE_DELAY_MS, *};
 struct Record {
     events: Mutex<Vec<MicActivityChanged>>,
     widgets: Mutex<Vec<String>>,
+    calls: Mutex<Vec<String>>,
+    transitions: Mutex<Vec<Transition>>,
     onboarding_completed: AtomicBool,
     behavior: Mutex<Option<MicBusyBehavior>>,
 }
@@ -37,6 +39,14 @@ impl MicHost for FakeHost {
 
     fn show_widget(&self, app: &str) {
         self.0.widgets.lock().unwrap().push(app.to_owned());
+    }
+
+    fn start_call(&self, app: &str) {
+        self.0.calls.lock().unwrap().push(app.to_owned());
+    }
+
+    fn transition(&self, transition: &Transition) {
+        self.0.transitions.lock().unwrap().push(transition.clone());
     }
 }
 
@@ -142,7 +152,61 @@ fn the_widget_waits_for_onboarding_and_respects_the_setting() {
     let (watch, record) = fixture();
     *record.behavior.lock().unwrap() = Some(MicBusyBehavior::Record);
     watch.observe(&[zoom()], 1_000);
-    assert_eq!(*record.widgets.lock().unwrap(), vec!["zoom.us"]);
+    assert!(record.widgets.lock().unwrap().is_empty(), "a call instead");
+    assert_eq!(*record.calls.lock().unwrap(), vec!["zoom.us"]);
+}
+
+/// `mic-activity`, "Сразу записывать" and "Завершил и остался во встрече":
+/// a call starts without the widget, once per busy period.
+#[test]
+fn record_starts_a_call_once_per_busy_period() {
+    let (watch, record) = fixture();
+    *record.behavior.lock().unwrap() = Some(MicBusyBehavior::Record);
+    let in_call = Arc::new(AtomicBool::new(false));
+    let probe = Arc::clone(&in_call);
+    watch.set_recording_probe(move || probe.load(Ordering::SeqCst));
+
+    watch.observe(&[zoom()], 1_000);
+    assert_eq!(*record.calls.lock().unwrap(), vec!["zoom.us"]);
+    in_call.store(true, Ordering::SeqCst);
+
+    // The manager finished the call and stays in the meeting: Zoom keeps
+    // the microphone, restarts its stream, another app joins.
+    in_call.store(false, Ordering::SeqCst);
+    watch.observe(&[], 2_000);
+    watch.observe(&[zoom(), holder(300, "Google Chrome")], 3_000);
+    watch.observe(&[holder(300, "Google Chrome")], 4_000);
+    assert_eq!(*record.calls.lock().unwrap(), vec!["zoom.us"]);
+
+    // Free, then busy again: a new period, a new call.
+    watch.observe(&[], 5_000);
+    watch.tick(5_000 + RELEASE_DELAY_MS);
+    watch.observe(&[zoom()], 20_000);
+    assert_eq!(*record.calls.lock().unwrap(), vec!["zoom.us", "zoom.us"]);
+    assert!(record.widgets.lock().unwrap().is_empty());
+}
+
+/// The call hears every busy / free change, also without a widget or call.
+#[test]
+fn every_transition_reaches_the_call() {
+    let (watch, record) = fixture();
+    record.onboarding_completed.store(false, Ordering::SeqCst);
+    watch.observe(&[zoom()], 1_000);
+    watch.observe(&[], 2_000);
+    watch.tick(2_000 + RELEASE_DELAY_MS);
+    assert_eq!(
+        *record.transitions.lock().unwrap(),
+        vec![
+            Transition::Busy {
+                app: "zoom.us".to_owned(),
+                since: 1_000
+            },
+            Transition::Free {
+                app: "zoom.us".to_owned(),
+                released_at: 2_000
+            },
+        ]
+    );
 }
 
 #[test]
@@ -164,19 +228,20 @@ fn no_widget_while_a_recording_runs() {
 
 #[test]
 fn widget_rule_table() {
+    use BusyAction::{ShowWidget, StartCall};
     use MicBusyBehavior::{Nothing, Record, Widget};
-    // (onboarding completed, recording, behavior, shown) → show
+    // (onboarding completed, in a call, behavior, shown) → action
     let cases = [
-        (true, false, Widget, false, true),
-        (true, false, Record, false, true),
-        (true, false, Nothing, false, false),
-        (false, false, Widget, false, false),
-        (false, false, Record, false, false),
-        (true, true, Widget, false, false),
-        (true, true, Record, false, false),
-        (true, false, Widget, true, false),
-        (true, false, Record, true, false),
-        (false, true, Nothing, true, false),
+        (true, false, Widget, false, ShowWidget),
+        (true, false, Record, false, StartCall),
+        (true, false, Nothing, false, BusyAction::Nothing),
+        (false, false, Widget, false, BusyAction::Nothing),
+        (false, false, Record, false, BusyAction::Nothing),
+        (true, true, Widget, false, BusyAction::Nothing),
+        (true, true, Record, false, BusyAction::Nothing),
+        (true, false, Widget, true, BusyAction::Nothing),
+        (true, false, Record, true, BusyAction::Nothing),
+        (false, true, Nothing, true, BusyAction::Nothing),
     ];
     for (onboarding_completed, recording, behavior, shown, expected) in cases {
         let rule = WidgetRule {
@@ -185,7 +250,7 @@ fn widget_rule_table() {
             behavior,
             shown,
         };
-        assert_eq!(should_show_widget(rule), expected, "{rule:?}");
+        assert_eq!(busy_action(rule), expected, "{rule:?}");
     }
 }
 

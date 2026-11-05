@@ -221,6 +221,44 @@ export const commands = {
 	 */
 	micActivityGet: () => typedError<MicActivityChanged, CommandError>(__TAURI_INVOKE("mic_activity_get")),
 	/**
+	 *  The call in progress as the windows last got it (`CallSessionChanged`):
+	 *  a window opened mid-call shows it at once.
+	 */
+	callCurrent: () => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_current")),
+	/**
+	 *  "Начать": creates the call (`live`, its project or none, its people)
+	 *  and records it; the start widget goes and the overlay or the call
+	 *  window shows ("Компактный оверлей"). During a call, returns it and
+	 *  creates nothing. Without microphone access: `External` with
+	 *  `reason: noAccess`, and no call. An unknown project or person:
+	 *  `NotFound`; a person of another project, or people without a project:
+	 *  `Invalid`.
+	 */
+	callStart: (input: CallStart) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_start", { input })),
+	/**
+	 *  "Завершить" of the live call: the recording stops, the call gets its
+	 *  end time and is `finishing`; the overlay goes and the main window opens
+	 *  `/call` for the summary. Otherwise nothing changes. An unknown call:
+	 *  `NotFound`; a call that isn't the current one: `Invalid`.
+	 */
+	callFinish: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_finish", { callId })),
+	/**
+	 *  "Отменить завершение" of the finishing call: `live` again with a new
+	 *  recording of the same call. A recording that doesn't start leaves the
+	 *  call live without one and answers its error. Otherwise nothing changes.
+	 */
+	callResume: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_resume", { callId })),
+	/**
+	 *  The summary of the finishing call is built: it is `finished`, and no
+	 *  call is current. Otherwise nothing changes.
+	 */
+	callClose: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_close", { callId })),
+	/**
+	 *  "Продолжить": the countdown "Завершать звонок сам" stops until the
+	 *  microphone is let go again.
+	 */
+	callKeep: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_keep", { callId })),
+	/**
 	 *  Starts recording both channels and returns the recording's id (UUID v7).
 	 *  While a recording runs, returns its id and opens nothing. Without
 	 *  microphone access: `External` with `reason: noAccess`, nothing stored.
@@ -506,6 +544,16 @@ export type Call = {
 	updatedAt: number,
 };
 
+/**  One countdown for every window: they draw `endsAt − now`. */
+export type CallAutoEnd = {
+	/**  The app that let the microphone go. */
+	app: string,
+	/**  When it let it go, milliseconds since the Unix epoch. */
+	releasedAt: number,
+	/**  When the call ends by itself, milliseconds since the Unix epoch. */
+	endsAt: number,
+};
+
 export type CallCreate = {
 	/**  A call without a project when absent; it has no participants then. */
 	projectId?: string | null,
@@ -519,32 +567,59 @@ export type CallCreate = {
 	participantIds?: string[] | null,
 };
 
+/**
+ *  The call in progress, as every window shows it. `idle`: no call, every
+ *  other field empty.
+ */
 export type CallSession = {
-	callId: string,
-	/**  Names of the client's people on the call. */
-	participants: string[],
-	projectId: string | null,
-	/**  When recording started, milliseconds since the Unix epoch. */
-	startedAt?: number | null,
-	/**  The recording of the call (`recording_start`), stopped by "Завершить". */
-	recordingId?: string | null,
 	status: CallSessionStatus,
+	/**  The call in `calls`; `null` when idle. */
+	callId: string | null,
+	/**  `null`: a call without a project ("Звонок без проекта"). */
+	projectId: string | null,
+	/**  The client's people on the call, in the order they were added. */
+	participantIds: string[],
+	/**  Their names, in the same order. */
+	participants: string[],
+	/**  When the call started, milliseconds since the Unix epoch. */
+	startedAt: number | null,
+	/**
+	 *  The recording of the call: the running one while live (`null` when
+	 *  "Отменить завершение" could not start one), the stopped one while
+	 *  finishing.
+	 */
+	recordingId: string | null,
+	/**
+	 *  The countdown "Завершать звонок сам" after the meeting app let the
+	 *  microphone go; `null` when none runs.
+	 */
+	autoEnd: CallAutoEnd | null,
 };
 
 /**
- *  Where the call in progress is. The windows hand a call over to each
- *  other (the start widget starts it, the overlay shows it, the main window
- *  builds its summary), so every change is sent to every window; a window
- *  ignores the ones it sent itself (`source` is its label). Sent by the
- *  frontend.
+ *  The call in progress changed (call-lifecycle design.md, decision 4).
+ *  Sent by the backend (`CallManager`) to every window after each change,
+ *  after the `DataChanged` of the call, so a window finds the call in its
+ *  store. `call_current` reads the same session.
  */
 export type CallSessionChanged = {
-	/**  Label of the window that changed it. */
-	source: string,
 	session: CallSession,
 };
 
+/**
+ *  `finishing`: "Завершить" was pressed, the main window collects the
+ *  summary.
+ */
 export type CallSessionStatus = "idle" | "live" | "finishing";
+
+/**
+ *  "Начать" in a window: the project (none for a call without one) and the
+ *  client's people on the call, people of that project.
+ */
+export type CallStart = {
+	projectId?: string | null,
+	participantIds?: string[] | null,
+};
 
 /**  Everything the windows and the agent need about a recording's call. */
 export type CallState = {

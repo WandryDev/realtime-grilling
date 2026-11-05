@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window and onboarding: all data commands (projects' documents included), settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call recording, the call's questions and the agent's calls, the speech models, the hardware check and the mic check, the project brief (build, cancel, prepare, export), the open dialog (documents and the export folder), and the OS name (the Windows variant of onboarding).",
+  "description": "Main window and onboarding: all data commands (projects' documents included), settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call in progress (call_*), the call recording, the call's questions and the agent's calls, the speech models, the hardware check and the mic check, the project brief (build, cancel, prepare, export), the open dialog (documents and the export folder), and the OS name (the Windows variant of onboarding).",
   "windows": ["main", "onboarding"],
   "permissions": [
     "core:default",
@@ -68,6 +68,12 @@
     "allow-audio-level-stop",
     "allow-app-restart",
     "allow-mic-activity-get",
+    "allow-call-current",
+    "allow-call-start",
+    "allow-call-finish",
+    "allow-call-resume",
+    "allow-call-close",
+    "allow-call-keep",
     "allow-recording-start",
     "allow-recording-stop",
     "allow-recording-status",

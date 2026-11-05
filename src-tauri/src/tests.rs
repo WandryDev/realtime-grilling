@@ -1174,6 +1174,15 @@ mod acl {
 
     /// OS permissions, the agent CLI and the meters are for the main and
     /// onboarding windows only.
+    /// The summary is built in the main window: only it closes the call.
+    #[test]
+    fn floating_windows_cannot_close_the_call() {
+        for label in ["overlay", "widget"] {
+            let result = invoke(label, "call_close");
+            assert!(denied(&result), "{label} → call_close: {result:?}");
+        }
+    }
+
     #[test]
     fn floating_windows_cannot_touch_permissions_agent_or_audio() {
         for label in ["overlay", "widget"] {
@@ -1250,6 +1259,21 @@ mod acl {
             ("overlay", "recording_start"),
             ("overlay", "recording_stop"),
             ("overlay", "recording_status"),
+            // Every window reads, starts, finishes and resumes the call in
+            // progress and stops its countdown; the main window closes it
+            // once the summary is built.
+            ("main", "call_current"),
+            ("main", "call_start"),
+            ("main", "call_finish"),
+            ("main", "call_resume"),
+            ("main", "call_close"),
+            ("main", "call_keep"),
+            ("widget", "call_current"),
+            ("widget", "call_start"),
+            ("overlay", "call_current"),
+            ("overlay", "call_finish"),
+            ("overlay", "call_resume"),
+            ("overlay", "call_keep"),
             // Every window shows the call's questions, acts on them and
             // retries the agent.
             ("main", "call_state_get"),
@@ -1318,6 +1342,11 @@ fn capabilities_match_the_command_list() {
         assert!(all.contains(command), "unknown command {command}");
     }
     for needed in [
+        "call_current",
+        "call_start",
+        "call_finish",
+        "call_resume",
+        "call_keep",
         "call_state_get",
         "questions_act",
         "agent_retry",
@@ -1336,6 +1365,7 @@ fn capabilities_match_the_command_list() {
         );
     }
     for forbidden in [
+        "call_close",
         "brief_build",
         "brief_cancel",
         "brief_export",

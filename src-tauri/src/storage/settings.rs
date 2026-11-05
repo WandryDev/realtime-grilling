@@ -47,6 +47,13 @@ pub const DEFAULT_QUESTION_COUNT: usize = 3;
 /// «Как часто предлагать вопросы»: `rare`, `normal` or `often`
 /// (agent-fast-loop design.md, decision 2). Stored as the frontend writes it.
 pub const QUESTION_FREQUENCY: &str = "questionFrequency";
+/// «Завершать звонок сам»: minutes after the meeting app let the
+/// microphone go, as a string (`"5"`, `"10"`), or `"never"`
+/// (call-lifecycle design.md, decision 6).
+pub const AUTO_END: &str = "autoEnd";
+/// «Компактный оверлей»: a started call shows the overlay, not the call
+/// window (decision 5).
+pub const COMPACT_OVERLAY: &str = "compactOverlay";
 
 pub const SETTINGS_ID: &str = "settings";
 
@@ -55,8 +62,8 @@ pub const SETTINGS_ID: &str = "settings";
 pub enum MicBusyBehavior {
     /// Show the start widget.
     Widget,
-    /// Start recording right away. Until the call lifecycle exists it
-    /// behaves as `Widget`.
+    /// Start a call right away, with the last call's project and people,
+    /// and show the overlay (call-lifecycle design.md, decision 7).
     Record,
     /// Do nothing; the windows still get `MicActivityChanged`.
     Nothing,
@@ -81,6 +88,8 @@ pub fn defaults() -> SettingsMap {
         (LAUNCH_AT_LOGIN.to_owned(), json!(true)),
         (HIDE_ON_SHARE.to_owned(), json!(true)),
         (MIC_BUSY_BEHAVIOR.to_owned(), json!("widget")),
+        (AUTO_END.to_owned(), json!("10")),
+        (COMPACT_OVERLAY.to_owned(), json!(true)),
         (SPEECH_MODEL.to_owned(), json!(ModelId::Turbo.as_str())),
         (
             SHORTCUTS.to_owned(),
@@ -120,7 +129,10 @@ pub fn validate(patch: &SettingsMap) -> CommandResult<()> {
             return Err(CommandError::invalid("Пустой ключ настройки"));
         }
         let valid = match key.as_str() {
-            ONBOARDING_COMPLETED | LAUNCH_AT_LOGIN | HIDE_ON_SHARE => value.is_boolean(),
+            ONBOARDING_COMPLETED | LAUNCH_AT_LOGIN | HIDE_ON_SHARE | COMPACT_OVERLAY => {
+                value.is_boolean()
+            }
+            AUTO_END => value.is_string() || value.is_number(),
             SHORTCUTS => serde_json::from_value::<Shortcuts>(value.clone()).is_ok(),
             MIC_BUSY_BEHAVIOR => value.as_str().and_then(MicBusyBehavior::parse).is_some(),
             SPEECH_MODEL => value.as_str().and_then(ModelId::parse).is_some(),
@@ -219,6 +231,29 @@ pub fn call_language(settings: &SettingsMap) -> CallLanguage {
         .unwrap_or_default()
 }
 
+/// `autoEnd` as a delay: whole minutes above zero, as a string (how the
+/// frontend stores it) or a number. `"never"`, zero or anything else is
+/// `None` ("Никогда"); a missing key is the default, 10 minutes.
+pub fn auto_end(settings: &SettingsMap) -> Option<std::time::Duration> {
+    let minutes = match settings.get(AUTO_END) {
+        None => Some(10),
+        Some(Value::String(text)) => text.trim().parse::<u64>().ok(),
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(_) => None,
+    };
+    minutes
+        .filter(|minutes| *minutes > 0)
+        .map(|minutes| std::time::Duration::from_secs(minutes * 60))
+}
+
+/// `compactOverlay`; a missing (or unreadable) value is on.
+pub fn compact_overlay(settings: &SettingsMap) -> bool {
+    settings
+        .get(COMPACT_OVERLAY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 /// The least time between the starts of two agent calls by
 /// `questionFrequency`: `rare` 45 s, `normal` 20 s, `often` 10 s. Anything
 /// else is `normal`.
@@ -243,5 +278,44 @@ pub fn question_count(settings: &SettingsMap) -> usize {
         Some(1) => 1,
         Some(5) => 5,
         _ => DEFAULT_QUESTION_COUNT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn auto_end_is_minutes_or_never() {
+        let with = |value: Value| SettingsMap::from([(AUTO_END.to_owned(), value)]);
+        assert_eq!(auto_end(&defaults()), Some(Duration::from_secs(600)));
+        assert_eq!(
+            auto_end(&SettingsMap::new()),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(auto_end(&with(json!("5"))), Some(Duration::from_secs(300)));
+        assert_eq!(auto_end(&with(json!(10))), Some(Duration::from_secs(600)));
+        for never in [
+            json!("never"),
+            json!("0"),
+            json!(0),
+            json!(null),
+            json!("soon"),
+        ] {
+            assert_eq!(auto_end(&with(never.clone())), None, "{never}");
+        }
+    }
+
+    #[test]
+    fn compact_overlay_is_on_unless_turned_off() {
+        assert!(compact_overlay(&defaults()));
+        assert!(compact_overlay(&SettingsMap::new()));
+        let off = SettingsMap::from([(COMPACT_OVERLAY.to_owned(), json!(false))]);
+        assert!(!compact_overlay(&off));
+        assert!(validate(&off).is_ok());
+        let bad = SettingsMap::from([(COMPACT_OVERLAY.to_owned(), json!("yes"))]);
+        assert!(validate(&bad).is_err());
     }
 }

@@ -122,6 +122,10 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(crate::agent::fast_loop::app::for_app(app.handle()));
     let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer());
     app.manage(recorder.clone());
+    // The call in progress records through the recorder; none at start
+    // (the storage finished the calls a previous run left).
+    let calls = crate::call::manager_for_app(app.handle(), recorder.clone(), speech.clone());
+    app.manage(calls.clone());
     // After the recorder: it pauses while recording. Queues what a previous
     // run left unrefined.
     app.manage(Refiner::start(
@@ -130,9 +134,9 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
         RefinerConfig::default(),
     ));
     // Runs for the app's whole life; needs no microphone access. No start
-    // widget while recording.
+    // widget (and no new call) during a call or a recording.
     let watch = crate::audio::mic_watch::start_for_app(app.handle());
-    watch.set_recording_probe(move || recorder.is_recording());
+    watch.set_recording_probe(move || recorder.is_recording() || calls.is_active());
     app.manage(watch);
     Ok(())
 }

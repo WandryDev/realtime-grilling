@@ -1,6 +1,7 @@
 mod agent;
 mod audio;
 mod bindings;
+mod call;
 mod commands;
 mod error;
 mod events;

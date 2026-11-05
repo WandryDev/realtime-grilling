@@ -29,8 +29,9 @@ use crate::{
         AudioLevels, AudioSource,
         mic_watch::{MicActivityChanged, MicWatch},
     },
+    call::{CallManager, CallStart},
     error::{CommandError, CommandResult},
-    events::Navigate,
+    events::{CallSession, Navigate},
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
     projects::{
         brief::{export as brief_export_file, run as brief_run},
@@ -909,6 +910,79 @@ pub async fn audio_level_stop(
 #[specta::specta]
 pub fn mic_activity_get(watch: State<'_, MicWatch>) -> CommandResult<MicActivityChanged> {
     Ok(watch.current())
+}
+
+/* Call (call-lifecycle design.md, decision 2) */
+
+/// The call in progress as the windows last got it (`CallSessionChanged`):
+/// a window opened mid-call shows it at once.
+#[tauri::command]
+#[specta::specta]
+pub fn call_current(calls: State<'_, CallManager>) -> CommandResult<CallSession> {
+    Ok(calls.current())
+}
+
+/// "Начать": creates the call (`live`, its project or none, its people)
+/// and records it; the start widget goes and the overlay or the call
+/// window shows ("Компактный оверлей"). During a call, returns it and
+/// creates nothing. Without microphone access: `External` with
+/// `reason: noAccess`, and no call. An unknown project or person:
+/// `NotFound`; a person of another project, or people without a project:
+/// `Invalid`.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_start(
+    calls: State<'_, CallManager>,
+    input: CallStart,
+) -> CommandResult<CallSession> {
+    calls.start(input).await
+}
+
+/// "Завершить" of the live call: the recording stops, the call gets its
+/// end time and is `finishing`; the overlay goes and the main window opens
+/// `/call` for the summary. Otherwise nothing changes. An unknown call:
+/// `NotFound`; a call that isn't the current one: `Invalid`.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_finish(
+    calls: State<'_, CallManager>,
+    call_id: String,
+) -> CommandResult<CallSession> {
+    calls.finish(&call_id).await
+}
+
+/// "Отменить завершение" of the finishing call: `live` again with a new
+/// recording of the same call. A recording that doesn't start leaves the
+/// call live without one and answers its error. Otherwise nothing changes.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_resume(
+    calls: State<'_, CallManager>,
+    call_id: String,
+) -> CommandResult<CallSession> {
+    calls.resume(&call_id).await
+}
+
+/// The summary of the finishing call is built: it is `finished`, and no
+/// call is current. Otherwise nothing changes.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_close(
+    calls: State<'_, CallManager>,
+    call_id: String,
+) -> CommandResult<CallSession> {
+    calls.close(&call_id).await
+}
+
+/// "Продолжить": the countdown "Завершать звонок сам" stops until the
+/// microphone is let go again.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_keep(
+    calls: State<'_, CallManager>,
+    call_id: String,
+) -> CommandResult<CallSession> {
+    calls.keep(&call_id).await
 }
 
 /* Recording */

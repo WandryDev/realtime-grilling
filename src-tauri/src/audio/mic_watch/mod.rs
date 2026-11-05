@@ -1,7 +1,10 @@
 //! "Микрофон занят другим приложением" (`specs/mic-activity`, design.md
 //! decisions 1–6): a watcher per OS reports who captures from an input,
 //! [`state::Debouncer`] turns that into busy / free, the windows get
-//! [`MicActivityChanged`] and Rust shows the start widget on busy.
+//! [`MicActivityChanged`] and Rust shows the start widget on busy, or starts
+//! a call ("Сразу записывать"). The call follows every busy / free change
+//! for its countdown "Завершать звонок сам" (call-lifecycle design.md,
+//! decisions 6 and 7).
 //!
 //! The watcher never opens an input device and needs no microphone access.
 
@@ -28,6 +31,7 @@ use tauri_specta::Event;
 
 use self::state::{Activity, Debouncer, Holder, Transition};
 use crate::{
+    call::CallManager,
     events::Navigate,
     shell::windows,
     storage::{
@@ -64,8 +68,8 @@ impl From<Activity> for MicActivityChanged {
     }
 }
 
-/// Whether a call is being recorded: no widget then. The recorder
-/// (`RecordingManager`) implements it and registers itself with
+/// Whether a call is in progress (or a recording runs): no widget and no
+/// new call then. The app registers it with
 /// [`MicWatch::set_recording_probe`]; until then [`NoRecorder`] answers.
 pub trait RecordingProbe: Send + Sync + 'static {
     fn is_recording(&self) -> bool;
@@ -100,26 +104,47 @@ pub trait MicHost: Send + Sync + 'static {
     fn widget_settings(&self) -> WidgetSettings;
     /// Shows the start widget naming `app`.
     fn show_widget(&self, app: &str);
+    /// "Сразу записывать": starts a call with the last call's project and
+    /// people, shown in the overlay.
+    fn start_call(&self, app: &str);
+    /// Every busy / free change, after [`Self::emit`]: the call's countdown
+    /// follows them.
+    fn transition(&self, transition: &Transition);
 }
 
 /// The input of the widget rule at the start of a busy period.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WidgetRule {
     pub onboarding_completed: bool,
+    /// A call is in progress (or a recording runs).
     pub recording: bool,
     pub behavior: MicBusyBehavior,
-    /// The widget was already shown in this busy period.
+    /// The widget was already shown, or a call started, in this busy
+    /// period.
     pub shown: bool,
 }
 
+/// What a busy microphone does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusyAction {
+    Nothing,
+    ShowWidget,
+    /// "Сразу записывать".
+    StartCall,
+}
+
 /// `specs/mic-activity`, "Виджет старта по занятому микрофону": onboarding
-/// done, no recording, the setting isn't "nothing" (`record` behaves as
-/// `widget` until the call lifecycle exists), once per busy period.
-pub const fn should_show_widget(rule: WidgetRule) -> bool {
-    rule.onboarding_completed
-        && !rule.recording
-        && !matches!(rule.behavior, MicBusyBehavior::Nothing)
-        && !rule.shown
+/// done, no call, once per busy period, as the setting says. A call the
+/// manager finished doesn't start again in the same busy period.
+pub const fn busy_action(rule: WidgetRule) -> BusyAction {
+    if !rule.onboarding_completed || rule.recording || rule.shown {
+        return BusyAction::Nothing;
+    }
+    match rule.behavior {
+        MicBusyBehavior::Widget => BusyAction::ShowWidget,
+        MicBusyBehavior::Record => BusyAction::StartCall,
+        MicBusyBehavior::Nothing => BusyAction::Nothing,
+    }
 }
 
 /// The widget's route naming the app: `/widget?app=<percent-encoded>`.
@@ -220,6 +245,7 @@ impl MicWatch {
     /// The watcher thread is the only caller, so events keep their order.
     fn changed(&self, transition: &Transition, activity: Activity) {
         self.0.host.emit(&activity.into());
+        self.0.host.transition(transition);
         match transition {
             Transition::Busy { app, .. } => {
                 let settings = self.0.host.widget_settings();
@@ -229,19 +255,21 @@ impl MicWatch {
                     .read()
                     .unwrap_or_else(PoisonError::into_inner)
                     .is_recording();
-                let show = {
+                let action = {
                     let mut inner = self.inner();
-                    let show = should_show_widget(WidgetRule {
+                    let action = busy_action(WidgetRule {
                         onboarding_completed: settings.onboarding_completed,
                         recording,
                         behavior: settings.behavior,
                         shown: inner.shown,
                     });
-                    inner.shown |= show;
-                    show
+                    inner.shown |= action != BusyAction::Nothing;
+                    action
                 };
-                if show {
-                    self.0.host.show_widget(app);
+                match action {
+                    BusyAction::ShowWidget => self.0.host.show_widget(app),
+                    BusyAction::StartCall => self.0.host.start_call(app),
+                    BusyAction::Nothing => {}
                 }
             }
             Transition::Free { .. } => self.inner().shown = false,
@@ -457,6 +485,18 @@ impl<R: Runtime> MicHost for AppHost<R> {
             eprintln!("grill: failed to send the widget route: {error}");
         }
         windows::show(&self.0, windows::WIDGET);
+    }
+
+    fn start_call(&self, _app: &str) {
+        if let Some(calls) = self.0.try_state::<CallManager>() {
+            calls.start_on_mic();
+        }
+    }
+
+    fn transition(&self, transition: &Transition) {
+        if let Some(calls) = self.0.try_state::<CallManager>() {
+            calls.mic_changed(transition);
+        }
     }
 }
 

@@ -59,43 +59,76 @@ pub struct Navigate {
     pub route: String,
 }
 
-/// Where the call in progress is. The windows hand a call over to each
-/// other (the start widget starts it, the overlay shows it, the main window
-/// builds its summary), so every change is sent to every window; a window
-/// ignores the ones it sent itself (`source` is its label). Sent by the
-/// frontend.
+/// The call in progress changed (call-lifecycle design.md, decision 4).
+/// Sent by the backend (`CallManager`) to every window after each change,
+/// after the `DataChanged` of the call, so a window finds the call in its
+/// store. `call_current` reads the same session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, Event)]
 #[serde(rename_all = "camelCase")]
 pub struct CallSessionChanged {
-    /// Label of the window that changed it.
-    pub source: String,
     pub session: CallSession,
 }
 
+/// The call in progress, as every window shows it. `idle`: no call, every
+/// other field empty.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CallSession {
-    pub call_id: String,
-    /// Names of the client's people on the call.
-    pub participants: Vec<String>,
-    pub project_id: Option<String>,
-    /// When recording started, milliseconds since the Unix epoch.
-    #[specta(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<i64>,
-    /// The recording of the call (`recording_start`), stopped by "Завершить".
-    #[specta(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recording_id: Option<String>,
     pub status: CallSessionStatus,
+    /// The call in `calls`; `null` when idle.
+    pub call_id: Option<String>,
+    /// `null`: a call without a project ("Звонок без проекта").
+    pub project_id: Option<String>,
+    /// The client's people on the call, in the order they were added.
+    pub participant_ids: Vec<String>,
+    /// Their names, in the same order.
+    pub participants: Vec<String>,
+    /// When the call started, milliseconds since the Unix epoch.
+    pub started_at: Option<i64>,
+    /// The recording of the call: the running one while live (`null` when
+    /// "Отменить завершение" could not start one), the stopped one while
+    /// finishing.
+    pub recording_id: Option<String>,
+    /// The countdown "Завершать звонок сам" after the meeting app let the
+    /// microphone go; `null` when none runs.
+    pub auto_end: Option<CallAutoEnd>,
 }
 
+impl CallSession {
+    pub fn idle() -> Self {
+        Self {
+            status: CallSessionStatus::Idle,
+            call_id: None,
+            project_id: None,
+            participant_ids: Vec::new(),
+            participants: Vec::new(),
+            started_at: None,
+            recording_id: None,
+            auto_end: None,
+        }
+    }
+}
+
+/// `finishing`: "Завершить" was pressed, the main window collects the
+/// summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum CallSessionStatus {
     Idle,
     Live,
     Finishing,
+}
+
+/// One countdown for every window: they draw `endsAt − now`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAutoEnd {
+    /// The app that let the microphone go.
+    pub app: String,
+    /// When it let it go, milliseconds since the Unix epoch.
+    pub released_at: i64,
+    /// When the call ends by itself, milliseconds since the Unix epoch.
+    pub ends_at: i64,
 }
 
 /// A global shortcut from Settings was pressed; `action` is its id

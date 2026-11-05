@@ -229,7 +229,8 @@ pub fn on_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: S
         return;
     };
     match action.as_str() {
-        TOGGLE_CALL => windows::show(app, windows::WIDGET),
+        // The call in progress, or the start widget without one.
+        TOGGLE_CALL => crate::call::toggle_call(app),
         TOGGLE_OVERLAY => windows::toggle(app, windows::OVERLAY),
         _ => {}
     }
