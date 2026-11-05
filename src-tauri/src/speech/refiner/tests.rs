@@ -88,12 +88,16 @@ fn the_refined_pass_replaces_the_live_one() {
     let id = recording(&host, dir.path());
     let script = numbered();
     let refiner = Refiner::start(host.as_host(), script.recognizer(), config());
+    // The summary build hears what the windows hear.
+    let mut news = refiner.subscribe();
 
     refiner.enqueue(&id);
     eventually("done", || {
         refine_events(&host).last().map(|e| e.state) == Some(RefineState::Done)
     });
     assert_eq!(state(&host, &id), TranscriptState::Refined);
+    let heard: Vec<TranscriptRefine> = std::iter::from_fn(|| news.try_recv().ok()).collect();
+    assert_eq!(heard, refine_events(&host));
     let segments = host.db(|connection| for_recording(connection, &id).unwrap());
     let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
     assert_eq!(texts, ["уточнённая 1", "уточнённая 2"]);

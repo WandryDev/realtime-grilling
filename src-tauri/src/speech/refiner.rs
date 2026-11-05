@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::sync::Notify;
+use tokio::sync::{Notify, broadcast};
 
 use super::{
     context::{self, RecordingContext},
@@ -76,7 +76,14 @@ struct Inner {
     config: RefinerConfig,
     queue: Mutex<VecDeque<String>>,
     wake: Arc<Notify>,
+    /// Every `TranscriptRefine` the windows get, for the summary build
+    /// waiting on the pass (post-call design.md, decision 2).
+    news: broadcast::Sender<TranscriptRefine>,
 }
+
+/// How many events a slow listener of [`Refiner::subscribe`] may fall
+/// behind before it misses some (it then reads the states again).
+const NEWS_CAPACITY: usize = 64;
 
 impl Inner {
     fn queue(&self) -> MutexGuard<'_, VecDeque<String>> {
@@ -107,6 +114,7 @@ impl Refiner {
             config,
             queue: Mutex::new(VecDeque::new()),
             wake: Arc::clone(&wake),
+            news: broadcast::channel(NEWS_CAPACITY).0,
         });
         tauri::async_runtime::spawn(run(Arc::downgrade(&inner), wake));
         Self(inner)
@@ -120,6 +128,12 @@ impl Refiner {
             queue.push_front(recording_id.to_owned());
         }
         self.0.wake.notify_one();
+    }
+
+    /// The progress of the pass from now on, as the windows get it.
+    #[allow(dead_code, reason = "the summary build listens (post-call task 2.4)")]
+    pub fn subscribe(&self) -> broadcast::Receiver<TranscriptRefine> {
+        self.0.news.subscribe()
     }
 
     /// Queues the stopped recordings whose second pass has not finished
@@ -266,13 +280,14 @@ impl Run<'_> {
     fn emit(&mut self, progress: u8, state: RefineState) {
         self.progress = progress;
         self.reported_at = Some(Instant::now());
-        self.inner
-            .host
-            .emit(TranscriptEvent::Refine(TranscriptRefine {
-                recording_id: self.recording_id.clone(),
-                progress,
-                state,
-            }));
+        let event = TranscriptRefine {
+            recording_id: self.recording_id.clone(),
+            progress,
+            state,
+        };
+        // Nobody listening is fine.
+        let _ = self.inner.news.send(event.clone());
+        self.inner.host.emit(TranscriptEvent::Refine(event));
     }
 
     fn quiet_for(&self, period: Duration) -> bool {
