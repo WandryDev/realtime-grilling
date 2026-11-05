@@ -12,7 +12,6 @@ import { CallBackend } from "@/features/call/backend";
 import { CallWidgetBackend } from "@/features/call-widget/backend";
 import { OnboardingBackend } from "@/features/onboarding/backend";
 import { IntegrationsBackend } from "@/features/onboarding/integrations/backend";
-import { PostCallBackend } from "@/features/post-call/backend";
 import { ProjectsBackend } from "@/features/projects/backend";
 import { RecordingBackend } from "@/features/recording/backend";
 import { SettingsBackend } from "@/features/settings/backend";
@@ -45,12 +44,11 @@ describe("app runtime", () => {
         CallWidgetBackend,
         IntegrationsBackend,
         OnboardingBackend,
-        PostCallBackend,
         ProjectsBackend,
         RecordingBackend,
         SettingsBackend,
       ])
     );
-    expect(services).toHaveLength(8);
+    expect(services).toHaveLength(7);
   });
 });

@@ -1,17 +1,8 @@
 "use client";
 
-import { Effect } from "effect";
-
 import { CURRENT_CALL_ID } from "@/data/call-session";
-import {
-  type CallRecord,
-  resolveCallId,
-  type TaskSyncService,
-  updateTaskCard,
-} from "@/data/calls";
-import { appRuntime } from "@/effect/runtime";
+import { type CallRecord, resolveCallId } from "@/data/calls";
 
-import { PostCallBackend } from "./backend";
 import {
   SEARCH,
   type SearchResult,
@@ -20,41 +11,10 @@ import {
 } from "./mock";
 
 /*
- * React-facing side of what happens after a call besides the summary,
- * which Rust builds (`src/data/summaries.ts`): sending a task card runs the
- * PostCallBackend Effect service (`./backend.ts`); searching the
- * transcripts is local. State goes to the calls slice
- * (`src/data/calls.ts`), so the screens only read hooks.
+ * The local search of the history over the demo transcripts and
+ * summaries. What Rust keeps after a call is read by the hooks of
+ * `src/data/*` (summaries, proposals, call records).
  */
-
-/* ------------------------------------------- Отправка карточки задачи */
-
-/** Creates a ClickUp task or a GitHub issue from a task card. */
-export function sendTaskCard(
-  callId: string,
-  cardId: string,
-  service: TaskSyncService
-): Promise<string> {
-  updateTaskCard(callId, cardId, (review) => ({
-    ...review,
-    sync: { ...review.sync, [service]: { status: "sending" } },
-  }));
-
-  return appRuntime.runPromise(
-    PostCallBackend.use((backend) =>
-      backend.sendTaskCard(callId, cardId, service)
-    ).pipe(
-      Effect.tap((ref) =>
-        Effect.sync(() =>
-          updateTaskCard(callId, cardId, (review) => ({
-            ...review,
-            sync: { ...review.sync, [service]: { ref, status: "sent" } },
-          }))
-        )
-      )
-    )
-  );
-}
 
 /* ------------------------------------------------- Поиск по звонкам */
 

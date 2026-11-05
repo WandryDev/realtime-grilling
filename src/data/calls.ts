@@ -13,7 +13,7 @@ import { MockDatabase } from "./services/mock-database";
 import { DEMO_CALL_ID, mockSeed, seedCallId } from "./services/mock-seed";
 import { PeopleData } from "./services/people";
 import { createStore } from "./store";
-import { createSyncedStore } from "./synced-store";
+import { createSyncedStore, refreshMockStores } from "./synced-store";
 
 /*
  * Finished calls: the history list and everything the user decides after a
@@ -44,23 +44,6 @@ export interface ProposalReview {
   text?: string;
 }
 
-export type TaskCardDecision = "pending" | "accepted" | "discarded";
-
-export type TaskSyncService = "clickup" | "github";
-
-export interface TaskSync {
-  /** Task or issue id once sent: "CU-612", "#48". */
-  ref?: string;
-  status: "sending" | "sent";
-}
-
-export interface TaskCardReview {
-  decision: TaskCardDecision;
-  sync: Partial<Record<TaskSyncService, TaskSync>>;
-  /** Title edited by the user. */
-  title?: string;
-}
-
 export interface CallRecord {
   /** The recording was deleted; transcript and summary stay. */
   audioDeleted: boolean;
@@ -85,7 +68,6 @@ export interface CallRecord {
   proposals: Record<string, ProposalReview>;
   /** When it started (its creation without a start), ms since the epoch. */
   startedAt: number;
-  tasks: Record<string, TaskCardReview>;
   time: string;
   title: string;
 }
@@ -199,7 +181,6 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
       projectId: call.projectId,
       proposals: {},
       startedAt: start.getTime(),
-      tasks: {},
       time,
       title: call.title,
     },
@@ -281,7 +262,6 @@ interface LocalCall {
   audioDeleted?: boolean;
   projectId?: string;
   proposals?: Record<string, ProposalReview>;
-  tasks?: Record<string, TaskCardReview>;
 }
 
 /**
@@ -307,7 +287,7 @@ function reviewSeed(): Record<string, LocalCall> {
     const audioDeleted = seed.recordings.some(
       (item) => item.callId === call.id && item.recording.audioDeleted
     );
-    local[call.id] = { audioDeleted, proposals, tasks: {} };
+    local[call.id] = { audioDeleted, proposals };
   }
   return local;
 }
@@ -325,7 +305,6 @@ function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
       audioDeleted: extra.audioDeleted ?? record.audioDeleted,
       projectId: extra.projectId ?? record.projectId,
       proposals: extra.proposals ?? record.proposals,
-      tasks: extra.tasks ?? record.tasks,
     };
   });
 }
@@ -449,31 +428,6 @@ export function setProposalDecision(
   return Promise.resolve();
 }
 
-const NEW_TASK_CARD: TaskCardReview = { decision: "pending", sync: {} };
-
-export function getTaskCardReview(call: CallRecord, cardId: string) {
-  return call.tasks[cardId] ?? NEW_TASK_CARD;
-}
-
-/** The demo's decision on a task card, local to the window (see above). */
-export function updateTaskCard(
-  id: string,
-  cardId: string,
-  update: (review: TaskCardReview) => TaskCardReview
-) {
-  localStore.set((local) => {
-    const tasks = local[id]?.tasks ?? {};
-    return {
-      ...local,
-      [id]: {
-        ...local[id],
-        tasks: { ...tasks, [cardId]: update(tasks[cardId] ?? NEW_TASK_CARD) },
-      },
-    };
-  });
-  return Promise.resolve();
-}
-
 /**
  * «Удалить запись»: deletes the audio of every recording of the call
  * (`call_audio_delete`); the call reads `audioDeleted` once it is done.
@@ -525,7 +479,8 @@ export function resetCalls() {
   const database = appRuntime.runSync(Effect.serviceOption(MockDatabase));
   if (Option.isSome(database)) {
     appRuntime.runSync(database.value.resetCalls);
-    callsStore.refresh();
+    // The calls and every per-call store (summaries, cards, proposals).
+    refreshMockStores();
   }
 }
 

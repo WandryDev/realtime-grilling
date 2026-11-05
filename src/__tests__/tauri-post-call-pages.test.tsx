@@ -63,6 +63,9 @@ const { fakeCall, fakePerson, fakeProject, IDLE_SESSION } = await import(
 const { CallSummaryPage } = await import(
   "@/features/post-call/pages/call-summary-page"
 );
+const { TaskCardsPage } = await import(
+  "@/features/post-call/pages/task-cards-page"
+);
 const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshCalls } = await import("@/data/calls");
@@ -84,6 +87,7 @@ const STARTED_AT = new Date(2026, 9, 19, 12, 0, 0).getTime();
 const MINUTE = 60_000;
 
 const LOGIN = "Итоги не собраны: нужен вход в Claude Code";
+const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
 
 function invokedWith(command: string) {
   return fake.invoked
@@ -239,6 +243,15 @@ const failed = (error: string): CallSummary => ({
   tldr: "",
   transcriptPass: null,
 });
+
+const NEXT = [
+  {
+    field: "acceptance" as const,
+    gap: "empty" as const,
+    text: "Какие критерии готовности у обмена?",
+    topicId: TOPIC,
+  },
+];
 
 const LIVE_CARDS: CallCards = {
   cards: [{ ...CARD_RECORD, title: "Обмен валют", topicId: FAST_TOPIC }],
@@ -462,5 +475,137 @@ describe("«Итоги звонка» in Tauri", () => {
     await waitFor(() =>
       expect(invokedWith("summary_cancel")).toEqual([{ callId: CALL }])
     );
+  });
+});
+
+function openCards() {
+  nav.search = new URLSearchParams({ id: CALL });
+  return render(<TaskCardsPage />);
+}
+
+/** Two people of the client on the call. */
+async function withBothPeople() {
+  const call = fake.db.calls.find((item) => item.id === CALL);
+  if (call) {
+    call.participantIds = [IGOR, NATALIA];
+  }
+  await act(() => refreshCalls());
+}
+
+describe("«Карточки задач» in Tauri", () => {
+  it("Карточка после сборки: one card of the topic with its facts on seven lenses", async () => {
+    records();
+    openCards();
+
+    const card = await screen.findByRole("region", {
+      name: "Обмен без паспорта",
+    });
+    expect(within(card).getByText("обсуждали 12:01–12:20")).toBeTruthy();
+    expect(within(card).getByText("Обмен до 1000 $ без паспорта")).toBeTruthy();
+    expect(within(card).getAllByRole("term")).toHaveLength(7);
+    // An empty lens shows its open question.
+    expect(
+      within(card).getByText("Какой лимит обмена без паспорта?")
+    ).toBeTruthy();
+    expect(within(card).getAllByText("Не обсуждали").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+  });
+
+  it("names the one person of the client on the call, and opens the quote at its moment", async () => {
+    records();
+    openCards();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "сказал(а) Игорь, 12:04" })
+    );
+    expect(screen.getByText("12:04:00")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "Открыть в расшифровке" })
+        .getAttribute("href")
+    ).toBe(routes.callTranscript(CALL, "s-4"));
+    fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
+    expect(nav.push).toHaveBeenCalledWith(routes.callTranscript(CALL, "s-4"));
+  });
+
+  it("Несколько людей клиента: the source is «сказал клиент», without a name", async () => {
+    await withBothPeople();
+    records();
+    openCards();
+
+    expect(
+      await screen.findByRole("button", { name: "сказал клиент, 12:04" })
+    ).toBeTruthy();
+    expect(screen.queryByText("Игорь", { exact: false })).toBeNull();
+  });
+
+  it("Итоги не собраны: the cards the fast loop made during the call", async () => {
+    records({
+      cards: LIVE_CARDS,
+      view: { building: null, summary: failed("Нужен вход в Claude Code") },
+    });
+    openCards();
+
+    const card = await screen.findByRole("region", { name: "Обмен валют" });
+    expect(within(card).getByText("собрана во время звонка")).toBeTruthy();
+    expect(within(card).getByText("Обмен до 1000 $ без паспорта")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Агент предложит их по пробелам карточек, когда соберутся итоги"
+      )
+    ).toBeTruthy();
+  });
+
+  it("Кнопка ClickUp: decisions go to call_card_update, sending is «скоро»", async () => {
+    let stored = CARD_RECORD;
+    const cards = () => ({ cards: [stored], next: NEXT, source: "summary" });
+    records();
+    fake.answers.set("call_cards", cards);
+    fake.answers.set("call_card_update", (args) => {
+      const patch = args.patch as { decision?: string; title?: string };
+      stored = {
+        ...stored,
+        decision: (patch.decision ?? stored.decision) as typeof stored.decision,
+        title: patch.title ?? stored.title,
+      };
+      return stored;
+    });
+    openCards();
+
+    const card = await screen.findByRole("region", {
+      name: "Обмен без паспорта",
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "Принять" }));
+    const clickUp = (await within(card).findByRole("button", {
+      name: CLICKUP_SOON,
+    })) as HTMLButtonElement;
+    expect(clickUp.disabled).toBe(true);
+    expect(invokedWith("call_card_update")).toEqual([
+      { callId: CALL, cardId: CARD, patch: { decision: "accepted" } },
+    ]);
+
+    fireEvent.click(within(card).getByRole("button", { name: "Изменить" }));
+    const input = await screen.findByRole("textbox", {
+      name: "Название карточки",
+    });
+    fireEvent.change(input, { target: { value: "Лимит без паспорта" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    expect(
+      await screen.findByRole("region", { name: "Лимит без паспорта" })
+    ).toBeTruthy();
+    expect(invokedWith("call_card_update").at(-1)).toEqual({
+      callId: CALL,
+      cardId: CARD,
+      patch: { title: "Лимит без паспорта" },
+    });
+
+    // «Спросить в следующий раз» from the gaps of the cards.
+    const next = screen.getByRole("complementary", {
+      name: "Спросить в следующий раз",
+    });
+    expect(within(next).getByText("из пустого поля")).toBeTruthy();
+    expect(
+      within(next).getByText("Какие критерии готовности у обмена?")
+    ).toBeTruthy();
   });
 });

@@ -22,6 +22,7 @@ import {
 } from "../components/task-cards";
 import {
   NEXT_QUESTIONS,
+  type NextQuestion,
   TASK_CARD,
   TASK_TOPICS,
   type TaskCardData,
@@ -101,11 +102,13 @@ export function TaskCardsScreen({
   className,
   expandedFactId = "queue",
   foldedCardIds,
+  nextQuestions = NEXT_QUESTIONS,
   onListen,
   onToggleFact,
   onTopicChange,
   pendingProposals,
   renderActions,
+  topics = TASK_TOPICS,
 }: {
   /** Selected topic pill (app). */
   activeTopic?: string;
@@ -117,12 +120,16 @@ export function TaskCardsScreen({
   expandedFactId?: string | null;
   /** Discarded cards: only the title and the actions stay. */
   foldedCardIds?: string[];
+  /** «Спросить в следующий раз». */
+  nextQuestions?: NextQuestion[];
   onListen?: (fact: TaskFactData) => void;
   onToggleFact?: (factId: string) => void;
   /** Makes the topic pills controlled. */
   onTopicChange?: (topicId: string) => void;
   pendingProposals?: number;
   renderActions?: (card: TaskCardData) => ReactNode;
+  /** The topic pills: a card's id, title and how many facts it has. */
+  topics?: { count: number; id: string; title: string }[];
 }) {
   const info = usePostCallInfo();
   const links = usePostCallLinks();
@@ -142,16 +149,20 @@ export function TaskCardsScreen({
       active="tasks"
       aside={
         <SideColumn label="Спросить в следующий раз">
-          <SideHeading action={<NavMeta>{NEXT_QUESTIONS.length}</NavMeta>}>
+          <SideHeading action={<NavMeta>{nextQuestions.length}</NavMeta>}>
             Спросить в следующий раз
           </SideHeading>
-          <ul className="flex flex-col gap-2.5">
-            {NEXT_QUESTIONS.map((question) => (
-              <NextQuestionCard key={question.id} question={question} />
-            ))}
-          </ul>
+          {nextQuestions.length > 0 ? (
+            <ul className="flex flex-col gap-2.5">
+              {nextQuestions.map((question) => (
+                <NextQuestionCard key={question.id} question={question} />
+              ))}
+            </ul>
+          ) : null}
           <p className="text-muted-foreground px-2 py-1 text-sm">
-            Агент подмешает их в начало следующего звонка по проекту
+            {nextQuestions.length > 0
+              ? "Агент подмешает их в начало следующего звонка по проекту"
+              : "Агент предложит их по пробелам карточек, когда соберутся итоги"}
           </p>
         </SideColumn>
       }
@@ -169,12 +180,12 @@ export function TaskCardsScreen({
         />
         <div className="border-border flex items-center justify-between gap-6 border-b pb-4">
           <Tabs
-            defaultValue={controlled ? undefined : TASK_TOPICS[0]?.id}
+            defaultValue={controlled ? undefined : topics[0]?.id}
             onValueChange={controlled ? changeTopic : undefined}
             value={controlled ? activeTopic : undefined}
           >
             <TabsList aria-label="Темы">
-              {TASK_TOPICS.map((topic) => (
+              {topics.map((topic) => (
                 <TabsTrigger key={topic.id} value={topic.id}>
                   {topic.title}
                   <TabsCount>{topic.count}</TabsCount>

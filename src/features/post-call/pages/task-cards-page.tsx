@@ -1,46 +1,40 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
+import type { SummaryCard } from "@/bindings";
 import { toast } from "@/components/ui/toast";
 import {
-  type CallRecord,
-  countPendingProposals,
-  getTaskCardReview,
-  type TaskSyncService,
-  updateTaskCard,
-  useCall,
-} from "@/data/calls";
-import { useIntegrations } from "@/data/integrations";
+  updateCallCard,
+  useCallCards,
+  useCallQuestions,
+  useCallTranscript,
+} from "@/data/call-records";
+import { type CallRecord, countPendingProposals, useCall } from "@/data/calls";
+import { useCallSummary } from "@/data/summaries";
 import { routes } from "@/lib/routes";
 
-import { sendTaskCard } from "../api";
 import {
   EditTaskCardDialog,
   TaskCardActions,
   type TaskCardCommand,
 } from "../components/task-card-actions";
-import {
-  TASK_CARDS,
-  TASK_TOPICS,
-  type TaskCardData,
-  type TaskFactData,
-} from "../mock";
+import type { TaskCardData, TaskFactData } from "../mock";
 import { TaskCardsScreen } from "../screens/task-cards-screen";
+import { nextQuestions, speakerOf, taskCards } from "./call-data";
 import { APP_WINDOW, CallPageFrame } from "./call-page-frame";
 
 /*
- * /calls/tasks?id=…: "03 Карточки задач". Both cards of the call stacked,
- * the topic pills scroll to them, a source opens its quote. Each card can
- * be accepted, edited or discarded; an accepted card goes to ClickUp or
- * GitHub (simulated in ../api.ts) when that integration is connected.
+ * /calls/tasks?id=…: "03 Карточки задач" of the call (`call_cards`): the
+ * saved summary's cards with their facts, or before a summary (or after a
+ * failed one) the cards the fast loop made during the call. Every card is
+ * stacked with its seven lenses, the topic pills scroll to them, a source
+ * opens its quote; «Послушать» and «Открыть в расшифровке» open the
+ * details page at the phrase. A card is accepted, renamed, discarded and
+ * brought back through `call_card_update`; sending to ClickUp or GitHub
+ * is «скоро».
  */
-
-const SERVICE_NAME: Record<TaskSyncService, string> = {
-  clickup: "ClickUp",
-  github: "GitHub",
-};
 
 function scrollToTopic(topicId: string) {
   document
@@ -48,35 +42,59 @@ function scrollToTopic(topicId: string) {
     ?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 }
 
+const DECISIONS = {
+  accept: "accepted",
+  discard: "discarded",
+  restore: "pending",
+} as const;
+
 function TaskCardsOfCall({ call }: { call: CallRecord }) {
-  const integrations = useIntegrations();
+  const router = useRouter();
+  const records = useCallCards(call.id).data;
+  const { summary } = useCallSummary(call.id);
+  const recordings = useCallTranscript(call.id).data;
+  const questions = useCallQuestions(call.id).data;
   const [expandedFactId, setExpandedFactId] = useState<string | null>(null);
-  const [topic, setTopic] = useState(TASK_TOPICS[0]?.id ?? "calls");
+  const [topic, setTopic] = useState<string | null>(null);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
 
+  const content =
+    records.source === "summary" ? (summary?.content ?? null) : null;
+  const speaker = speakerOf(
+    call.participantIds.length === 1 ? [call.participants] : []
+  );
   const cards = useMemo(
+    () => taskCards(records, content, { questions, recordings, speaker }),
+    [content, questions, recordings, records, speaker]
+  );
+  const topics = useMemo(
     () =>
-      TASK_CARDS.map((card) => ({
-        ...card,
-        title: getTaskCardReview(call, card.id).title ?? card.title,
+      cards.map((card) => ({
+        count: card.fields.reduce(
+          (total, field) =>
+            total +
+            field.facts.filter((fact) => fact.status !== "empty").length,
+          0
+        ),
+        id: card.id,
+        title: card.title,
       })),
-    [call]
+    [cards]
+  );
+  const askNext = useMemo(() => nextQuestions(records.next), [records.next]);
+  const decisions = useMemo(
+    () =>
+      new Map<string, SummaryCard["decision"]>(
+        records.cards.map((card) => [card.id, card.decision])
+      ),
+    [records.cards]
   );
   const foldedCardIds = useMemo(
     () =>
-      cards
-        .filter(
-          (card) => getTaskCardReview(call, card.id).decision === "discarded"
-        )
+      records.cards
+        .filter((card) => card.decision === "discarded")
         .map((card) => card.id),
-    [call, cards]
-  );
-  const statuses = useMemo(
-    () => ({
-      clickup: integrations.clickup.status,
-      github: integrations.github.status,
-    }),
-    [integrations]
+    [records.cards]
   );
 
   const changeTopic = useCallback((topicId: string) => {
@@ -88,72 +106,53 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
     setExpandedFactId((current) => (current === factId ? null : factId));
   }, []);
 
+  // «Послушать»: the details page at the phrase plays the recording.
   const listen = useCallback(
     (fact: TaskFactData) => {
-      toast.add({
-        description: call.audioDeleted
-          ? "Запись удалена, осталась только расшифровка"
-          : fact.quote?.text,
-        title: call.audioDeleted
-          ? "Нечего проигрывать"
-          : `Играет фрагмент ${fact.quote?.time ?? ""}`,
-        type: "info",
-      });
+      if (call.audioDeleted) {
+        toast.add({
+          description: "Запись удалена, осталась только расшифровка",
+          title: "Нечего проигрывать",
+          type: "info",
+        });
+        return;
+      }
+      const moment = fact.quote?.moment ?? fact.quote?.time;
+      router.push(routes.callTranscript(call.id, moment));
     },
-    [call.audioDeleted]
+    [call.audioDeleted, call.id, router]
   );
 
   const command = useCallback(
-    (cardId: string, next: TaskCardCommand) => {
-      const title = cards.find((card) => card.id === cardId)?.title ?? "";
+    async (cardId: string, next: TaskCardCommand) => {
       if (next === "edit") {
         setEditingCardId(cardId);
         return;
       }
-      const decision = {
-        accept: "accepted",
-        discard: "discarded",
-        restore: "pending",
-      } as const;
-      updateTaskCard(call.id, cardId, (review) => ({
-        ...review,
-        decision: decision[next],
-      }));
+      const saved = await updateCallCard(call.id, cardId, {
+        decision: DECISIONS[next],
+      });
+      if (!saved) {
+        return;
+      }
       if (next === "accept") {
         toast.add({
-          description: "Её можно отправить в ClickUp или GitHub",
-          title: `Карточка «${title}» принята`,
+          description: "Отправка в ClickUp и GitHub появится позже",
+          title: `Карточка «${saved.title}» принята`,
           type: "success",
         });
       } else if (next === "discard") {
         toast.add({
           actionProps: {
             children: "Вернуть",
-            onClick: () =>
-              updateTaskCard(call.id, cardId, (review) => ({
-                ...review,
-                decision: "pending",
-              })),
+            onClick: () => {
+              updateCallCard(call.id, cardId, { decision: "pending" });
+            },
           },
-          title: `Карточка «${title}» отброшена`,
+          title: `Карточка «${saved.title}» отброшена`,
           type: "success",
         });
       }
-    },
-    [call.id, cards]
-  );
-
-  const send = useCallback(
-    async (cardId: string, service: TaskSyncService) => {
-      const ref = await sendTaskCard(call.id, cardId, service);
-      toast.add({
-        description:
-          service === "clickup"
-            ? "Задача создана в списке проекта"
-            : "Issue создан в репозитории проекта",
-        title: `Отправлено в ${SERVICE_NAME[service]}: ${ref}`,
-        type: "success",
-      });
     },
     [call.id]
   );
@@ -162,14 +161,11 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
     (card: TaskCardData) => (
       <TaskCardActions
         cardId={card.id}
-        connectHref={routes.settings("integrations")}
-        integrations={statuses}
+        decision={decisions.get(card.id) ?? "pending"}
         onCommand={command}
-        onSend={send}
-        review={getTaskCardReview(call, card.id)}
       />
     ),
-    [call, command, send, statuses]
+    [command, decisions]
   );
 
   const editing = cards.find((card) => card.id === editingCardId);
@@ -179,16 +175,15 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
     }
   }, []);
   const saveTitle = useCallback(
-    (title: string) => {
+    async (title: string) => {
       if (!editingCardId) {
         return;
       }
-      updateTaskCard(call.id, editingCardId, (review) => ({
-        ...review,
-        title,
-      }));
       setEditingCardId(null);
-      toast.add({ title: "Карточка обновлена", type: "success" });
+      const saved = await updateCallCard(call.id, editingCardId, { title });
+      if (saved) {
+        toast.add({ title: "Карточка обновлена", type: "success" });
+      }
     },
     [call.id, editingCardId]
   );
@@ -196,16 +191,18 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
   return (
     <>
       <TaskCardsScreen
-        activeTopic={topic}
+        activeTopic={topic ?? cards[0]?.id}
         cards={cards}
         className={APP_WINDOW}
         expandedFactId={expandedFactId}
         foldedCardIds={foldedCardIds}
+        nextQuestions={askNext}
         onListen={listen}
         onToggleFact={toggleFact}
         onTopicChange={changeTopic}
         pendingProposals={countPendingProposals(call)}
         renderActions={renderActions}
+        topics={topics}
       />
       <EditTaskCardDialog
         onOpenChange={closeEditor}

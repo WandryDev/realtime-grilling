@@ -362,8 +362,9 @@ export function cardsOverview(cards: readonly SummaryCard[]) {
  * «сказал клиент» (the «Остальные» channel mixes everyone).
  */
 export function speakerOf(participants: readonly string[]) {
-  return participants.length === 1 && participants[0]
-    ? participants[0]
+  const [only] = participants;
+  return participants.length === 1 && only
+    ? (only.trim().split(" ")[0] ?? only)
     : "клиент";
 }
 
@@ -447,13 +448,15 @@ function emptyLens(
   context: CardContext
 ): TaskFactData {
   const topics = context.fastTopics(card);
-  const question = context.questions.find(
-    (item) =>
-      item.cardField === lens &&
-      item.topicId !== null &&
-      topics.includes(item.topicId) &&
-      isUnasked(item)
-  );
+  const [question] = context.questions
+    .filter(
+      (item) =>
+        item.cardField === lens &&
+        item.topicId !== null &&
+        topics.includes(item.topicId) &&
+        isUnasked(item)
+    )
+    .sort((a, b) => a.priority - b.priority);
   return {
     id: `${card.id}-${lens}-empty`,
     source:

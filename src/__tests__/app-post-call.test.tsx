@@ -32,9 +32,6 @@ const { TranscriptPage } = await import(
 const { CURRENT_CALL_ID, finishCall, resetCall, startCall, useCallSession } =
   await import("@/data/call-session");
 const { resetCalls } = await import("@/data/calls");
-const { disconnectIntegration, setIntegration } = await import(
-  "@/data/integrations"
-);
 const { toast } = await import("@/components/ui/toast");
 const { SUMMARY_TLDR } = await import("@/features/post-call/mock");
 const { routes } = await import("@/lib/routes");
@@ -44,10 +41,11 @@ const MOMENT = /Здесь спросили/u;
 const OPERATORS_MOMENT = /Здесь спросили «Сколько операторов/u;
 const PROPOSALS = /Предложения/u;
 const TASK_CARDS_NAV = /Карточки задач/u;
-const OLGA_SOURCE = /сказала Ольга, 12:02/u;
+const CLIENT_SOURCE = /сказал клиент, 12:02/u;
+const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
+const GITHUB_SOON = /Отправить в GitHub\s*скоро/u;
 const OPERATORS_QUESTION = /Сколько операторов/u;
 const COLLECT_MS = 3000;
-const SEND_MS = 1500;
 
 let probed: ReturnType<typeof useCallSession> | undefined;
 
@@ -82,7 +80,6 @@ afterEach(() => {
   act(() => {
     resetCalls();
     resetCall();
-    setIntegration("github", { status: "connected" });
   });
 });
 
@@ -238,55 +235,47 @@ describe("proposals", () => {
 });
 
 describe("task cards", () => {
-  it("accepts a card and sends it to ClickUp", async () => {
-    vi.useFakeTimers();
+  it("accepts a card; sending to ClickUp or GitHub is «скоро»", async () => {
     open(TaskCardsPage, { id: CURRENT_CALL_ID });
 
     const card = screen.getByRole("region", { name: "Приём звонков" });
     fireEvent.click(within(card).getByRole("button", { name: "Принять" }));
-    fireEvent.click(
-      within(card).getByRole("button", { name: "Отправить в ClickUp" })
-    );
-    expect(within(card).getByText("Отправляю в ClickUp")).toBeTruthy();
-
-    await act(async () => {
-      vi.advanceTimersByTime(SEND_MS);
-      await Promise.resolve();
-    });
-    expect(within(card).getByText("CU-612")).toBeTruthy();
-  });
-
-  it("links to the integrations when a service is not connected", () => {
-    act(() => disconnectIntegration("github"));
-    open(TaskCardsPage, { id: CURRENT_CALL_ID });
-
-    const card = screen.getByRole("region", { name: "Интеграция с CRM" });
-    fireEvent.click(within(card).getByRole("button", { name: "Принять" }));
+    expect(await within(card).findByText("принята")).toBeTruthy();
+    const clickUp = within(card).getByRole("button", {
+      name: CLICKUP_SOON,
+    }) as HTMLButtonElement;
+    expect(clickUp.disabled).toBe(true);
     expect(
-      within(card)
-        .getByRole("link", { name: "Подключить GitHub" })
-        .getAttribute("href")
-    ).toBe(routes.settings("integrations"));
+      (
+        within(card).getByRole("button", {
+          name: GITHUB_SOON,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
   });
 
-  it("discards a card and brings it back", () => {
+  it("discards a card and brings it back", async () => {
     open(TaskCardsPage, { id: CURRENT_CALL_ID });
 
     const card = screen.getByRole("region", { name: "Интеграция с CRM" });
     fireEvent.click(within(card).getByRole("button", { name: "Отбросить" }));
-    expect(within(card).getByText("отброшена")).toBeTruthy();
+    expect(await within(card).findByText("отброшена")).toBeTruthy();
     expect(within(card).queryByText("Цель")).toBeNull();
 
     fireEvent.click(within(card).getByRole("button", { name: "Вернуть" }));
-    expect(within(card).getByText("Цель")).toBeTruthy();
+    expect(await within(card).findByText("Цель")).toBeTruthy();
   });
 
   it("opens the source quote and links it to the transcript", () => {
     open(TaskCardsPage, { id: CURRENT_CALL_ID });
 
-    fireEvent.click(screen.getByRole("button", { name: OLGA_SOURCE }));
+    fireEvent.click(screen.getAllByRole("button", { name: CLIENT_SOURCE })[0]);
     expect(linkHref("Открыть в расшифровке")).toBe(
-      routes.callTranscript(CURRENT_CALL_ID, "12:02:14")
+      routes.callTranscript(CURRENT_CALL_ID, "t-120214")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
+    expect(push).toHaveBeenCalledWith(
+      routes.callTranscript(CURRENT_CALL_ID, "t-120214")
     );
   });
 });

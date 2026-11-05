@@ -8,7 +8,6 @@ import { CallBackend } from "@/features/call/backend";
 import { CallWidgetBackend } from "@/features/call-widget/backend";
 import { OnboardingBackend } from "@/features/onboarding/backend";
 import { IntegrationsBackend } from "@/features/onboarding/integrations/backend";
-import { PostCallBackend } from "@/features/post-call/backend";
 import { ProjectsBackend } from "@/features/projects/backend";
 import { RecordingBackend } from "@/features/recording/backend";
 import { SettingsBackend } from "@/features/settings/backend";
@@ -35,7 +34,6 @@ export const MockLayer = Layer.mergeAll(
   CallWidgetBackend.layerMock,
   IntegrationsBackend.layerMock,
   OnboardingBackend.layerMock,
-  PostCallBackend.layerMock,
   // The one MockDatabase of DataLayerMock: layers are shared by reference.
   ProjectsBackend.layerMock.pipe(Layer.provide(MockDatabase.layer)),
   RecordingBackend.layerMock,
@@ -57,7 +55,6 @@ export const TauriLayer = Layer.mergeAll(
   CallWidgetBackend.layerMock,
   IntegrationsBackend.layerMock,
   OnboardingBackend.layerTauri,
-  PostCallBackend.layerTauri,
   ProjectsBackend.layerTauri,
   RecordingBackend.layerTauri,
   SettingsBackend.layerMock,
