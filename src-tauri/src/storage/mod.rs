@@ -12,11 +12,6 @@ pub mod calls;
 pub mod json;
 pub mod people;
 pub mod projects;
-#[allow(
-    dead_code,
-    reason = "written by the summary build, read and decided by the proposal review \
-              (post-call tasks 2.3, 3.1)"
-)]
 pub mod proposals;
 #[allow(
     dead_code,
@@ -25,11 +20,6 @@ pub mod proposals;
 pub mod recordings;
 pub mod settings;
 pub mod sources;
-#[allow(
-    dead_code,
-    reason = "read and written by the summary build and the card review \
-              (post-call tasks 2.3, 3.2)"
-)]
 pub mod summaries;
 #[allow(
     dead_code,

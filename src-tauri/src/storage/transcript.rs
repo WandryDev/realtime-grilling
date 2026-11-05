@@ -6,6 +6,8 @@
 //! read returns the refined pass of a recording when it has one, else the
 //! live pass.
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -323,4 +325,24 @@ pub fn for_call(connection: &Connection, call_id: &str) -> CommandResult<Vec<Tra
     ))?;
     let rows = statement.query_map([call_id], from_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// The shown pass of every recording of every call, by call, each in the
+/// order of [`for_call`]: the search reads them in one query.
+pub fn shown_by_call(
+    connection: &Connection,
+) -> CommandResult<HashMap<String, Vec<TranscriptSegment>>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS}, rec.call_id FROM transcript_segments AS s
+           JOIN recordings AS rec ON rec.id = s.recording_id
+          WHERE rec.call_id IS NOT NULL AND {SHOWN_PASS}
+          ORDER BY rec.call_id, rec.started_at, rec.id, s.start_ms, s.end_ms, s.id"
+    ))?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(10)?, from_row(row)?)))?;
+    let mut by_call: HashMap<String, Vec<TranscriptSegment>> = HashMap::new();
+    for row in rows {
+        let (call_id, segment) = row?;
+        by_call.entry(call_id).or_default().push(segment);
+    }
+    Ok(by_call)
 }

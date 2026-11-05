@@ -1172,17 +1172,22 @@ mod acl {
         }
     }
 
-    /// OS permissions, the agent CLI and the meters are for the main and
-    /// onboarding windows only.
-    /// The summary is built in the main window: only it closes the call,
-    /// and only it discards one ("Удалить все данные").
+    /// Only the main window discards a call ("Удалить все данные").
     #[test]
-    fn floating_windows_cannot_close_or_discard_the_call() {
+    fn floating_windows_cannot_discard_the_call() {
         for label in ["overlay", "widget"] {
-            for command in ["call_close", "call_discard"] {
-                let result = invoke(label, command);
-                assert!(denied(&result), "{label} → {command}: {result:?}");
-            }
+            let result = invoke(label, "call_discard");
+            assert!(denied(&result), "{label} → call_discard: {result:?}");
+        }
+    }
+
+    /// The summary build closes a finishing call (`CallManager::close`):
+    /// no window may, or it could close one whose build still runs.
+    #[test]
+    fn no_window_closes_a_finishing_call() {
+        for label in ["main", "onboarding", "overlay", "widget"] {
+            let result = invoke(label, "call_close");
+            assert!(denied(&result), "{label} → call_close: {result:?}");
         }
     }
 
@@ -1190,7 +1195,7 @@ mod acl {
     /// window reads it and its progress ("Собираю итоги" in the call window).
     #[test]
     fn floating_windows_only_read_the_summary() {
-        for label in ["overlay", "widget"] {
+        for label in ["overlay", "widget", "onboarding"] {
             assert!(!denied(&invoke(label, "summary_get")), "{label}");
             for command in ["summary_build", "summary_cancel"] {
                 let result = invoke(label, command);
@@ -1256,8 +1261,12 @@ mod acl {
     }
 
     /// A finished call's records (post-call tasks 3.1–3.4) are reviewed,
-    /// changed and read in the main window only.
-    const RECORDS_COMMANDS: [&str; 11] = [
+    /// changed and read in the main window only (`post-call.json`), not in
+    /// onboarding.
+    const RECORDS_COMMANDS: [&str; 14] = [
+        "summary_build",
+        "summary_cancel",
+        "calls_overview",
         "proposals_list",
         "proposals_for_person",
         "proposal_decide",
@@ -1274,7 +1283,7 @@ mod acl {
     #[test]
     fn call_records_are_for_the_main_window_only() {
         for command in RECORDS_COMMANDS {
-            for label in ["overlay", "widget"] {
+            for label in ["overlay", "widget", "onboarding"] {
                 let result = invoke(label, command);
                 assert!(denied(&result), "{label} → {command}: {result:?}");
             }
@@ -1309,13 +1318,12 @@ mod acl {
             ("widget", "recording_status"),
             ("overlay", "recording_status"),
             // Every window reads, starts, finishes and resumes the call in
-            // progress and stops its countdown; the main window closes it
-            // once the summary is built, or discards it before a delete.
+            // progress and stops its countdown; the main window discards it
+            // before a delete.
             ("main", "call_current"),
             ("main", "call_start"),
             ("main", "call_finish"),
             ("main", "call_resume"),
-            ("main", "call_close"),
             ("main", "call_keep"),
             ("main", "call_discard"),
             ("widget", "call_current"),
@@ -1387,9 +1395,18 @@ fn capabilities_match_the_command_list() {
         .iter()
         .map(|command| (*command).to_owned())
         .collect();
-    // The call starts and stops its recording: no window may.
-    let no_window = ["recording_start", "recording_stop"];
-    let mut main = read("main");
+    // The call starts and stops its recording, and its summary build closes
+    // it: no window may.
+    let no_window = ["recording_start", "recording_stop", "call_close"];
+    let main_and_onboarding = read("main");
+    let post_call = read("post-call");
+    for command in &post_call {
+        assert!(
+            !main_and_onboarding.contains(command),
+            "{command} is the main window's only, not onboarding's"
+        );
+    }
+    let mut main: Vec<String> = main_and_onboarding.into_iter().chain(post_call).collect();
     main.sort();
     let mut expected: Vec<String> = all
         .iter()
@@ -1399,7 +1416,7 @@ fn capabilities_match_the_command_list() {
     expected.sort();
     assert_eq!(
         main, expected,
-        "main and onboarding get every command a window may call"
+        "the main window gets every command a window may call"
     );
 
     let floating = read("floating");

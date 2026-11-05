@@ -17,7 +17,8 @@
 //!
 //! [`save_build`] saves what a build produced in one transaction: the
 //! summary, the pending proposals ([`proposals::replace_pending`]) and the
-//! answered questions ([`reconcile_questions`]).
+//! answered questions ([`reconcile_questions`]). The new cards keep the
+//! manager's decisions and titles ([`carry_decisions`]).
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -26,7 +27,10 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use super::{
-    call_state::{self, CardLens, Evidence, GapType, TaskCardDecision, conversion, typed},
+    call_state::{
+        self, CARD_COLUMNS, CardLens, Evidence, GapType, TaskCard, TaskCardDecision, card_from_row,
+        conversion, typed,
+    },
     calls::{self, Call, CallStatus},
     json::Json,
     now_ms,
@@ -34,12 +38,15 @@ use super::{
     required,
 };
 use crate::{
+    agent::fast_loop::evidence::normalize,
     error::{CommandError, CommandResult},
     events::{Change, DataChanged, Entity},
 };
 
 /// The `error` of a build that the app's stop cut short.
 pub const INTERRUPTED: &str = "interrupted";
+/// The longest title of a card (the summary's or the fast loop's).
+pub const MAX_TITLE_CHARS: usize = 120;
 
 /* Records */
 
@@ -366,6 +373,17 @@ fn interrupted(call: &Call) -> CallSummary {
     }
 }
 
+/// Every saved summary (with `content`) by call: the search reads them in
+/// one query.
+pub fn saved_by_call(
+    connection: &Connection,
+) -> CommandResult<std::collections::HashMap<String, CallSummary>> {
+    let mut statement = connection.prepare(&format!("{SELECT} WHERE content IS NOT NULL"))?;
+    let rows = statement.query_map([], from_row)?;
+    rows.map(|row| Ok(row.map(|summary| (summary.call_id.clone(), summary))?))
+        .collect()
+}
+
 /// The summary of a call. `None` while the call is `live` or `finishing`
 /// before its build wrote anything; a `finished` call without a row reads
 /// as `failed` / [`INTERRUPTED`]. `NotFound` for an unknown call.
@@ -392,6 +410,62 @@ fn changed(connection: &Connection, call_id: &str) -> CommandResult<DataChanged>
 fn saved(connection: &Connection, call_id: &str) -> CommandResult<CallSummary> {
     stored(connection, call_id)?
         .ok_or_else(|| CommandError::not_found(format!("Итогов звонка {call_id} нет")))
+}
+
+/// The state and error of the call's summary row; `None` without a row.
+pub fn state_of(
+    connection: &Connection,
+    call_id: &str,
+) -> CommandResult<Option<(SummaryState, Option<String>)>> {
+    Ok(stored(connection, call_id)?.map(|summary| (summary.state, summary.error)))
+}
+
+/// An aborted build saved nothing (design.md, decision 1): the row goes
+/// back to `before`, its state and error before the build ([`state_of`]).
+/// Without a row before, the row goes (unless a summary was saved since,
+/// which then reads `ready`). `NotFound` for an unknown call. Sends `call`
+/// / `updated`.
+pub fn restore(
+    connection: &Connection,
+    call_id: &str,
+    before: Option<(SummaryState, Option<String>)>,
+) -> CommandResult<Vec<DataChanged>> {
+    let event = changed(connection, call_id)?;
+    match before {
+        None => {
+            connection.execute(
+                "DELETE FROM call_summaries WHERE call_id = ?1 AND content IS NULL",
+                [call_id],
+            )?;
+            connection.execute(
+                "UPDATE call_summaries SET state = 'ready', error = NULL,
+                        updated_at = MAX(?2, updated_at + 1)
+                  WHERE call_id = ?1 AND state = 'building'",
+                params![call_id, now_ms()],
+            )?;
+        }
+        Some((state, error)) => {
+            connection.execute(
+                "UPDATE call_summaries SET state = ?2, error = ?3,
+                        updated_at = MAX(?4, updated_at + 1)
+                  WHERE call_id = ?1",
+                params![call_id, state.as_str(), error, now_ms()],
+            )?;
+        }
+    }
+    Ok(vec![event])
+}
+
+/// A card's title as the manager gives it: trimmed, not blank, at most
+/// [`MAX_TITLE_CHARS`]; else `Invalid`.
+pub fn card_title(title: &str) -> CommandResult<String> {
+    let title = required(title, "Название карточки не может быть пустым")?;
+    if title.chars().count() > MAX_TITLE_CHARS {
+        return Err(CommandError::invalid(format!(
+            "Название карточки длиннее {MAX_TITLE_CHARS} символов"
+        )));
+    }
+    Ok(title)
 }
 
 /// A build starts: the state becomes `building`, the error goes, a saved
@@ -527,18 +601,155 @@ pub fn reconcile_questions(
     })
 }
 
+/// The fast loop's cards of the call's recordings, in the order of the
+/// recordings and their topics.
+fn live_cards(connection: &Connection, call_id: &str) -> CommandResult<Vec<TaskCard>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {CARD_COLUMNS} FROM task_cards
+          WHERE recording_id IN (SELECT id FROM recordings WHERE call_id = ?1)
+          ORDER BY (SELECT started_at FROM recordings r WHERE r.id = recording_id), recording_id,
+                   (SELECT position FROM topics t WHERE t.id = topic_id), id"
+    ))?;
+    let rows = statement.query_map([call_id], card_from_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// `call-task-cards`, «Решение по карточке»: the manager's decision and
+/// title survive a rebuild. Each new card takes the id, decision and title
+/// of
+///
+/// 1. the previous summary's card of a topic that continues one of the same
+///    fast loop topics (`topicIds`);
+/// 2. else the previous card with the same title (normalised, the card's or
+///    its topic's);
+/// 3. else the fast loop's card (`task_cards`) of one of its topics: its id
+///    and decision, and its title if the manager renamed it.
+///
+/// Each old card goes to one new card at most. Runs inside the save's
+/// transaction, so a `call_card_update` that committed before the save is
+/// kept, and one that comes after it still finds its card by the old id.
+fn carry_decisions(
+    connection: &Connection,
+    call_id: &str,
+    content: &mut SummaryContent,
+) -> CommandResult<()> {
+    let previous = stored(connection, call_id)?
+        .and_then(|summary| summary.content)
+        .unwrap_or_default();
+    let topic_of = |content: &SummaryContent, card: &SummaryCard| {
+        content
+            .topics
+            .iter()
+            .find(|topic| topic.id == card.topic_id)
+            .cloned()
+    };
+    let old: Vec<(SummaryCard, Option<SummaryTopic>)> = previous
+        .cards
+        .iter()
+        .map(|card| (card.clone(), topic_of(&previous, card)))
+        .collect();
+    let new_topics: Vec<Option<SummaryTopic>> = content
+        .cards
+        .iter()
+        .map(|card| topic_of(content, card))
+        .collect();
+    let mut matched: Vec<Option<usize>> = vec![None; content.cards.len()];
+    let mut taken = vec![false; old.len()];
+    // 1. The same fast loop topics.
+    for (index, topic) in new_topics.iter().enumerate() {
+        let Some(topic) = topic else { continue };
+        let found = old.iter().enumerate().position(|(at, (_, old_topic))| {
+            !taken[at]
+                && old_topic.as_ref().is_some_and(|old_topic| {
+                    old_topic
+                        .topic_ids
+                        .iter()
+                        .any(|id| topic.topic_ids.contains(id))
+                })
+        });
+        if let Some(at) = found {
+            taken[at] = true;
+            matched[index] = Some(at);
+        }
+    }
+    // 2. The same title.
+    for (index, card) in content.cards.iter().enumerate() {
+        if matched[index].is_some() {
+            continue;
+        }
+        let topic_title = new_topics[index]
+            .as_ref()
+            .map(|topic| normalize(&topic.title));
+        let found = old
+            .iter()
+            .enumerate()
+            .position(|(at, (old_card, old_topic))| {
+                !taken[at]
+                    && (normalize(&old_card.title) == normalize(&card.title)
+                        || old_topic.as_ref().is_some_and(|old_topic| {
+                            Some(normalize(&old_topic.title)) == topic_title
+                        }))
+            });
+        if let Some(at) = found {
+            taken[at] = true;
+            matched[index] = Some(at);
+        }
+    }
+    // An id a previous card has stays with it, whether or not it matched.
+    let mut used: HashSet<String> = old.iter().map(|(card, _)| card.id.clone()).collect();
+    let live = live_cards(connection, call_id)?;
+    for (index, card) in content.cards.iter_mut().enumerate() {
+        if let Some(at) = matched[index] {
+            let (old_card, _) = &old[at];
+            card.id.clone_from(&old_card.id);
+            card.decision = old_card.decision;
+            card.title.clone_from(&old_card.title);
+            continue;
+        }
+        // 3. The fast loop's card of one of its topics, a decided or
+        // renamed one first.
+        let Some(topic) = &new_topics[index] else {
+            continue;
+        };
+        let candidates: Vec<&TaskCard> = live
+            .iter()
+            .filter(|live| topic.topic_ids.contains(&live.topic_id) && !used.contains(&live.id))
+            .collect();
+        let chosen = candidates
+            .iter()
+            .find(|live| {
+                live.decision != TaskCardDecision::Pending || !live.title.trim().is_empty()
+            })
+            .or_else(|| candidates.first())
+            .copied();
+        if let Some(live) = chosen {
+            used.insert(live.id.clone());
+            card.id.clone_from(&live.id);
+            card.decision = live.decision;
+            if !live.title.trim().is_empty() {
+                card.title.clone_from(&live.title);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The `saving` stage (decisions 2, 5, 6): in one transaction saves the
-/// summary `ready` (and the call's title if empty), replaces the call's
-/// pending proposals (the accepted and rejected ones stay; all of them
-/// stay without new ones) and marks the answered questions. On an error nothing is changed: the previous
-/// summary and proposals stay. Sends `call` / `updated`.
+/// summary `ready` (and the call's title if empty), with the decisions and
+/// titles of the cards carried over ([`carry_decisions`]), replaces the
+/// call's pending proposals (the accepted and rejected ones stay; all of
+/// them stay without new ones) and marks the answered questions. On an
+/// error nothing is changed: the previous summary and proposals stay.
+/// Sends `call` / `updated`.
 pub fn save_build(
     connection: &Connection,
     call_id: &str,
     build: &SummaryBuild,
 ) -> CommandResult<(SavedBuild, Vec<DataChanged>)> {
     call_state::in_savepoint(connection, || {
-        let (summary, events) = save_ready(connection, call_id, &build.summary)?;
+        let mut summary = build.summary.clone();
+        carry_decisions(connection, call_id, &mut summary.content)?;
+        let (summary, events) = save_ready(connection, call_id, &summary)?;
         let proposals = match &build.proposals {
             Some(new) => proposals::replace_pending(connection, call_id, new)?,
             None => proposals::list(connection, call_id)?,
@@ -587,7 +798,7 @@ pub fn update_card(
         .find(|card| card.id == card_id)
         .ok_or_else(unknown)?;
     if let Some(title) = &patch.title {
-        card.title = required(title, "Название карточки не может быть пустым")?;
+        card.title = card_title(title)?;
     }
     if let Some(decision) = patch.decision {
         card.decision = decision;

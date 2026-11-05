@@ -122,6 +122,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             records::commands::call_transcript,
             records::commands::call_questions,
             records::commands::calls_search,
+            records::commands::calls_overview,
             records::commands::recording_peaks,
             records::commands::call_audio_delete,
         ])

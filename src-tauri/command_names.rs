@@ -85,6 +85,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "call_transcript",
     "call_questions",
     "calls_search",
+    "calls_overview",
     "recording_peaks",
     "call_audio_delete",
 ];

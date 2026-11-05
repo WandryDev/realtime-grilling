@@ -149,7 +149,10 @@ fn a_live_segment_finds_its_moment_after_the_second_pass() {
     let answer_moment = read.answer.clone().unwrap();
     assert_eq!(answer_moment.segment_id, shown[2].id);
     assert_eq!(answer_moment.start_ms, 20_000);
-    assert_eq!(moment(&fx.connection, "nope").unwrap(), None);
+    assert_eq!(moment(&fx.connection, &fx.call, "nope").unwrap(), None);
+    // L6: a segment of another call is not this call's moment.
+    let other = call(&fx.connection, None, "Другой", 0);
+    assert_eq!(moment(&fx.connection, &other, &fx.said.id).unwrap(), None);
 }
 
 #[test]
@@ -360,4 +363,274 @@ fn a_renamed_card_survives_a_restart() {
     assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
     let error = update_card(&connection, "nope", &live_id, &discard).unwrap_err();
     assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
+}
+
+/// A summary of one topic per `(title, fast loop topics)`, new ids, every
+/// card pending with the agent's title.
+fn rebuilt(fx: &TwoRecordings, topics: &[(&str, Vec<String>)]) -> summaries::SummaryBuild {
+    let mut content = summaries::SummaryContent::default();
+    for (title, topic_ids) in topics {
+        let topic_id = crate::storage::new_id();
+        let at = summaries::SegmentMoment {
+            recording_id: fx.first.clone(),
+            segment_id: fx.said.id.clone(),
+            start_ms: fx.said.start_ms,
+            end_ms: fx.said.end_ms,
+        };
+        content.topics.push(summaries::SummaryTopic {
+            id: topic_id.clone(),
+            topic_ids: topic_ids.clone(),
+            title: (*title).to_owned(),
+            from: at.clone(),
+            to: at,
+            points: Vec::new(),
+        });
+        content.cards.push(SummaryCard {
+            id: crate::storage::new_id(),
+            topic_id,
+            title: format!("{title} (агент)"),
+            decision: TaskCardDecision::Pending,
+            fields: Vec::new(),
+        });
+    }
+    summaries::SummaryBuild {
+        summary: summaries::ReadySummary {
+            title: "Итоги".to_owned(),
+            tldr: String::new(),
+            transcript_pass: summaries::SummaryTranscriptPass::Live,
+            content,
+        },
+        proposals: None,
+        answered: Vec::new(),
+    }
+}
+
+fn saved_cards(fx: &TwoRecordings) -> Vec<SummaryCard> {
+    cards(&fx.connection, &fx.call).unwrap().cards
+}
+
+/// H3, `call-task-cards`, «Решение по карточке»: decisions and titles made
+/// on the fast loop's cards and on the summary's survive every rebuild,
+/// also one made while the build ran (the build's content was made before
+/// it).
+#[test]
+fn a_rebuild_keeps_the_decisions_and_titles() {
+    let fx = two_recordings(open_in_memory().unwrap());
+    let applied = topic(
+        &fx.connection,
+        &fx.first,
+        "Касса",
+        "Считать наличные",
+        vec![quote(&fx.said)],
+        CardLens::Goal,
+        GapType::Empty,
+    );
+    let fast_topic = applied.topic_ids[0].clone();
+    let live_id = call_state::get(&fx.connection, &fx.first).unwrap().cards[0]
+        .id
+        .clone();
+    // The build failed; the manager decides on the fast loop's card.
+    let accept = CardPatch {
+        title: Some("Касса v1".to_owned()),
+        decision: Some(TaskCardDecision::Accepted),
+    };
+    update_card(&fx.connection, &fx.call, &live_id, &accept).unwrap();
+
+    let build = rebuilt(
+        &fx,
+        &[("Касса", vec![fast_topic.clone()]), ("Бронь", Vec::new())],
+    );
+    summaries::save_build(&fx.connection, &fx.call, &build).unwrap();
+    let first = saved_cards(&fx);
+    assert_eq!(first[0].id, live_id, "the fast loop's card by its topic");
+    assert_eq!(first[0].decision, TaskCardDecision::Accepted);
+    assert_eq!(first[0].title, "Касса v1");
+    assert_eq!(first[1].decision, TaskCardDecision::Pending);
+    assert_eq!(first[1].title, "Бронь (агент)");
+    let booking = first[1].id.clone();
+
+    // A rebuild runs; meanwhile the manager renames and discards.
+    let second_build = rebuilt(
+        &fx,
+        &[("Касса", vec![fast_topic.clone()]), ("Бронь", Vec::new())],
+    );
+    let rename = CardPatch {
+        title: Some("Касса v2".to_owned()),
+        decision: None,
+    };
+    update_card(&fx.connection, &fx.call, &live_id, &rename).unwrap();
+    let discard = CardPatch {
+        title: None,
+        decision: Some(TaskCardDecision::Discarded),
+    };
+    update_card(&fx.connection, &fx.call, &booking, &discard).unwrap();
+    summaries::save_build(&fx.connection, &fx.call, &second_build).unwrap();
+    let second = saved_cards(&fx);
+    assert_eq!(
+        second
+            .iter()
+            .map(|card| (card.id.as_str(), card.title.as_str(), card.decision))
+            .collect::<Vec<_>>(),
+        [
+            (live_id.as_str(), "Касса v2", TaskCardDecision::Accepted),
+            (
+                booking.as_str(),
+                "Бронь (агент)",
+                TaskCardDecision::Discarded
+            ),
+        ],
+        "by the fast loop's topic, then by the topic's title"
+    );
+
+    // A topic the summary did not have before gets a new card; an update
+    // sent with the old id after the save still finds its card.
+    let third = rebuilt(
+        &fx,
+        &[("Бронирование", Vec::new()), ("Касса", vec![fast_topic])],
+    );
+    summaries::save_build(&fx.connection, &fx.call, &third).unwrap();
+    let read = saved_cards(&fx);
+    assert_eq!(read[0].decision, TaskCardDecision::Pending);
+    assert_ne!(read[0].id, booking);
+    assert_eq!(read[1].id, live_id);
+    update_card(&fx.connection, &fx.call, &live_id, &discard).unwrap();
+    assert_eq!(saved_cards(&fx)[1].decision, TaskCardDecision::Discarded);
+}
+
+/// L4: a summary built from the live pass points at the refined phrases
+/// once the second pass landed. L5: a fast loop fact on the manager's words
+/// is «вывод агента».
+#[test]
+fn quotes_point_at_the_shown_pass_and_only_the_client_is_quoted() {
+    let fx = two_recordings(open_in_memory().unwrap());
+    let manager = live(&fx.connection, &fx.first, Me, 9_000, "Наличные считаем мы");
+    topic(
+        &fx.connection,
+        &fx.first,
+        "Касса",
+        "Считать наличные",
+        vec![quote(&manager)],
+        CardLens::Goal,
+        GapType::Empty,
+    );
+    let live_cards = cards(&fx.connection, &fx.call).unwrap().cards;
+    let fact = &live_cards[0].fields[0].facts[0];
+    assert_eq!(fact.source, FactSource::Agent);
+    assert!(fact.evidence.is_empty());
+
+    summary(&fx.connection, &fx.call, "TL;DR", "Пункт", "Факт", &fx.said);
+    let shown = refine_first(&fx);
+    let read = cards(&fx.connection, &fx.call).unwrap();
+    let evidence = &read.cards[0].fields[0].facts[0].evidence[0];
+    assert_eq!(evidence.segment_id, shown[1].id);
+    let mut content = summaries::get(&fx.connection, &fx.call)
+        .unwrap()
+        .unwrap()
+        .content
+        .unwrap();
+    shown_pass(&fx, &mut content);
+    assert_eq!(
+        content.topics[0].points[0].evidence[0].segment_id,
+        shown[1].id
+    );
+    assert_eq!(content.topics[0].from.segment_id, shown[1].id);
+}
+
+fn shown_pass(fx: &TwoRecordings, content: &mut summaries::SummaryContent) {
+    super::shown(&fx.connection, &fx.call, content).unwrap();
+}
+
+/// L6: a card's title has a limit.
+#[test]
+fn a_card_title_is_not_too_long() {
+    let fx = two_recordings(open_in_memory().unwrap());
+    let card = summary(&fx.connection, &fx.call, "TL;DR", "Пункт", "Факт", &fx.said);
+    let long = CardPatch {
+        title: Some("К".repeat(summaries::MAX_TITLE_CHARS + 1)),
+        decision: None,
+    };
+    let error = update_card(&fx.connection, &fx.call, &card, &long).unwrap_err();
+    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+    let fits = CardPatch {
+        title: Some("К".repeat(summaries::MAX_TITLE_CHARS)),
+        decision: None,
+    };
+    update_card(&fx.connection, &fx.call, &card, &fits).unwrap();
+}
+
+/// M9, `call-history`, «Список звонков»: one read gives each call's title,
+/// pending proposals, questions not closed and deleted audio.
+#[test]
+fn the_overview_counts_what_the_history_shows() {
+    let fx = two_recordings(open_in_memory().unwrap());
+    let applied = topic(
+        &fx.connection,
+        &fx.first,
+        "Касса",
+        "Считать наличные",
+        vec![quote(&fx.said)],
+        CardLens::Goal,
+        GapType::Empty,
+    );
+    // Asked without an answer still counts; hidden does not.
+    let more = topic(
+        &fx.connection,
+        &fx.second,
+        "Бронь",
+        "Бронировать",
+        Vec::new(),
+        CardLens::Goal,
+        GapType::Empty,
+    );
+    call_state::act(
+        &fx.connection,
+        &applied.question_ids[0],
+        QuestionAction::Asked,
+    )
+    .unwrap();
+    call_state::act(&fx.connection, &more.question_ids[0], QuestionAction::Hide).unwrap();
+    let project_id = calls::get(&fx.connection, &fx.call).unwrap().project_id;
+    // An untitled call is named after its first fast loop topic, then its
+    // summary.
+    fx.connection
+        .execute("UPDATE calls SET title = '' WHERE id = ?1", [&fx.call])
+        .unwrap();
+    let read = overview(&fx.connection, project_id.as_deref()).unwrap();
+    assert_eq!(
+        read,
+        [CallOverview {
+            call_id: fx.call.clone(),
+            project_id: project_id.clone(),
+            title: "Касса".to_owned(),
+            pending_proposals: 0,
+            open_questions: 1,
+            audio_deleted: false,
+        }]
+    );
+    let id = summary(&fx.connection, &fx.call, "TL;DR", "Пункт", "Факт", &fx.said);
+    assert!(!id.is_empty());
+    for proposal in ["USD МІКС", "Redis"] {
+        crate::storage::proposals::insert(
+            &fx.connection,
+            &fx.call,
+            &crate::storage::proposals::NewProposal {
+                target: crate::storage::proposals::ProposalTarget::Brief,
+                person_id: None,
+                field: "glossary".to_owned(),
+                before: None,
+                after: proposal.to_owned(),
+                kind: crate::storage::proposals::ProposalKind::Inferred,
+                evidence: Vec::new(),
+            },
+        )
+        .unwrap();
+    }
+    recordings::mark_audio_deleted(&fx.connection, &fx.first, 1).unwrap();
+    let read = &overview(&fx.connection, None).unwrap()[0];
+    assert_eq!(read.title, "Итоги", "the summary's title before a topic");
+    assert_eq!(read.pending_proposals, 2);
+    assert!(!read.audio_deleted, "one of two recordings still has audio");
+    recordings::mark_audio_deleted(&fx.connection, &fx.second, 1).unwrap();
+    assert!(overview(&fx.connection, None).unwrap()[0].audio_deleted);
+    assert!(overview(&fx.connection, Some("nope")).unwrap().is_empty());
 }

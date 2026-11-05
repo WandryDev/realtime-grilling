@@ -14,7 +14,7 @@ use crate::{
     speech::refiner::Refiner,
     storage::{
         Storage,
-        call_records::{self, CallCards, CallQuestion, CallRecording},
+        call_records::{self, CallCards, CallOverview, CallQuestion, CallRecording},
         call_search::{self, CallSearch},
         proposals::{
             self, Proposal,
@@ -164,6 +164,21 @@ pub async fn calls_search(
 ) -> CommandResult<CallSearch> {
     storage
         .read(move |db| call_search::search(db, &query, project_id.as_deref()))
+        .await
+}
+
+/// The history's rows (`call-history`, «Список звонков») in one read:
+/// for every call, or the calls of `projectId`, newest first, its title
+/// (the call's, the summary's, its first topic), its pending proposals, its
+/// questions still open or asked, and whether all its audio was deleted.
+#[tauri::command]
+#[specta::specta]
+pub async fn calls_overview(
+    storage: State<'_, Storage>,
+    project_id: Option<String>,
+) -> CommandResult<Vec<CallOverview>> {
+    storage
+        .read(move |db| call_records::overview(db, project_id.as_deref()))
         .await
 }
 

@@ -432,6 +432,13 @@ export const commands = {
 	 */
 	callsSearch: (query: string, projectId: string | null) => typedError<CallSearch, CommandError>(__TAURI_INVOKE("calls_search", { query, projectId })),
 	/**
+	 *  The history's rows (`call-history`, «Список звонков») in one read:
+	 *  for every call, or the calls of `projectId`, newest first, its title
+	 *  (the call's, the summary's, its first topic), its pending proposals, its
+	 *  questions still open or asked, and whether all its audio was deleted.
+	 */
+	callsOverview: (projectId: string | null) => typedError<CallOverview[], CommandError>(__TAURI_INVOKE("calls_overview", { projectId })),
+	/**
 	 *  The waveform of a recording: `bars` (1–2000) peaks per channel over the
 	 *  longer channel. Decoded in Rust once, then cached. `NotFound` for an
 	 *  unknown recording or deleted audio, `Invalid` for a recording being
@@ -719,6 +726,36 @@ export type CallMoment = {
 	segmentId: string,
 	/**  From the start of the recording: when the phrase named was said. */
 	startMs: number,
+};
+
+/**
+ *  What a row of the history shows of a call, read in one query for every
+ *  call (`calls_overview`).
+ */
+export type CallOverview = {
+	callId: string,
+	projectId: string | null,
+	/**
+	 *  The call's title, else its summary's, else the summary's first
+	 *  topic, else the fast loop's first topic; empty without any (the
+	 *  history names the call after its project then).
+	 */
+	title: string,
+	/**
+	 *  Proposals waiting for review: the same count as the sidebar, the
+	 *  summary and the review page.
+	 */
+	pendingProposals: number,
+	/**
+	 *  Questions of its recordings not closed: open, and asked without an
+	 *  answer.
+	 */
+	openQuestions: number,
+	/**
+	 *  The audio of every recording was deleted («аудио удалено»); `false`
+	 *  for a call without recordings.
+	 */
+	audioDeleted: boolean,
 };
 
 /**  A question of the call with the moments it rests on. */

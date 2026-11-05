@@ -8,6 +8,15 @@
 //! summary's TL;DR, points and card facts. One match per source text (its
 //! first occurrence), with up to [`SNIPPET_CHARS`] characters of the
 //! original text on each side.
+//!
+//! **Light stemming** (`call-history`, «Найти термин»: «бронь» finds «о
+//! броне»): when the last word of the normalised query is longer than 3
+//! letters and ends in a vowel (`а е и о у ы э ю я`), «ь» or «й», that
+//! letter is dropped, and the query is searched as a substring as before.
+//! «бронь» → «брон» finds «бронь», «брони», «броне»; «касса» → «касс».
+//! Only the last word: a stem in the middle of a substring would no longer
+//! find the word it came from. `src/features/post-call/text-match.ts`
+//! follows the same rule.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,10 +25,10 @@ use serde::Serialize;
 use specta::Type;
 
 use super::{
-    call_records::CallMoment,
-    calls, recordings,
-    summaries::{self, CallEvidence},
-    transcript::{self, TranscriptChannel},
+    call_records::{self, CallMoment},
+    calls,
+    summaries::{self, CallEvidence, CallSummary},
+    transcript::{self, TranscriptChannel, TranscriptSegment},
 };
 use crate::{agent::fast_loop::evidence::normalize, error::CommandResult};
 
@@ -87,6 +96,22 @@ pub struct CallSearch {
     /// counts of the history's sidebar); projects without a match are not
     /// listed.
     pub projects: Vec<ProjectMatches>,
+}
+
+/// The letters a stemmed word may lose (after `normalize`: «ё» is «е»).
+const STEM_ENDINGS: [char; 11] = ['а', 'е', 'и', 'о', 'у', 'ы', 'э', 'ю', 'я', 'ь', 'й'];
+/// A last word this long or shorter is searched as it is.
+const STEM_FROM_LETTERS: usize = 4;
+
+/// The query as searched: normal form, its last word stemmed (see the
+/// module docs). Empty without letters or digits.
+pub fn needle(query: &str) -> Vec<char> {
+    let mut needle: Vec<char> = normalize(query).chars().collect();
+    let last_word = needle.iter().rev().take_while(|c| **c != ' ').count();
+    if last_word >= STEM_FROM_LETTERS && needle.last().is_some_and(|c| STEM_ENDINGS.contains(c)) {
+        needle.pop();
+    }
+    needle
 }
 
 /// A text in normal form, with the index of the original character each
@@ -159,18 +184,41 @@ fn quote_moment(evidence: &[CallEvidence]) -> Option<CallMoment> {
     })
 }
 
+/// What the search reads once for every call.
+struct Corpus {
+    /// Recording → when it started.
+    started: HashMap<String, i64>,
+    /// Call → the shown pass of its recordings.
+    segments: HashMap<String, Vec<TranscriptSegment>>,
+    /// Call → its saved summary.
+    summaries: HashMap<String, CallSummary>,
+}
+
+impl Corpus {
+    fn read(connection: &Connection) -> CommandResult<Self> {
+        let mut statement = connection
+            .prepare("SELECT id, started_at FROM recordings WHERE call_id IS NOT NULL")?;
+        let started = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            started,
+            segments: transcript::shown_by_call(connection)?,
+            summaries: summaries::saved_by_call(connection)?,
+        })
+    }
+}
+
 /// The matches of one call, in the order of [`CallSearch::matches`].
 fn search_call(
     connection: &Connection,
+    corpus: &Corpus,
     call: &calls::Call,
     query: &[char],
 ) -> CommandResult<Vec<CallSearchMatch>> {
-    let started: HashMap<String, i64> = recordings::for_call(connection, &call.id)?
-        .into_iter()
-        .map(|recording| (recording.id, recording.started_at))
-        .collect();
-    let segments = transcript::for_call(connection, &call.id)?;
-    let content = summaries::get(connection, &call.id)?;
+    let started = &corpus.started;
+    let segments: &[TranscriptSegment] = corpus.segments.get(&call.id).map_or(&[], Vec::as_slice);
+    let content = corpus.summaries.get(&call.id);
     let mut sources = vec![Source {
         source: SearchSource::Title,
         text: &call.title,
@@ -187,7 +235,7 @@ fn search_call(
             start_ms: segment.start_ms,
         }),
     }));
-    if let Some(summary) = &content
+    if let Some(summary) = content
         && let Some(saved) = &summary.content
     {
         sources.push(Source {
@@ -218,28 +266,37 @@ fn search_call(
             });
         }
     }
-    Ok(sources
-        .into_iter()
-        .filter_map(|source| {
-            let (before, text, after) = find(source.text, query)?;
-            let at = source.moment.as_ref().and_then(|moment| {
-                started
-                    .get(&moment.recording_id)
-                    .map(|started| started + moment.start_ms)
-            });
-            Some(CallSearchMatch {
-                call_id: call.id.clone(),
-                project_id: call.project_id.clone(),
-                source: source.source,
-                before,
-                text,
-                after,
-                channel: source.channel,
-                moment: source.moment,
-                at,
-            })
-        })
-        .collect())
+    let mut found = Vec::new();
+    for source in sources {
+        let Some((before, text, after)) = find(source.text, query) else {
+            continue;
+        };
+        // A quote of the summary names the pass it was built from: the
+        // phrase of the shown pass at that time.
+        let moment = match source.moment {
+            Some(moment) if source.source != SearchSource::Segment => Some(
+                call_records::moment(connection, &call.id, &moment.segment_id)?.unwrap_or(moment),
+            ),
+            moment => moment,
+        };
+        let at = moment.as_ref().and_then(|moment| {
+            started
+                .get(&moment.recording_id)
+                .map(|started| started + moment.start_ms)
+        });
+        found.push(CallSearchMatch {
+            call_id: call.id.clone(),
+            project_id: call.project_id.clone(),
+            source: source.source,
+            before,
+            text,
+            after,
+            channel: source.channel,
+            moment,
+            at,
+        });
+    }
+    Ok(found)
 }
 
 /// Searches every call, or the calls of `project_id`. A query without
@@ -249,14 +306,15 @@ pub fn search(
     query: &str,
     project_id: Option<&str>,
 ) -> CommandResult<CallSearch> {
-    let query: Vec<char> = normalize(query).chars().collect();
+    let query = needle(query);
     if query.is_empty() {
         return Ok(CallSearch::default());
     }
+    let corpus = Corpus::read(connection)?;
     let mut result = CallSearch::default();
     let mut projects: BTreeMap<Option<String>, ProjectMatches> = BTreeMap::new();
     for call in calls::list(connection, None)? {
-        let found = search_call(connection, &call, &query)?;
+        let found = search_call(connection, &corpus, &call, &query)?;
         if found.is_empty() {
             continue;
         }
@@ -410,9 +468,10 @@ mod tests {
                 (newer.as_str(), SearchSource::Segment),
                 (newer.as_str(), SearchSource::Tldr),
                 (newer.as_str(), SearchSource::Point),
+                (newer.as_str(), SearchSource::Fact),
                 (older.as_str(), SearchSource::Title),
             ],
-            "the refined pass only; «брони» is not «бронь»"
+            "the refined pass only; «брони» is a form of «бронь»"
         );
         let segment = &found.matches[0];
         assert_eq!(
@@ -427,7 +486,7 @@ mod tests {
         assert_eq!(point.moment, segment.moment);
         assert_eq!(point.at, Some(CALL_AT + 3_200));
         assert_eq!(found.matches[1].moment, None);
-        assert_eq!(found.total, 4);
+        assert_eq!(found.total, 5);
 
         let mut projects = found.projects.clone();
         projects.sort_by_key(|counts| counts.matches);
@@ -447,11 +506,72 @@ mod tests {
                 ProjectMatches {
                     project_id: Some(acme.clone()),
                     calls: 2,
-                    matches: 4,
+                    matches: 5,
                 },
             ]
         );
-        assert_eq!(search(&connection, "бронь", None).unwrap().matches.len(), 6);
+        assert_eq!(search(&connection, "бронь", None).unwrap().matches.len(), 7);
+    }
+
+    /// M3, `call-history`, «Найти термин»: «бронь» finds the client
+    /// speaking «о броне»; the stem is only the last word's.
+    #[test]
+    fn the_last_word_is_found_in_its_other_forms() {
+        assert_eq!(needle("бронь").iter().collect::<String>(), "брон");
+        assert_eq!(needle("Касса").iter().collect::<String>(), "касс");
+        assert_eq!(
+            needle("ведём в планфиксе").iter().collect::<String>(),
+            "ведем в планфикс"
+        );
+        assert_eq!(
+            needle("брон").iter().collect::<String>(),
+            "брон",
+            "no vowel at the end"
+        );
+        assert_eq!(
+            needle("еда").iter().collect::<String>(),
+            "еда",
+            "3 letters stay"
+        );
+        assert_eq!(needle("мой").iter().collect::<String>(), "мой");
+        assert_eq!(needle("1С").iter().collect::<String>(), "1с");
+
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Обменник");
+        let call = call(&connection, Some(&acme), "Касса", CALL_AT);
+        let recording = recording(&connection, &call, CALL_AT);
+        let said = live(
+            &connection,
+            &recording,
+            Others,
+            4_000,
+            "Давайте о броне поговорим.",
+        );
+        live(&connection, &recording, Me, 6_000, "А бронирование когда?");
+
+        let found = search(&connection, "бронь", None).unwrap();
+        let texts: Vec<(&str, &str)> = found
+            .matches
+            .iter()
+            .map(|hit| (hit.before.as_str(), hit.text.as_str()))
+            .collect();
+        assert_eq!(texts, [("Давайте о ", "брон"), ("А ", "брон")]);
+        assert_eq!(
+            found.matches[0].moment.as_ref().unwrap().segment_id,
+            said.id
+        );
+        assert_eq!(found.matches[0].channel, Some(Others));
+        // Words before the last are searched as they are.
+        assert!(
+            search(&connection, "броня поговорим", None)
+                .unwrap()
+                .matches
+                .is_empty()
+        );
+        assert_eq!(
+            search(&connection, "о броне", None).unwrap().matches.len(),
+            1
+        );
     }
 
     #[test]
