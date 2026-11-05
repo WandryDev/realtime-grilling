@@ -294,6 +294,49 @@ fn migration_0007_keeps_a_version_6_database() {
     assert_eq!(count(&connection, "call_proposals"), 0);
 }
 
+/// L40: a call whose audio the old «Удалить запись» only flagged in its
+/// frontend JSON reads as without audio after the migration.
+#[test]
+fn migration_0007_moves_the_old_audio_deleted_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DATABASE_FILE);
+    let (flagged, kept) = {
+        let v6 = Migrations::from_slice(&MIGRATION_LIST[..6]);
+        let connection = open(&path, &v6).unwrap();
+        let flagged_call = call(&connection, None, CallStatus::Finished);
+        let kept_call = call(&connection, None, CallStatus::Finished);
+        let flagged = recording(&connection, &flagged_call);
+        let kept = recording(&connection, &kept_call);
+        connection
+            .execute(
+                "UPDATE calls SET summary = '{\"audioDeleted\": true, \"tasks\": {}}', \
+                 updated_at = 7000 WHERE id = ?1",
+                [&flagged_call],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE calls SET summary = '{\"audioDeleted\": false}' WHERE id = ?1",
+                [&kept_call],
+            )
+            .unwrap();
+        (flagged, kept)
+    };
+    let connection = open(&path, &MIGRATIONS).unwrap();
+    let flagged = recordings::get(&connection, &flagged).unwrap();
+    assert_eq!(flagged.audio_deleted_at, Some(7000));
+    assert_eq!(
+        flagged.transcript_state,
+        recordings::TranscriptState::Failed
+    );
+    assert_eq!(
+        recordings::get(&connection, &kept)
+            .unwrap()
+            .audio_deleted_at,
+        None
+    );
+}
+
 #[test]
 fn a_build_saves_the_summary_and_names_an_untitled_call() {
     let connection = open_in_memory().unwrap();

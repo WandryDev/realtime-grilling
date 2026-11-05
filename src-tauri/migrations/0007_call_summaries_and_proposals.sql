@@ -64,3 +64,17 @@ CREATE TABLE call_proposals (
 
 CREATE INDEX call_proposals_call_id ON call_proposals (call_id, decision);
 CREATE INDEX call_proposals_person_id ON call_proposals (person_id, decision);
+
+-- Before this version «Удалить запись» only set `audioDeleted` in the call's
+-- frontend JSON (`calls.summary`) and left the files. Those recordings now
+-- read as without audio (no second pass, no player), and the sweep at start
+-- removes their files.
+UPDATE recordings
+   SET audio_deleted_at = (SELECT c.updated_at FROM calls c WHERE c.id = recordings.call_id),
+       transcript_state = CASE WHEN transcript_state IN ('live', 'refining')
+                               THEN 'failed' ELSE transcript_state END
+ WHERE audio_deleted_at IS NULL
+   AND status <> 'recording'
+   AND call_id IN (SELECT id FROM calls
+                    WHERE CASE WHEN json_valid(summary)
+                               THEN json_extract(summary, '$.audioDeleted') END = 1);

@@ -136,7 +136,11 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
         RefinerConfig::default(),
     ));
     // The decoded WAVs and peaks of the player (post-call task 3.4).
-    app.manage(crate::records::audio::AudioCache::for_app());
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    app.manage(crate::records::audio::AudioCache::for_app(&cache_dir));
     // Runs for the app's whole life; needs no microphone access. No start
     // widget (and no new call) during a call or a recording.
     let watch = crate::audio::mic_watch::start_for_app(app.handle());

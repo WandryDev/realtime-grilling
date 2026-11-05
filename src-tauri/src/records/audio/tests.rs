@@ -1,4 +1,4 @@
-use std::{fs, io::BufWriter};
+use std::{collections::HashSet, fs, io::BufWriter};
 
 use super::*;
 use crate::{
@@ -281,4 +281,110 @@ fn only_a_finished_call_loses_its_audio() {
     }
     let error = fx.delete("nope").unwrap_err();
     assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
+}
+
+/// A store whose deletes fail, as a file the OS keeps open.
+struct StuckStore(Arc<dyn RecordingStore>);
+
+impl RecordingStore for StuckStore {
+    fn files(&self, id: &str) -> crate::storage::recordings::RecordingFiles {
+        self.0.files(id)
+    }
+    fn create(&self, id: &str) -> io::Result<crate::recording::store::ChannelWriters> {
+        self.0.create(id)
+    }
+    fn finish(&self, id: &str) -> io::Result<()> {
+        self.0.finish(id)
+    }
+    fn delete(&self, _id: &str) -> io::Result<()> {
+        Err(io::Error::other("busy"))
+    }
+    fn sweep(&self, known_ids: &HashSet<String>) -> io::Result<Vec<String>> {
+        self.0.sweep(known_ids)
+    }
+}
+
+/// L28, L9: the mark goes first: a delete that fails leaves the recording
+/// without audio (nothing plays it, no second pass), and the sweep at the
+/// next start removes its files.
+#[test]
+fn a_failed_delete_still_marks_the_audio_deleted() {
+    let fx = Fixture::new();
+    let call = fx.call(CallStatus::Finished);
+    let id = fx.recording(&call, false);
+    let error = block_on(delete_call_audio(
+        &fx.storage,
+        &fx.sink,
+        Arc::new(StuckStore(fx.store())),
+        None,
+        fx.cache.clone(),
+        &call,
+    ))
+    .unwrap_err();
+    assert!(matches!(error, CommandError::External { .. }), "{error:?}");
+    let recording = fx.get(&id);
+    assert!(recording.audio_deleted_at.is_some());
+    assert_eq!(playable_in(&fx.storage, &id), None);
+    assert!(fx.data().join(&recording.files.me).exists());
+    Storage::open_in(&fx.data());
+    assert!(
+        !fx.data().join(&recording.files.me).exists(),
+        "swept at start"
+    );
+}
+
+/// M14: a deleted call or project takes its decoded audio with it.
+#[test]
+fn the_cache_forgets_recordings_that_are_gone() {
+    let fx = Fixture::new();
+    let call = fx.call(CallStatus::Finished);
+    let gone = fx.recording(&call, false);
+    let kept = fx.recording(&call, false);
+    for id in [&gone, &kept] {
+        fx.cache.peaks(id, &fx.playable(id), 4).unwrap();
+    }
+    assert_eq!(fx.cached(), 4);
+    fx.cache.retain(&HashSet::from([kept.clone()]));
+    assert_eq!(fx.cached(), 2, "only the kept recording's WAVs");
+    // Its peaks went too: without the WAVs they are decoded again.
+    let files = fx.playable(&gone);
+    fs::remove_file(&files.me).unwrap();
+    assert!(fx.cache.peaks(&gone, &files, 4).is_err());
+    assert!(fx.cache.peaks(&kept, &fx.playable(&kept), 4).is_ok());
+
+    // `calls_delete`: the rows go, then the cache follows the database.
+    let id = call.clone();
+    block_on(fx.storage.write(&fx.sink, move |db| calls::delete(db, &id))).unwrap();
+    block_on(forget_deleted(&fx.storage, &fx.cache));
+    assert_eq!(fx.cached(), 0);
+}
+
+/// L12: the app's cache is its own folder, locked while it runs; the
+/// folders of apps that no longer run go, another running app's stays.
+#[test]
+fn each_running_app_has_its_own_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(CACHE_DIR);
+    let stale = root.join("1");
+    fs::create_dir_all(&stale).unwrap();
+    fs::write(stale.join("x.wav"), b"old").unwrap();
+    let running = root.join("2");
+    fs::create_dir_all(&running).unwrap();
+    let held = File::create(running.join(LOCK_FILE)).unwrap();
+    held.try_lock().unwrap();
+
+    let cache = AudioCache::for_app(dir.path());
+    let own = root.join(std::process::id().to_string());
+    assert!(own.join(LOCK_FILE).exists());
+    assert!(!stale.exists(), "left by an app that no longer runs");
+    assert!(running.exists(), "another app runs");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&own).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+    let lock = File::open(own.join(LOCK_FILE)).unwrap();
+    assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
+    drop(cache);
 }

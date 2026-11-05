@@ -112,6 +112,7 @@ fn a_range_is_206_with_exactly_that_slice() {
         header_of(&response, header::CONTENT_RANGE),
         format!("bytes */{len}")
     );
+    assert_eq!(header_of(&response, header::CACHE_CONTROL), "no-store");
     // A range this scheme doesn't read is ignored: the whole file.
     let response = fx.main(&format!("/{ID}/others"), Some("items=0-1"));
     assert_eq!(response.status(), StatusCode::OK);
@@ -131,12 +132,37 @@ fn a_slice_is_never_larger_than_the_limit() {
     );
     assert_eq!(
         wanted(Some("bytes=0-99, 200-299"), len),
-        Wanted::Slice(0, 99),
-        "the first of several ranges"
+        Wanted::Whole,
+        "several ranges read as none"
     );
     assert_eq!(wanted(Some("bytes=20-10"), len), Wanted::Whole);
     assert_eq!(wanted(Some("bytes=-0"), len), Wanted::Unsatisfiable);
     assert_eq!(wanted(None, len), Wanted::Whole);
+}
+
+/// M5: without a range (or with one the scheme does not read) a file over
+/// the limit is never read whole: its first slice, 206.
+#[test]
+fn a_large_file_without_a_range_gets_its_first_slice() {
+    let fx = fixture();
+    let len = usize::try_from(MAX_SLICE).unwrap() + 1_000;
+    let big: Vec<u8> = (0..len).map(|n| (n % 251) as u8).collect();
+    fs::write(&fx.files.me, &big).unwrap();
+    for range in [
+        None,
+        Some("bytes=20-10"),
+        Some("items=0-1"),
+        Some("bytes=0-9,20-29"),
+    ] {
+        let response = fx.main(&format!("/{ID}/me"), range);
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT, "{range:?}");
+        assert_eq!(response.body().len(), usize::try_from(MAX_SLICE).unwrap());
+        assert_eq!(response.body()[..], big[..response.body().len()]);
+        assert_eq!(
+            header_of(&response, header::CONTENT_RANGE),
+            format!("bytes 0-{}/{len}", MAX_SLICE - 1)
+        );
+    }
 }
 
 #[test]

@@ -233,6 +233,39 @@ pub fn read<R: Read + Seek>(reader: R) -> io::Result<Decoded> {
 /// caller). Reads up to the end or the first broken page, so a file cut by a
 /// crash gives everything up to its last complete page.
 fn read_into<R: Read + Seek>(reader: R, mut pcm: Vec<f32>) -> io::Result<Decoded> {
+    let stream = decode(reader, |samples| {
+        pcm.extend_from_slice(samples);
+        Ok(())
+    })?;
+    pcm.truncate(usize::try_from(stream.kept).unwrap_or(usize::MAX));
+    Ok(Decoded {
+        pre_skip: stream.pre_skip,
+        input_rate: stream.input_rate,
+        last_granule: stream.last_granule,
+        eos: stream.eos,
+        samples: pcm,
+    })
+}
+
+/// What [`decode`] read besides the samples.
+struct Stream {
+    pre_skip: u16,
+    input_rate: u32,
+    last_granule: u64,
+    eos: bool,
+    /// How many of the samples given to the sink are the channel's: the
+    /// rest, at the end, is past the last granule.
+    kept: u64,
+}
+
+/// Decodes a mono Ogg Opus stream to 16 kHz, giving `sink` the samples
+/// after the pre-skip frame by frame, so nothing holds the whole channel.
+/// The sink may get a few samples past the end; [`Stream::kept`] says how
+/// many to keep. Reads up to the end or the first broken page.
+fn decode<R: Read + Seek>(
+    reader: R,
+    mut sink: impl FnMut(&[f32]) -> io::Result<()>,
+) -> io::Result<Stream> {
     let mut pages = PacketReader::new(reader);
     let head = pages
         .read_packet()
@@ -259,29 +292,40 @@ fn read_into<R: Read + Seek>(reader: R, mut pcm: Vec<f32>) -> io::Result<Decoded
     let mut frame = vec![0.0; MAX_FRAME];
     let mut last_granule = 0;
     let mut eos = false;
+    let skip = u64::from(pre_skip) / GRANULE_PER_SAMPLE;
+    // Samples decoded so far, the pre-skip included.
+    let mut decoded: u64 = 0;
     while let Ok(Some(packet)) = pages.read_packet() {
         let count = decoder
             .decode_float(&packet.data, &mut frame, false)
             .map_err(codec_error)?;
-        pcm.extend_from_slice(&frame[..count]);
+        let skipped = usize::try_from(skip.saturating_sub(decoded))
+            .unwrap_or(usize::MAX)
+            .min(count);
+        if skipped < count {
+            sink(&frame[skipped..count])?;
+        }
+        decoded += count as u64;
         if packet.last_in_page() {
             last_granule = packet.absgp_page();
         }
         eos |= packet.last_in_stream();
     }
-    let to_samples =
-        |granule: u64| usize::try_from(granule / GRANULE_PER_SAMPLE).unwrap_or(usize::MAX);
-    let end = to_samples(last_granule).min(pcm.len());
-    let skip = to_samples(u64::from(pre_skip)).min(end);
-    pcm.truncate(end);
-    pcm.drain(..skip);
-    Ok(Decoded {
+    let end = (last_granule / GRANULE_PER_SAMPLE).min(decoded);
+    Ok(Stream {
         pre_skip,
         input_rate,
         last_granule,
         eos,
-        samples: pcm,
+        kept: end.saturating_sub(skip),
     })
+}
+
+/// Decodes a channel file, giving `sink` its 16 kHz samples as they come
+/// (see [`decode`]); returns how many of them are the channel's.
+pub fn decode_file(path: &Path, sink: impl FnMut(&[f32]) -> io::Result<()>) -> io::Result<u64> {
+    let file = std::fs::File::open(path)?;
+    Ok(decode(io::BufReader::new(file), sink)?.kept)
 }
 
 /// A channel file as 16 kHz mono samples (see [`read_into`]). The buffer is

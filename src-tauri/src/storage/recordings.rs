@@ -327,9 +327,11 @@ pub fn ids_with_audio(connection: &Connection) -> CommandResult<Vec<String>> {
 
 /// Records that the audio of a stopped recording was deleted (post-call
 /// design.md, decision 10): the row, its transcript, topics, cards and
-/// questions stay. Deleting it again keeps the first time. Delete the files
-/// first: the sweep removes whatever is left of them. `NotFound` for an
-/// unknown id, `Invalid` while it is being written.
+/// questions stay. Deleting it again keeps the first time. Mark it before
+/// deleting the files: the sweep removes whatever is left of them. A second
+/// pass that has not stored its result never will: `live` or `refining`
+/// becomes `failed` (the live transcript stays). `NotFound` for an unknown
+/// id, `Invalid` while it is being written.
 pub fn mark_audio_deleted(connection: &Connection, id: &str, at: i64) -> CommandResult<Recording> {
     let recording = get(connection, id)?;
     if recording.status == RecordingState::Recording {
@@ -339,7 +341,9 @@ pub fn mark_audio_deleted(connection: &Connection, id: &str, at: i64) -> Command
     }
     connection.execute(
         "UPDATE recordings
-            SET audio_deleted_at = coalesce(audio_deleted_at, ?2), updated_at = ?3
+            SET audio_deleted_at = coalesce(audio_deleted_at, ?2), updated_at = ?3,
+                transcript_state = CASE WHEN transcript_state IN ('live', 'refining')
+                                        THEN 'failed' ELSE transcript_state END
           WHERE id = ?1",
         params![id, at, now_ms()],
     )?;

@@ -39,6 +39,7 @@ use crate::{
         sources::{self as project_sources, SourceAddResult},
     },
     recording::{RecordingManager, status::RecordingStatus},
+    records::audio::{self as records_audio, AudioCache},
     shell::{self, SettingsLock, shortcuts::ShortcutError, windows},
     speech::{
         benchmark::{self, BenchmarkFailure, BenchmarkResult, Thresholds},
@@ -48,7 +49,7 @@ use crate::{
         service::Speech,
     },
     storage::{
-        Storage,
+        Storage, call_records,
         call_state::{self, QuestionAction},
         calls::{self, Call, CallCreate, CallStatus, CallUpdate},
         people::{self, Person, PersonCreate, PersonUpdate},
@@ -122,11 +123,14 @@ pub async fn projects_delete(
     storage: State<'_, Storage>,
     builds: State<'_, BriefBuilds>,
     summaries: State<'_, SummaryBuilds>,
+    cache: State<'_, AudioCache>,
     id: String,
 ) -> CommandResult<()> {
     crate::projects::delete(&storage, &app, &builds, &id).await?;
-    // Its calls went with it: their summary builds stop, saving nothing.
+    // Its calls went with it: their summary builds stop, saving nothing,
+    // and their decoded audio goes.
     summaries.stop_project(&id);
+    records_audio::forget_deleted(&storage, &cache).await;
     Ok(())
 }
 
@@ -353,6 +357,7 @@ pub async fn calls_delete(
     app: AppHandle,
     storage: State<'_, Storage>,
     summaries: State<'_, SummaryBuilds>,
+    cache: State<'_, AudioCache>,
     id: String,
 ) -> CommandResult<()> {
     let call_id = id.clone();
@@ -361,8 +366,10 @@ pub async fn calls_delete(
         .await?;
     // A summary build of it stops: its agent is killed, nothing is saved.
     summaries.stop(&id, Stop::Aborted);
-    // The call's recordings went with it; now their files.
+    // The call's recordings went with it; now their files and their
+    // decoded copies.
     storage.sweep_recordings().await;
+    records_audio::forget_deleted(&storage, &cache).await;
     Ok(())
 }
 
@@ -1028,7 +1035,19 @@ pub async fn summary_get(
     call_id: String,
 ) -> CommandResult<CallSummaryView> {
     let id = call_id.clone();
-    let summary = storage.read(move |db| summaries::get(db, &id)).await?;
+    let summary = storage
+        .read(move |db| {
+            let mut summary = summaries::get(db, &id)?;
+            // Its quotes and ranges at the phrases the transcript shows.
+            if let Some(content) = summary
+                .as_mut()
+                .and_then(|summary| summary.content.as_mut())
+            {
+                call_records::shown(db, &id, content)?;
+            }
+            Ok(summary)
+        })
+        .await?;
     Ok(CallSummaryView {
         summary,
         building: builds.progress(&call_id),

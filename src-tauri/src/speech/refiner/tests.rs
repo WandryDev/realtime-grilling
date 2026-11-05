@@ -340,7 +340,8 @@ fn a_recording_without_audio_is_not_refined() {
         recordings::mark_audio_deleted(connection, &deleted, 70_000).unwrap();
         assert_eq!(unrefined(connection).unwrap(), vec![kept.clone()]);
     });
-    assert_eq!(state(&host, &deleted), TranscriptState::Live);
+    // L31: it will never be refined; the live transcript stays.
+    assert_eq!(state(&host, &deleted), TranscriptState::Failed);
 }
 
 /// `call-details`, "Удаление аудио": deleting the audio stops the second

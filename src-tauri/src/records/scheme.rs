@@ -11,10 +11,12 @@
 //! is. `Range: bytes=…` gets 206 with exactly that slice, read from the
 //! file (wry holds a whole body in memory, so a slice is at most
 //! [`MAX_SLICE`]: an open or larger range gets its first [`MAX_SLICE`]
-//! bytes, and `Content-Range` says so); no `Range` gets 200 with the whole
-//! file. 404 for an unknown recording, one being written or whose audio
-//! was deleted, and an unknown channel; 403 for any webview but the main
-//! window's.
+//! bytes, and `Content-Range` says so). No `Range`, one this scheme does
+//! not read, or several ranges: 200 with the whole file while it fits in
+//! [`MAX_SLICE`], else 206 with its first [`MAX_SLICE`] bytes, as
+//! `bytes=0-` (an hour of WAV is never read into memory at once). 404 for an
+//! unknown recording, one being written or whose audio was deleted, and an
+//! unknown channel; 403 for any webview but the main window's.
 
 use std::{
     fs::File,
@@ -90,7 +92,8 @@ fn format(query: Option<&str>) -> Option<Format> {
 /// A `Range` header against a file of `len` bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wanted {
-    /// No range, or one this scheme ignores (another unit, not a number).
+    /// No range, or one this scheme ignores (another unit, not a number,
+    /// several ranges).
     Whole,
     /// The first and last byte, inclusive.
     Slice(u64, u64),
@@ -98,13 +101,16 @@ enum Wanted {
     Unsatisfiable,
 }
 
-/// The first range of `bytes=…`; at most [`MAX_SLICE`] bytes of it.
+/// The range of `bytes=…`; at most [`MAX_SLICE`] bytes of it.
 fn wanted(range: Option<&str>, len: u64) -> Wanted {
     let Some(spec) = range.and_then(|range| range.trim().strip_prefix("bytes=")) else {
         return Wanted::Whole;
     };
-    let first = spec.split(',').next().unwrap_or_default().trim();
-    let Some((start, end)) = first.split_once('-') else {
+    // Several ranges would need a multipart answer; media never asks.
+    if spec.contains(',') {
+        return Wanted::Whole;
+    }
+    let Some((start, end)) = spec.trim().split_once('-') else {
         return Wanted::Whole;
     };
     let (start, end) = match (start.trim(), end.trim()) {
@@ -189,7 +195,16 @@ pub fn respond(
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "no-store");
     let (builder, start, count) = match wanted(range, len) {
-        Wanted::Whole => (builder.status(StatusCode::OK), 0, len),
+        Wanted::Whole if len <= MAX_SLICE => (builder.status(StatusCode::OK), 0, len),
+        // Too big for one body: its start, as for `bytes=0-`.
+        Wanted::Whole => (
+            builder.status(StatusCode::PARTIAL_CONTENT).header(
+                header::CONTENT_RANGE,
+                format!("bytes 0-{}/{len}", MAX_SLICE - 1),
+            ),
+            0,
+            MAX_SLICE,
+        ),
         Wanted::Slice(start, end) => (
             builder
                 .status(StatusCode::PARTIAL_CONTENT)
@@ -201,6 +216,7 @@ pub fn respond(
             return Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(header::CONTENT_RANGE, format!("bytes */{len}"))
+                .header(header::CACHE_CONTROL, "no-store")
                 .body(Vec::new())
                 .unwrap_or_default();
         }
