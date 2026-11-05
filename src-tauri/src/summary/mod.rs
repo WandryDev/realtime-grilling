@@ -19,7 +19,9 @@
 pub mod builds;
 pub mod input;
 pub mod reply;
+pub mod run;
 pub mod transcript;
+pub mod validate;
 
 use std::{sync::LazyLock, time::Duration};
 
@@ -150,3 +152,9 @@ mod tests;
 
 #[cfg(test)]
 mod input_tests;
+
+#[cfg(test)]
+mod run_tests;
+
+#[cfg(test)]
+mod validate_tests;

@@ -156,6 +156,23 @@ impl SummaryBuilds {
             .is_some_and(|control| control.generation == generation)
     }
 
+    /// Whether `generation` is the call's build and was not stopped:
+    /// checked under the database lock before a build saves.
+    pub fn running_and_not_stopped(&self, call_id: &str, generation: u64) -> bool {
+        self.state()
+            .running
+            .get(call_id)
+            .is_some_and(|control| control.generation == generation && control.stop.is_none())
+    }
+
+    /// Keeps the progress of the build `generation`, for a window opening
+    /// late; nothing once it is not the call's build.
+    pub fn record(&self, call_id: &str, generation: u64, progress: &SummaryProgress) {
+        self.with(call_id, generation, |control| {
+            control.last = Some(progress.clone());
+        });
+    }
+
     fn with<T>(
         &self,
         call_id: &str,
@@ -231,9 +248,7 @@ impl BuildSlot {
 
     /// Keeps the progress a window opening late reads.
     pub fn record(&self, progress: &SummaryProgress) {
-        self.builds.with(&self.call_id, self.generation, |control| {
-            control.last = Some(progress.clone());
-        });
+        self.builds.record(&self.call_id, self.generation, progress);
     }
 }
 

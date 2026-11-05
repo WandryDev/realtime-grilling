@@ -282,8 +282,9 @@ pub struct AnsweredQuestion {
 pub struct SummaryBuild {
     pub summary: ReadySummary,
     /// Replace the call's pending proposals; empty for a call without a
-    /// project.
-    pub proposals: Vec<NewProposal>,
+    /// project. `None` keeps them: the proposals' call failed, and a failed
+    /// call does not take the previous build's proposals away.
+    pub proposals: Option<Vec<NewProposal>>,
     pub answered: Vec<AnsweredQuestion>,
 }
 
@@ -528,8 +529,8 @@ pub fn reconcile_questions(
 
 /// The `saving` stage (decisions 2, 5, 6): in one transaction saves the
 /// summary `ready` (and the call's title if empty), replaces the call's
-/// pending proposals (the accepted and rejected ones stay) and marks the
-/// answered questions. On an error nothing is changed: the previous
+/// pending proposals (the accepted and rejected ones stay; all of them
+/// stay without new ones) and marks the answered questions. On an error nothing is changed: the previous
 /// summary and proposals stay. Sends `call` / `updated`.
 pub fn save_build(
     connection: &Connection,
@@ -538,7 +539,10 @@ pub fn save_build(
 ) -> CommandResult<(SavedBuild, Vec<DataChanged>)> {
     call_state::in_savepoint(connection, || {
         let (summary, events) = save_ready(connection, call_id, &build.summary)?;
-        let proposals = proposals::replace_pending(connection, call_id, &build.proposals)?;
+        let proposals = match &build.proposals {
+            Some(new) => proposals::replace_pending(connection, call_id, new)?,
+            None => proposals::list(connection, call_id)?,
+        };
         let answered = reconcile_questions(connection, call_id, &build.answered)?;
         let saved = SavedBuild {
             summary,

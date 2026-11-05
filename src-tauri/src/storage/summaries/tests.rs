@@ -206,7 +206,7 @@ fn about(person_id: &str, field: &str, after: &str) -> NewProposal {
 fn build(summary: ReadySummary, proposals: Vec<NewProposal>) -> SummaryBuild {
     SummaryBuild {
         summary,
-        proposals,
+        proposals: Some(proposals),
         answered: Vec::new(),
     }
 }
@@ -405,7 +405,10 @@ fn a_failed_rebuild_keeps_the_previous_summary() {
     let before = proposals::list(&connection, &id).unwrap();
     let broken = SummaryBuild {
         summary: ready("Новое", "Другая тема"),
-        proposals: vec![about(&igor, "tech", "4"), about(&stranger, "tech", "5")],
+        proposals: Some(vec![
+            about(&igor, "tech", "4"),
+            about(&stranger, "tech", "5"),
+        ]),
         answered: vec![AnsweredQuestion {
             question_id: question.clone(),
             evidence: quote("двести в день"),
@@ -474,6 +477,30 @@ fn a_rebuild_replaces_only_the_pending_proposals() {
         proposals::get(&connection, &accepted).unwrap().decision,
         ProposalDecision::Accepted
     );
+}
+
+/// Decision 3, «сбой B не лишает звонок итогов»: a build whose proposals'
+/// call failed saves its summary and keeps the pending proposals it had.
+#[test]
+fn a_build_without_new_proposals_keeps_the_pending_ones() {
+    let connection = open_in_memory().unwrap();
+    let acme = project(&connection, "Acme");
+    let id = call(&connection, Some(&acme), CallStatus::Finished);
+    let (first, _) = save_build(
+        &connection,
+        &id,
+        &build(ready("Пилот", "Очередь"), vec![brief("USD МІКС")]),
+    )
+    .unwrap();
+    let rebuild = SummaryBuild {
+        summary: ready("Пилот 2", "Очередь"),
+        proposals: None,
+        answered: Vec::new(),
+    };
+    let (second, _) = save_build(&connection, &id, &rebuild).unwrap();
+    assert_eq!(second.summary.title, "Пилот 2");
+    assert_eq!(second.proposals, first.proposals);
+    assert_eq!(proposals::list(&connection, &id).unwrap(), first.proposals);
 }
 
 /// Decision 6: open and asked questions become answered; answered and
