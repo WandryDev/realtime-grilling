@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
 import { toast } from "@/components/ui/toast";
-import { resetCall } from "@/data/call-session";
+import { closeCall, currentCallSession, finishCall } from "@/data/call-session";
+import { deleteCallsWithoutProject } from "@/data/calls";
 import { resetIntegrations } from "@/data/integrations";
 import { resetOnboarding } from "@/data/onboarding";
 import { deleteProject, getProjects } from "@/data/projects";
@@ -19,7 +20,8 @@ import { PrivacySettings } from "../screens/privacy-settings";
 
 /**
  * Settings → Приватность и хранение in the app: retention selects, export,
- * and "Очистить всё", which wipes the mock data and starts the setup again.
+ * and "Очистить всё", which ends the call in progress, wipes the data and
+ * starts the setup again.
  */
 export function PrivacySection() {
   const router = useRouter();
@@ -30,11 +32,20 @@ export function PrivacySection() {
   const openExport = useCallback(() => setExportOpen(true), []);
   const openDelete = useCallback(() => setDeleteOpen(true), []);
 
-  const handleDeleted = useCallback(() => {
+  const handleDeleted = useCallback(async () => {
+    // A call in progress ends first: its recording stops before its data
+    // goes, and no window keeps showing it.
+    const { callId, status } = currentCallSession();
+    if (status === "live") {
+      await finishCall();
+    }
+    if (callId !== null && status !== "idle") {
+      await closeCall(callId);
+    }
     for (const project of getProjects()) {
       deleteProject(project.id);
     }
-    resetCall();
+    deleteCallsWithoutProject();
     resetIntegrations();
     resetOnboarding();
     setDeleteOpen(false);

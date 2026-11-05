@@ -2,7 +2,11 @@
 
 import { Effect, Stream } from "effect";
 
-import { CURRENT_CALL_ID, resetCall } from "@/data/call-session";
+import {
+  CURRENT_CALL_ID,
+  closeCall,
+  currentCallSession,
+} from "@/data/call-session";
 import {
   type CallRecord,
   resolveCallId,
@@ -42,7 +46,8 @@ const running = new Set<string>();
 
 /**
  * Builds the summary of a finished call: walks the processing steps, then
- * marks the summary ready, ends the call session and calls `onDone`.
+ * marks the summary ready, closes the call when it is the finishing one
+ * (the backend marks it finished, no call is current) and calls `onDone`.
  * Calling it again while it runs does nothing.
  */
 export function collectSummary(
@@ -71,7 +76,10 @@ export function collectSummary(
       Effect.andThen(
         Effect.sync(() => {
           setSummaryProgress(callId, undefined);
-          resetCall();
+          const session = currentCallSession();
+          if (session.status === "finishing" && session.callId === callId) {
+            closeCall(callId);
+          }
           options.onDone?.();
         })
       )
