@@ -148,10 +148,14 @@ export class SummaryData extends Context.Service<
       const save = Effect.fnUntraced(function* (found: Call) {
         const { now } = yield* database.stamp;
         const [recording] = yield* recordingOf(found);
+        // The summary's moments point at the call's recording.
         const demo = demoRecords(
           found.id,
           recording?.recording.startedAt ?? found.startedAt ?? found.createdAt,
-          () => uuidv7(now),
+          (key) =>
+            recording && key === `${found.id}-recording`
+              ? recording.recording.id
+              : uuidv7(now),
           false
         );
         const saved = { ...demo.summary, builtAt: now };

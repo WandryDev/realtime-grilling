@@ -12,6 +12,7 @@ import { type ProjectRecord, useProjects } from "@/data/projects";
 import { usePendingProposalCounts } from "@/data/proposals";
 import { useProjectSources } from "@/data/sources";
 import type { Synced } from "@/data/synced-store";
+import { clockTime } from "@/lib/clock";
 import { plural } from "@/lib/plural";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
@@ -20,7 +21,7 @@ import type { FilterOption } from "../components/history";
 import { type PostCallLinks, PostCallProvider } from "../components/links";
 import { NotFoundState } from "../components/not-found-state";
 import { type HistoryMonth, SEARCH, type SearchResult } from "../mock";
-import { clockTime, momentParam } from "../moment";
+import { momentParam } from "../moment";
 import {
   CallHistoryScreen,
   type HistorySearch,
@@ -35,8 +36,10 @@ import { APP_WINDOW, baseLinks } from "./call-page-frame";
  * and its filters: with questions not closed, and by the client's people
  * (by id, so a renamed person still finds their calls). Newest first by
  * the start, by month. Typing searches the transcripts, summaries and
- * titles in Rust (`calls_search`); a result from the transcript opens it
- * at the phrase. A project without calls shows its readiness for one.
+ * titles in Rust (`calls_search`) once typing pauses: in a project's
+ * history that project's calls, the pills widen it to every project or
+ * narrow it to another. A result from the transcript opens it at the
+ * phrase. A project without calls shows its readiness for one.
  * `?demo=search` opens with the Paper query.
  */
 
@@ -136,8 +139,7 @@ function metaOf(match: CallSearchMatch, more: number) {
     meta = "в названии звонка";
   } else if (match.source === "segment") {
     const who = match.channel === "me" ? "Вы" : "Клиент";
-    meta =
-      match.at === null ? who : `${who}, ${clockTime(match.at).slice(0, 5)}`;
+    meta = match.at === null ? who : `${who}, ${clockTime(match.at, false)}`;
   }
   return more > 0 ? `${meta}, и ещё ${more}` : meta;
 }
@@ -152,7 +154,12 @@ function searchRows(
 ): SearchRow[] {
   const perCall = new Map<string, CallSearchMatch[]>();
   for (const match of matches) {
-    perCall.set(match.callId, [...(perCall.get(match.callId) ?? []), match]);
+    const found = perCall.get(match.callId);
+    if (found) {
+      found.push(match);
+    } else {
+      perCall.set(match.callId, [match]);
+    }
   }
   return [...perCall].flatMap(([callId, found]) => {
     const entry = entries.get(callId);
@@ -189,7 +196,8 @@ function searchSummary(
   calls: number,
   total: number
 ) {
-  if (status === "loading") {
+  // The last results stay while the next ones are read.
+  if (status === "loading" && calls === 0) {
     return "Ищу…";
   }
   if (status === "error") {
@@ -276,8 +284,12 @@ function History({ projectId }: { projectId: string | null }) {
   const sources = useProjectSources(projectId);
   const [query, setQuery] = useState(demo === "search" ? SEARCH.query : "");
   const [filter, setFilter] = useState(ALL);
-  const [searchFilter, setSearchFilter] = useState(ALL);
-  const found = useCallSearch(query, null);
+  // A project's history searches its calls; the pills widen it.
+  const [searchFilter, setSearchFilter] = useState(projectId ?? ALL);
+  const found = useCallSearch(
+    query,
+    searchFilter === ALL ? null : searchFilter
+  );
 
   const projectName = useCallback(
     (id: string | null) =>
@@ -364,14 +376,19 @@ function History({ projectId }: { projectId: string | null }) {
   const search = useMemo<HistorySearch>(() => {
     const byId = new Map(entries.map((entry) => [entry.call.id, entry]));
     const rows = searchRows(found.data.matches, byId, projectName);
+    // Per project over every call, whatever the search was narrowed to.
     const counts = new Map(
       found.data.projects.map((item) => [item.projectId, item.calls])
+    );
+    const everywhere = found.data.projects.reduce(
+      (total, item) => total + item.calls,
+      0
     );
     return {
       filter: {
         onValueChange: setSearchFilter,
         options: [
-          { count: rows.length, id: ALL, label: "Все проекты" },
+          { count: everywhere, id: ALL, label: "Все проекты" },
           ...projects.map((item) => ({
             count: counts.get(item.id) ?? 0,
             id: item.id,
@@ -393,10 +410,15 @@ function History({ projectId }: { projectId: string | null }) {
     [people, project, sources.length]
   );
 
-  const changeQuery = useCallback((next: string) => {
-    setQuery(next);
-    setSearchFilter(ALL);
-  }, []);
+  const changeQuery = useCallback(
+    (next: string) => {
+      setQuery(next);
+      if (!next.trim()) {
+        setSearchFilter(projectId ?? ALL);
+      }
+    },
+    [projectId]
+  );
 
   if (projectId && !project) {
     return (

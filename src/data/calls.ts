@@ -5,8 +5,8 @@ import { useMemo } from "react";
 
 import type { Call, Value } from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
+import { pad2 } from "@/lib/clock";
 import { diffPatch } from "@/lib/merge-patch";
-import { deleteCallAudio, isCallAudioDeleted } from "./call-records";
 import { CallsData } from "./services/calls";
 import { MockDatabase } from "./services/mock-database";
 import { mockSeed, seedCallId } from "./services/mock-seed";
@@ -22,20 +22,14 @@ import { createSyncedStore, refreshMockStores } from "./synced-store";
  * participants' names of the call session; dates, duration and the open
  * count come from the record. The summary, its build, proposals, task
  * cards and recordings Rust keeps are read by `./summaries.ts`,
- * `./proposals.ts` and `./call-records.ts`.
- *
- * Until the details page reads the recordings (post-call task 4.5), the
- * deleted audio stays local to the window too, seeded with the demo's
- * (`reviewSeed`); «Удалить запись» also deletes the files
- * (`call_audio_delete`).
+ * `./proposals.ts` and `./call-records.ts`; whether the audio was deleted
+ * is the recordings' (`useCallTranscript`).
  */
 
 /** How the screens name a call without a project. */
 export const NO_PROJECT_CALL = "Звонок без проекта";
 
 export interface CallRecord {
-  /** The recording was deleted; transcript and summary stay. */
-  audioDeleted: boolean;
   /** "19 окт" */
   date: string;
   /** "19 октября, 12:01" */
@@ -109,8 +103,6 @@ const SECONDS_PER_MINUTE = 60;
 const MINUTES_PER_HOUR = 60;
 const MS_PER_SECOND = 1000;
 
-const pad2 = (value: number) => String(value).padStart(2, "0");
-
 /** "40:12", or "1:05:09" past an hour. */
 function formatDuration(ms: number) {
   const total = Math.max(0, Math.round(ms / MS_PER_SECOND));
@@ -153,7 +145,6 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
   });
   return {
     record: {
-      audioDeleted: false,
       date: `${start.getDate()} ${SHORT_MONTHS[month]}`,
       dateLabel: `${day}, ${time}`,
       day,
@@ -242,27 +233,13 @@ const callsStore = createSyncedStore({
 /*
  * Local to the window: the project the start widget picked for the demo
  * call (the demo records it under Телемедиа; a call record can't change
- * its project) and the deleted audio, until the details page reads it.
+ * its project).
  */
 interface LocalCall {
-  audioDeleted?: boolean;
   projectId?: string;
 }
 
-/** The history's «аудио удалено» calls of the demo have no audio. */
-function reviewSeed(): Record<string, LocalCall> {
-  const seed = mockSeed();
-  const local: Record<string, LocalCall> = {};
-  for (const call of seed.calls) {
-    const audioDeleted = seed.recordings.some(
-      (item) => item.callId === call.id && item.recording.audioDeleted
-    );
-    local[call.id] = { audioDeleted };
-  }
-  return local;
-}
-
-const localStore = createStore<Record<string, LocalCall>>(reviewSeed());
+const localStore = createStore<Record<string, LocalCall>>({});
 
 function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
   return entries.map(({ record }) => {
@@ -270,11 +247,7 @@ function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
     if (!extra) {
       return record;
     }
-    return {
-      ...record,
-      audioDeleted: extra.audioDeleted ?? record.audioDeleted,
-      projectId: extra.projectId ?? record.projectId,
-    };
+    return { ...record, projectId: extra.projectId ?? record.projectId };
   });
 }
 
@@ -382,25 +355,6 @@ export function setCallPeople(
 }
 
 /**
- * «Удалить запись»: deletes the audio of every recording of the call
- * (`call_audio_delete`); the call reads `audioDeleted` once it is done.
- */
-export function deleteRecording(id: string) {
-  const deleted = deleteCallAudio(id);
-  // The mock deletes before this returns, as the screens' tests expect.
-  if (!inTauri && isCallAudioDeleted(id)) {
-    setLocal(id, { audioDeleted: true });
-    return deleted;
-  }
-  return deleted.then((done) => {
-    if (done) {
-      setLocal(id, { audioDeleted: true });
-    }
-    return done;
-  });
-}
-
-/**
  * Deletes the calls without a project ("Удалить все данные": a deleted
  * project takes its calls along, these have none).
  */
@@ -421,7 +375,7 @@ export async function deleteCallsWithoutProject() {
 
 /** Back to the demo history (tests, the dev navigator). Mock only. */
 export function resetCalls() {
-  localStore.set(reviewSeed());
+  localStore.set({});
   const database = appRuntime.runSync(Effect.serviceOption(MockDatabase));
   if (Option.isSome(database)) {
     appRuntime.runSync(database.value.resetCalls);

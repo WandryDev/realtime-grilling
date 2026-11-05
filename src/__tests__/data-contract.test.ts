@@ -902,10 +902,19 @@ function postCallContract(
             (yield* records.cards(finished.id)).source,
             "summary"
           );
-          assert.strictEqual(
-            (yield* records.transcript(finished.id)).length,
-            1
+          const recorded = yield* records.transcript(finished.id);
+          assert.strictEqual(recorded.length, 1);
+          // The saved moments point at that recording, so they have times.
+          const recordingIds = new Set(
+            (view.summary?.content?.topics ?? []).flatMap((topic) => [
+              topic.from.recordingId,
+              topic.to.recordingId,
+              ...topic.points.flatMap((point) =>
+                point.evidence.map((item) => item.recordingId)
+              ),
+            ])
           );
+          assert.deepStrictEqual([...recordingIds], [recorded[0]?.id]);
           // `building`, then the saved summary: the call's writes.
           assert.deepStrictEqual(
             (yield* readChanges).map((change) => [change.entity, change.id]),

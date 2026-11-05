@@ -6,6 +6,7 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import type { Proposal, ProposalDecide } from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
 
+import { getPerson } from "./people";
 import { ProposalsData } from "./services/proposals";
 import {
   createSyncedStores,
@@ -23,8 +24,8 @@ import {
  * Rust's reason, and nothing changes.
  *
  * A call's list re-reads on the call's `DataChanged` (a decision, a new
- * build); a person's on the person's and on any call's (a build of
- * another call may propose something about them).
+ * build); a person's on the person's and on any call of their project's
+ * (a build of another call may propose something about them).
  */
 
 const NONE: Synced<Proposal[]> = { data: [], status: "ready" };
@@ -46,11 +47,20 @@ const callProposals = createSyncedStores((callId) => ({
   seed: () => [] as Proposal[],
 }));
 
+/**
+ * Whether a call of `projectId` may propose something about the person:
+ * a call of their project. A person not read yet may be anyone's.
+ */
+function ofPersonProject(personId: string, projectId: string | null) {
+  const person = getPerson(personId);
+  return person === undefined || person.projectId === projectId;
+}
+
 const personProposals = createSyncedStores((personId) => ({
   empty: [] as Proposal[],
   live: inTauri,
   onChange: (change) =>
-    change.entity === "call" ||
+    (change.entity === "call" && ofPersonProject(personId, change.projectId)) ||
     (change.entity === "person" && change.id === personId)
       ? {
           update: Effect.map(

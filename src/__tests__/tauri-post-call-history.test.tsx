@@ -78,6 +78,7 @@ const FIRST_TITLE = /Старт проекта/u;
 const LAST_SHORT = /Онлайн-запись/u;
 const OPEN_FILTER = /С открытыми вопросами/u;
 const BRON_META = /Клиент, 15:51, и ещё 1/u;
+const ALL_PROJECTS = /^Все проекты/u;
 
 fake.db.projects.push(
   fakeProject(PROJECT, "Телемедиа"),
@@ -265,6 +266,11 @@ function open(query: Record<string, string> = {}) {
 
 const rowOf = (name: string | RegExp) => screen.getByRole("link", { name });
 
+const searches = () =>
+  fake.invoked
+    .filter((item) => item.command === "calls_search")
+    .map((item) => item.args);
+
 describe("call history in Tauri", () => {
   it("«Два звонка проекта»: by month, newest first, each with its title", async () => {
     open({ project: PROJECT });
@@ -337,10 +343,16 @@ describe("call history in Tauri", () => {
       within(result).getByText("бронь", { selector: "mark" })
     ).toBeTruthy();
     expect(screen.getByText("1 звонок, 2 совпадения")).toBeTruthy();
-    const last = fake.invoked
-      .filter((item) => item.command === "calls_search")
-      .at(-1);
-    expect(last?.args).toEqual({ projectId: null, query: "бронь" });
+    // One search once typing paused, in the calls of this project.
+    expect(searches()).toEqual([{ projectId: PROJECT, query: "бронь" }]);
+
+    // «Все проекты» widens it; the results stay while Rust searches.
+    await user.click(screen.getByRole("tab", { name: ALL_PROJECTS }));
+    expect(screen.getByRole("link", { name: BRON_META })).toBeTruthy();
+    await waitFor(() =>
+      expect(searches().at(-1)).toEqual({ projectId: null, query: "бронь" })
+    );
+    expect(searches()).toHaveLength(2);
   });
 
   it("«Новый проект»: the brief and the people done, no documents", async () => {
