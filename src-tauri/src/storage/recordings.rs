@@ -137,12 +137,16 @@ pub struct Recording {
     pub ended_at: Option<i64>,
     pub files: RecordingFiles,
     pub transcript_state: TranscriptState,
+    /// When the audio files were deleted ("Удалить запись"); the row, its
+    /// transcript and its questions stay. `None` while the files are there.
+    /// The second pass and the files' sweep skip such a recording.
+    pub audio_deleted_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 const SELECT: &str = "SELECT id, call_id, status, started_at, ended_at, me_file, others_file,
-       created_at, updated_at, project_id, participant_ids, transcript_state
+       created_at, updated_at, project_id, participant_ids, transcript_state, audio_deleted_at
   FROM recordings";
 
 fn from_row(row: &Row) -> rusqlite::Result<Recording> {
@@ -164,6 +168,7 @@ fn from_row(row: &Row) -> rusqlite::Result<Recording> {
             others: row.get(6)?,
         },
         transcript_state: TranscriptState::parse(&transcript_state)?,
+        audio_deleted_at: row.get(12)?,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
     })
@@ -299,6 +304,37 @@ pub fn list_ids(connection: &Connection) -> CommandResult<Vec<String>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Ids of the recordings whose audio files are kept, oldest first: what the
+/// files' sweep keeps. A recording being written has its files until it
+/// ends, so it is among them.
+pub fn ids_with_audio(connection: &Connection) -> CommandResult<Vec<String>> {
+    let mut statement = connection
+        .prepare("SELECT id FROM recordings WHERE audio_deleted_at IS NULL ORDER BY id")?;
+    let rows = statement.query_map([], |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Records that the audio of a stopped recording was deleted (post-call
+/// design.md, decision 10): the row, its transcript, topics, cards and
+/// questions stay. Deleting it again keeps the first time. Delete the files
+/// first: the sweep removes whatever is left of them. `NotFound` for an
+/// unknown id, `Invalid` while it is being written.
+pub fn mark_audio_deleted(connection: &Connection, id: &str, at: i64) -> CommandResult<Recording> {
+    let recording = get(connection, id)?;
+    if recording.status == RecordingState::Recording {
+        return Err(CommandError::invalid(
+            "Аудио записи, которая идёт, удалить нельзя",
+        ));
+    }
+    connection.execute(
+        "UPDATE recordings
+            SET audio_deleted_at = coalesce(audio_deleted_at, ?2), updated_at = ?3
+          WHERE id = ?1",
+        params![id, at, now_ms()],
+    )?;
+    get(connection, id)
+}
+
 /// Marks a recording that is being written as `finished` at `ended_at`
 /// (never before its start). A recording that already ended stays as it is.
 /// `NotFound` for an unknown id.
@@ -343,7 +379,8 @@ pub fn delete(connection: &Connection, id: &str) -> CommandResult<()> {
 
 /// After a crash: every row still `recording` becomes `interrupted`, ending
 /// when its files last changed (the newer of the two), or at its start when
-/// neither file exists. `data_dir` is what the file paths are relative to.
+/// neither file exists (or its audio was deleted). `data_dir` is what the
+/// file paths are relative to.
 /// Returns the ids it changed.
 ///
 /// Run on open, before any recorder can start.
@@ -356,6 +393,7 @@ pub fn recover_interrupted(connection: &Connection, data_dir: &Path) -> CommandR
     for recording in &stale {
         let modified = [&recording.files.me, &recording.files.others]
             .into_iter()
+            .filter(|_| recording.audio_deleted_at.is_none())
             .filter_map(|file| modified_ms(&data_dir.join(file)))
             .max();
         mark_interrupted(
@@ -374,12 +412,13 @@ fn modified_ms(path: &Path) -> Option<i64> {
 }
 
 /// Removes the files of every recording without a row (deleted with its
-/// call or project, or left by a failed start). Returns the removed ids.
+/// call or project, or left by a failed start) and what is left of the files
+/// of a recording whose audio was deleted. Returns the removed ids.
 ///
 /// Runs under the caller's connection: holding the database lock keeps a
 /// recording from being created between the read of the ids and the sweep.
 pub fn sweep(connection: &Connection, store: &dyn RecordingStore) -> CommandResult<Vec<String>> {
-    let known: HashSet<String> = list_ids(connection)?.into_iter().collect();
+    let known: HashSet<String> = ids_with_audio(connection)?.into_iter().collect();
     store
         .sweep(&known)
         .map_err(|error| CommandError::storage(format!("Не удалось убрать файлы записей: {error}")))
@@ -1010,6 +1049,52 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// Post-call decision 10: the row stays without its audio; the sweep
+    /// keeps only the recordings that have it.
+    #[test]
+    fn marks_the_audio_deleted_and_sweeps_what_is_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = open_in_memory().unwrap();
+        let store = LocalStore::new(dir.path());
+        let live = create(&connection, &RecordingLinks::default(), 0, |id| {
+            store.files(id)
+        })
+        .unwrap();
+        let error = mark_audio_deleted(&connection, &live, 10).unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let id = create(&connection, &RecordingLinks::default(), 0, |id| {
+                store.files(id)
+            })
+            .unwrap();
+            drop(store.create(&id).unwrap());
+            store.finish(&id).unwrap();
+            finish(&connection, &id, 50).unwrap();
+            ids.push(id);
+        }
+        let [kept, deleted] = [ids[0].clone(), ids[1].clone()];
+        let marked = mark_audio_deleted(&connection, &deleted, 100).unwrap();
+        assert_eq!(marked.audio_deleted_at, Some(100));
+        assert_eq!(marked.status, RecordingState::Finished);
+        let again = mark_audio_deleted(&connection, &deleted, 200).unwrap();
+        assert_eq!(again.audio_deleted_at, Some(100), "the first time stays");
+        assert_eq!(get(&connection, &kept).unwrap().audio_deleted_at, None);
+        assert_eq!(
+            ids_with_audio(&connection).unwrap(),
+            vec![live, kept.clone()]
+        );
+        assert_eq!(list_ids(&connection).unwrap().len(), 3);
+
+        assert_eq!(sweep(&connection, &store).unwrap(), vec![deleted.clone()]);
+        assert!(!dir.path().join("recordings").join(&deleted).exists());
+        assert!(dir.path().join(store.files(&kept).me).exists());
+        assert!(get(&connection, &deleted).is_ok(), "the row stays");
+        let error = mark_audio_deleted(&connection, "nope", 0).unwrap_err();
+        assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
     }
 
     #[test]

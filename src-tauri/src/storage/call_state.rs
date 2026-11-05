@@ -179,7 +179,7 @@ impl TaskCardDecision {
     }
 }
 
-fn conversion(message: String) -> rusqlite::Error {
+pub(super) fn conversion(message: String) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, message.into())
 }
 
@@ -503,7 +503,10 @@ fn topics(connection: &Connection, recording_id: &str) -> CommandResult<Vec<Topi
 }
 
 /// A JSON column read into a typed value.
-fn typed<T: serde::de::DeserializeOwned>(value: Value, column: usize) -> rusqlite::Result<T> {
+pub(super) fn typed<T: serde::de::DeserializeOwned>(
+    value: Value,
+    column: usize,
+) -> rusqlite::Result<T> {
     serde_json::from_value(value).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, error.into())
     })
@@ -672,7 +675,7 @@ fn final_check_ids(questions: &[Question], count: usize) -> Vec<String> {
 /* Writing */
 
 /// Runs `work` in a savepoint: atomic inside or outside a transaction.
-fn in_savepoint<T>(
+pub(super) fn in_savepoint<T>(
     connection: &Connection,
     work: impl FnOnce() -> CommandResult<T>,
 ) -> CommandResult<T> {

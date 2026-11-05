@@ -189,8 +189,11 @@ fn unrefined(connection: &rusqlite::Connection) -> CommandResult<Vec<String>> {
     Ok(ids)
 }
 
+/// A stopped recording with its audio whose second pass has not finished
+/// (`call-recording`: no second pass without the audio).
 fn needs_refining(recording: &Recording) -> bool {
     recording.status != RecordingState::Recording
+        && recording.audio_deleted_at.is_none()
         && matches!(
             recording.transcript_state,
             TranscriptState::Live | TranscriptState::Refining

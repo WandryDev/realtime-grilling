@@ -325,3 +325,16 @@ fn a_storage_opened_late_queues_what_was_left() {
         state(&host, &left) == TranscriptState::Refined
     });
 }
+
+/// `call-recording`, "Аудио удалено до второго прохода".
+#[test]
+fn a_recording_without_audio_is_not_refined() {
+    let host = FakeHost::new(None);
+    let kept = host.recording();
+    let deleted = host.recording();
+    host.db(|connection| {
+        recordings::mark_audio_deleted(connection, &deleted, 70_000).unwrap();
+        assert_eq!(unrefined(connection).unwrap(), vec![kept.clone()]);
+    });
+    assert_eq!(state(&host, &deleted), TranscriptState::Live);
+}

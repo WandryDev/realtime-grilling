@@ -3,7 +3,7 @@
 ## 1. Спайк и хранилище (Rust)
 
 - [ ] 1.1 Спайк воспроизведения: в подписанном debug-бандле `canPlayType('audio/ogg; codecs=opus')` и реальное воспроизведение файла записи через тестовую схему `grill-audio` с `Range`; итог (Ogg или WAV) — в `docs/spikes/audio.md` (design.md, решение 9). Проверка: запись в спайке с версией macOS/WebKit и выводом.
-- [ ] 1.2 Миграция `0007`: `call_summaries`, `call_proposals`, `recordings.audio_deleted_at` (решение 5); storage-функции чтения и записи итогов, предложений, карточек `content`; `finish_stale`-звонки без итогов читаются как `failed: interrupted`. Проверка: тест миграции с базы версии 6; каскады при удалении звонка, проекта и человека; сценарий `local-storage` «Аудио удалено».
+- [x] 1.2 Миграция `0007`: `call_summaries`, `call_proposals`, `recordings.audio_deleted_at` (решение 5); storage-функции чтения и записи итогов, предложений, карточек `content`; `finish_stale`-звонки без итогов читаются как `failed: interrupted`. Проверка: тест миграции с базы версии 6; каскады при удалении звонка, проекта и человека; сценарий `local-storage` «Аудио удалено».
 
 ## 2. Сборка итогов (Rust)
 

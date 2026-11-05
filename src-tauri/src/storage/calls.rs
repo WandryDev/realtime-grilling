@@ -510,7 +510,13 @@ mod tests {
             let igor = person(&connection, &acme, "Игорь");
             let call_id = call(&connection, Some(&acme), &[&igor], 1_000);
             let recording_id = recording(&connection, &call_id, 1_000);
-            recordings::finish(&connection, &recording_id, 5_000).unwrap();
+            // Not `recordings::finish`: it reads columns of later versions.
+            connection
+                .execute(
+                    "UPDATE recordings SET status = 'finished', ended_at = 5000 WHERE id = ?1",
+                    [&recording_id],
+                )
+                .unwrap();
             let segment = SegmentInput {
                 channel: TranscriptChannel::Others,
                 start_ms: 0,

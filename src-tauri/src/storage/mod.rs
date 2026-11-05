@@ -12,11 +12,23 @@ pub mod people;
 pub mod projects;
 #[allow(
     dead_code,
+    reason = "written by the summary build, read and decided by the proposal review \
+              (post-call tasks 2.3, 3.1)"
+)]
+pub mod proposals;
+#[allow(
+    dead_code,
     reason = "create / finish / delete are for the RecordingManager (audio-capture task 4.5)"
 )]
 pub mod recordings;
 pub mod settings;
 pub mod sources;
+#[allow(
+    dead_code,
+    reason = "read and written by the summary build and the card review \
+              (post-call tasks 2.3, 3.2)"
+)]
+pub mod summaries;
 #[allow(
     dead_code,
     reason = "append_live / replace_refined are for the TranscriptSink and the Refiner \
@@ -62,6 +74,9 @@ const MIGRATION_LIST: &[M<'static>] = &[
         "../../migrations/0006_call_without_project.sql"
     ))
     .foreign_key_check(),
+    M::up(include_str!(
+        "../../migrations/0007_call_summaries_and_proposals.sql"
+    )),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
@@ -246,6 +261,10 @@ fn open_dir(dir: &Path, recordings: &LocalStore) -> Result<Db, String> {
     // After the recordings: a call ends when its last recording did.
     if let Err(error) = calls::finish_stale(&connection, now_ms()) {
         eprintln!("grill: could not finish the calls left running: {error}");
+    }
+    // No build runs yet: a `building` summary was left by a crash or a quit.
+    if let Err(error) = summaries::interrupt_building(&connection, now_ms()) {
+        eprintln!("grill: could not mark the interrupted summary builds: {error}");
     }
     if let Err(error) = crate::projects::sources::files::sweep(&connection, dir) {
         eprintln!("grill: documents sweep failed: {error}");
@@ -577,6 +596,146 @@ mod tests {
         assert_eq!(recording.status, recordings::RecordingState::Interrupted);
         assert_eq!(call.status, calls::CallStatus::Finished);
         assert_eq!(call.ended_at, recording.ended_at);
+    }
+
+    /// `call-summary`, "Сбой во время сборки": the call is finished, its
+    /// summary reads as interrupted.
+    #[test]
+    fn opening_interrupts_the_summary_build_a_crash_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let call_id = {
+            let storage = Storage::open_in(dir.path());
+            storage
+                .read_now(|connection| {
+                    let input = calls::CallCreate {
+                        status: Some(calls::CallStatus::Finishing),
+                        ..calls::CallCreate::default()
+                    };
+                    let (call, _) = calls::create(connection, input)?;
+                    summaries::start_building(connection, &call.id)?;
+                    Ok(call.id)
+                })
+                .unwrap()
+        };
+        let storage = Storage::open_in(dir.path());
+        let (call, summary) = storage
+            .read_now(|connection| {
+                Ok((
+                    calls::get(connection, &call_id)?,
+                    summaries::get(connection, &call_id)?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(call.status, calls::CallStatus::Finished);
+        let summary = summary.unwrap();
+        assert_eq!(summary.state, summaries::SummaryState::Failed);
+        assert_eq!(summary.error.as_deref(), Some(summaries::INTERRUPTED));
+    }
+
+    /// `local-storage`, "Аудио удалено": after a restart the files are gone
+    /// (whatever the deletion left is swept), the recording, its transcript,
+    /// questions and the call's summary read as before.
+    #[test]
+    fn deleted_audio_stays_deleted_after_a_restart() {
+        use crate::{
+            recording::store::RecordingStore,
+            storage::call_state::{
+                self, CardLens, Evidence, EvidenceSource, GapType, NewQuestion, ValidatedOp,
+                ValidatedPatch,
+            },
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let read = |storage: &Storage, call_id: &str, recording_id: &str| {
+            storage
+                .read_now(|connection| {
+                    Ok((
+                        recordings::get(connection, recording_id)?,
+                        transcript::for_recording(connection, recording_id)?,
+                        call_state::get(connection, recording_id)?.questions,
+                        summaries::get(connection, call_id)?,
+                    ))
+                })
+                .unwrap()
+        };
+        let (call_id, recording_id, before) = {
+            let storage = Storage::open_in(dir.path());
+            let store = storage.recording_store().unwrap();
+            let (call_id, recording_id) = storage
+                .read_now(|connection| {
+                    let input = calls::CallCreate {
+                        status: Some(calls::CallStatus::Finished),
+                        ..calls::CallCreate::default()
+                    };
+                    let (call, _) = calls::create(connection, input)?;
+                    let links = recordings::RecordingLinks::call(&call.id);
+                    let id = recordings::create(connection, &links, 1_000, |id| store.files(id))?;
+                    drop(store.create(&id).unwrap());
+                    store.finish(&id).unwrap();
+                    recordings::finish(connection, &id, 60_000)?;
+                    let segment = transcript::SegmentInput {
+                        channel: transcript::TranscriptChannel::Others,
+                        start_ms: 0,
+                        end_ms: 900,
+                        text: "Двести звонков в день".to_owned(),
+                    };
+                    transcript::append_live(connection, &id, segment)?;
+                    let evidence = vec![Evidence {
+                        source: EvidenceSource::Segment,
+                        id: "S1".to_owned(),
+                        quote: "двести".to_owned(),
+                    }];
+                    let ops = vec![
+                        ValidatedOp::CreateTopic {
+                            title: "Очередь".to_owned(),
+                        },
+                        ValidatedOp::SetCardField {
+                            field: CardLens::Goal,
+                            value: "Разгрузить".to_owned(),
+                            evidence: evidence.clone(),
+                        },
+                        ValidatedOp::AddQuestion(NewQuestion {
+                            text: "Кто отвечает ночью?".to_owned(),
+                            description: String::new(),
+                            card_field: CardLens::Goal,
+                            gap_type: GapType::Empty,
+                            priority: 2,
+                            evidence,
+                        }),
+                    ];
+                    call_state::apply_patch(connection, &id, &ValidatedPatch { ops })?;
+                    let ready = summaries::ReadySummary {
+                        title: "Пилот".to_owned(),
+                        tldr: "Договорились о пилоте.".to_owned(),
+                        transcript_pass: summaries::SummaryTranscriptPass::Live,
+                        content: summaries::SummaryContent::default(),
+                    };
+                    summaries::save_ready(connection, &call.id, &ready)?;
+                    Ok((call.id, id))
+                })
+                .unwrap();
+            let before = read(&storage, &call_id, &recording_id);
+            // The deletion marked the row; say its files could not all be
+            // removed.
+            let deleted = storage
+                .read_now(|connection| {
+                    recordings::mark_audio_deleted(connection, &recording_id, 70_000)
+                })
+                .unwrap();
+            assert_eq!(deleted.audio_deleted_at, Some(70_000));
+            (call_id, recording_id, before)
+        };
+
+        let storage = Storage::open_in(dir.path());
+        let root = dir.path().join(crate::recording::store::RECORDINGS_DIR);
+        assert!(!root.join(&recording_id).exists(), "the files are swept");
+        let (recording, segments, questions, summary) = read(&storage, &call_id, &recording_id);
+        assert_eq!(recording.audio_deleted_at, Some(70_000));
+        assert_eq!(recording.status, before.0.status);
+        assert_eq!(recording.files, before.0.files);
+        assert_eq!(segments, before.1);
+        assert_eq!(questions, before.2);
+        assert_eq!(summary, before.3);
     }
 
     #[test]
