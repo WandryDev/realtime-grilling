@@ -2,7 +2,7 @@ use std::{
     fs::File,
     io::BufWriter,
     path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use super::*;
@@ -337,4 +337,67 @@ fn a_recording_without_audio_is_not_refined() {
         assert_eq!(unrefined(connection).unwrap(), vec![kept.clone()]);
     });
     assert_eq!(state(&host, &deleted), TranscriptState::Live);
+}
+
+/// `call-details`, "Удаление аудио": deleting the audio stops the second
+/// pass that runs; nothing refined is stored, the live pass stays.
+#[test]
+fn deleting_the_audio_stops_the_running_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(Some(dir.path()));
+    let id = recording(&host, dir.path());
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let script = {
+        let (entered, release) = (Arc::clone(&entered), Arc::clone(&release));
+        Script::new(move |_, _| {
+            entered.store(true, Ordering::SeqCst);
+            while !release.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(vec![segment("уточнённая")])
+        })
+    };
+    let refiner = Refiner::start(host.as_host(), script.recognizer(), config());
+
+    refiner.enqueue(&id);
+    eventually("the first phrase", || entered.load(Ordering::SeqCst));
+    refiner.stop(&id);
+    host.db(|connection| {
+        recordings::mark_audio_deleted(connection, &id, 70_000).unwrap();
+    });
+    release.store(true, Ordering::SeqCst);
+
+    eventually("stopped", || state(&host, &id) == TranscriptState::Failed);
+    assert_eq!(script.calls(), 1, "the second phrase is not recognized");
+    let segments = host.db(|connection| for_recording(connection, &id).unwrap());
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].pass, TranscriptPass::Live);
+    eventually("the failure event", || {
+        refine_events(&host).last().map(|e| e.state) == Some(RefineState::Failed)
+    });
+}
+
+/// `call-recording`, "Аудио удалено до второго прохода": a queued
+/// recording whose audio goes never starts.
+#[test]
+fn a_stopped_recording_leaves_the_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(Some(dir.path()));
+    let id = recording(&host, dir.path());
+    let other = recording(&host, dir.path());
+    let script = numbered();
+    host.paused.store(true, Ordering::SeqCst);
+    let refiner = Refiner::start(host.as_host(), script.recognizer(), config());
+
+    refiner.enqueue(&other);
+    refiner.enqueue(&id);
+    refiner.stop(&id);
+    host.paused.store(false, Ordering::SeqCst);
+    eventually("the other refined", || {
+        state(&host, &other) == TranscriptState::Refined
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(state(&host, &id), TranscriptState::Live);
+    assert_eq!(script.calls(), 2, "only the other's two phrases");
 }

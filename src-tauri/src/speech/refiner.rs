@@ -8,14 +8,15 @@
 //! waits between phrases while a recording (or the hardware check) runs,
 //! and it starts a recording over after a restart: nothing refined is kept
 //! until the end. `recordings.transcript_state` says where each recording
-//! is.
+//! is. Deleting a recording's audio stops its pass ([`Refiner::stop`]):
+//! nothing refined is stored for it, the live transcript stays.
 //!
 //! One channel is in memory at a time (2 h of audio is ~460 MB of
 //! samples); a phrase's samples are copied only when it goes to the
 //! recognizer.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     future::Future,
     ops::Range,
     sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
@@ -75,12 +76,22 @@ struct Inner {
     recognizer: Recognizer,
     config: RefinerConfig,
     queue: Mutex<VecDeque<String>>,
+    /// Recordings whose pass must stop: their audio is being deleted.
+    stopped: Mutex<HashSet<String>>,
     wake: Arc<Notify>,
 }
 
 impl Inner {
     fn queue(&self) -> MutexGuard<'_, VecDeque<String>> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn stopped(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.stopped.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn is_stopped(&self, recording_id: &str) -> bool {
+        self.stopped().contains(recording_id)
     }
 }
 
@@ -106,6 +117,7 @@ impl Refiner {
             recognizer,
             config,
             queue: Mutex::new(VecDeque::new()),
+            stopped: Mutex::new(HashSet::new()),
             wake: Arc::clone(&wake),
         });
         tauri::async_runtime::spawn(run(Arc::downgrade(&inner), wake));
@@ -120,6 +132,16 @@ impl Refiner {
             queue.push_front(recording_id.to_owned());
         }
         self.0.wake.notify_one();
+    }
+
+    /// The audio of a recording is being deleted (post-call design.md,
+    /// decision 10): it leaves the queue, and a pass over it stops before
+    /// its next phrase without storing anything (`failed`: the live
+    /// transcript stays). The store also checks `audio_deleted_at` under
+    /// the database lock, so a pass that ends meanwhile stores nothing.
+    pub fn stop(&self, recording_id: &str) {
+        self.0.stopped().insert(recording_id.to_owned());
+        self.0.queue().retain(|queued| queued != recording_id);
     }
 
     /// Queues the stopped recordings whose second pass has not finished
@@ -166,7 +188,9 @@ async fn run(inner: Weak<Inner>, wake: Arc<Notify>) {
             wake.notified().await;
             continue;
         };
-        if let Outcome::NoModel = refine(&inner, &id).await {
+        let outcome = refine(&inner, &id).await;
+        inner.stopped().remove(&id);
+        if let Outcome::NoModel = outcome {
             inner.queue().push_back(id);
             let retry_after = inner.config.retry_after;
             drop(inner);
@@ -360,7 +384,7 @@ async fn refine(inner: &Inner, recording_id: &str) -> Outcome {
             return Outcome::Over;
         }
     };
-    if !needs_refining(&recording) {
+    if !needs_refining(&recording) || inner.is_stopped(recording_id) {
         return Outcome::Over;
     }
     if !host.selected_model().1 {
@@ -432,6 +456,9 @@ async fn refine(inner: &Inner, recording_id: &str) -> Outcome {
         let mut recent: VecDeque<String> = VecDeque::new();
         for phrase in phrases {
             run.wait_while_paused().await;
+            if inner.is_stopped(recording_id) {
+                return run.fail("stopped: the audio was deleted").await;
+            }
             let choice = languages.choice(channel, Instant::now());
             let reply = inner.recognizer.submit(Job {
                 samples: samples[phrase.samples.clone()].to_vec(),
@@ -473,11 +500,15 @@ async fn refine(inner: &Inner, recording_id: &str) -> Outcome {
 
     let id = recording_id.to_owned();
     let stored = database(host, move |connection| {
-        transcript::replace_refined(connection, &id, segments)
+        if recordings::get(connection, &id)?.audio_deleted_at.is_some() {
+            return Ok(None);
+        }
+        transcript::replace_refined(connection, &id, segments).map(Some)
     })
     .await;
     match stored {
-        Ok((_, events)) => {
+        Ok(None) => run.fail("stopped: the audio was deleted").await,
+        Ok(Some((_, events))) => {
             for event in events {
                 host.data_changed(event);
             }

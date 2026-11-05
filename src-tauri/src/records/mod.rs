@@ -3,6 +3,9 @@
 //! search, and its audio.
 //!
 //! The data lives in `storage` (`proposals::apply`, `call_records`,
-//! `call_search`); this module holds the commands.
+//! `call_search`); this module holds the commands, the audio cache
+//! ([`audio`]) and the `grill-audio` scheme ([`scheme`]).
 
+pub mod audio;
 pub mod commands;
+pub mod scheme;

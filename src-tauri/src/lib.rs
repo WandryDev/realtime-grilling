@@ -58,6 +58,9 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         // Picking documents and the brief's export folder.
         .plugin(tauri_plugin_dialog::init())
+        // A recording's channels for the main window's player
+        // (`grill-audio://localhost/<id>/<me|others>`, post-call task 3.4).
+        .register_asynchronous_uri_scheme_protocol(records::scheme::SCHEME, records::scheme::handle)
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

@@ -2,11 +2,16 @@
 //! (`bindings::builder`, `command_names.rs`, `capabilities/*.json`): the
 //! writes are the main window's.
 
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
+use tauri::{AppHandle, Manager, State};
+
+use super::audio::{self, AudioCache, MAX_BARS, RecordingPeaks};
 use crate::{
     agent::fast_loop::app::call_state_changed,
-    error::CommandResult,
+    error::{CommandError, CommandResult},
+    recording::store::RecordingStore,
+    speech::refiner::Refiner,
     storage::{
         Storage,
         call_records::{self, CallCards, CallQuestion, CallRecording},
@@ -15,6 +20,7 @@ use crate::{
             self, Proposal,
             apply::{self, ProposalDecide},
         },
+        recordings,
         summaries::{CardPatch, SummaryCard},
     },
 };
@@ -159,4 +165,71 @@ pub async fn calls_search(
     storage
         .read(move |db| call_search::search(db, &query, project_id.as_deref()))
         .await
+}
+
+/* Audio (decisions 9, 10) */
+
+/// The waveform of a recording: `bars` (1–2000) peaks per channel over the
+/// longer channel. Decoded in Rust once, then cached. `NotFound` for an
+/// unknown recording or deleted audio, `Invalid` for a recording being
+/// written or a count of bars out of range.
+#[tauri::command]
+#[specta::specta]
+pub async fn recording_peaks(
+    storage: State<'_, Storage>,
+    cache: State<'_, AudioCache>,
+    recording_id: String,
+    bars: u32,
+) -> CommandResult<RecordingPeaks> {
+    if !(1..=MAX_BARS).contains(&bars) {
+        return Err(CommandError::invalid(format!(
+            "Столбцов волны — от 1 до {MAX_BARS}"
+        )));
+    }
+    let id = recording_id.clone();
+    let recording = storage.read(move |db| recordings::get(db, &id)).await?;
+    let dir = storage
+        .data_dir()
+        .ok_or_else(|| CommandError::storage("Нет папки данных приложения"))?;
+    let files = audio::playable(&recording, dir).ok_or_else(|| {
+        if recording.audio_deleted_at.is_some() {
+            CommandError::not_found("Аудио записи удалено")
+        } else {
+            CommandError::invalid("Запись ещё идёт")
+        }
+    })?;
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || cache.peaks(&recording_id, &files, bars))
+        .await
+        .map_err(|error| CommandError::storage(error.to_string()))?
+        .map_err(|error| CommandError::external(format!("Не удалось прочитать запись: {error}")))
+}
+
+/// «Удалить запись»: deletes the audio files of every recording of a
+/// finished call, stopping a second pass that runs; the transcript,
+/// summary, cards, questions and proposals stay. `Invalid` for a call that
+/// isn't finished.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_audio_delete(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    cache: State<'_, AudioCache>,
+    call_id: String,
+) -> CommandResult<()> {
+    let store: Arc<dyn RecordingStore> = storage
+        .recording_store()
+        .ok_or_else(|| CommandError::storage("Нет папки данных приложения"))?;
+    let refiner = app
+        .try_state::<Refiner>()
+        .map(|refiner| refiner.inner().clone());
+    audio::delete_call_audio(
+        &storage,
+        &app,
+        store,
+        refiner,
+        cache.inner().clone(),
+        &call_id,
+    )
+    .await
 }

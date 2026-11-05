@@ -407,6 +407,20 @@ export const commands = {
 	 *  computer only.
 	 */
 	callsSearch: (query: string, projectId: string | null) => typedError<CallSearch, CommandError>(__TAURI_INVOKE("calls_search", { query, projectId })),
+	/**
+	 *  The waveform of a recording: `bars` (1–2000) peaks per channel over the
+	 *  longer channel. Decoded in Rust once, then cached. `NotFound` for an
+	 *  unknown recording or deleted audio, `Invalid` for a recording being
+	 *  written or a count of bars out of range.
+	 */
+	recordingPeaks: (recordingId: string, bars: number) => typedError<RecordingPeaks, CommandError>(__TAURI_INVOKE("recording_peaks", { recordingId, bars })),
+	/**
+	 *  «Удалить запись»: deletes the audio files of every recording of a
+	 *  finished call, stopping a second pass that runs; the transcript,
+	 *  summary, cards, questions and proposals stay. `Invalid` for a call that
+	 *  isn't finished.
+	 */
+	callAudioDelete: (callId: string) => typedError<null, CommandError>(__TAURI_INVOKE("call_audio_delete", { callId })),
 };
 
 /** Events */
@@ -1393,6 +1407,18 @@ export type RecordingChannels = {
 export type RecordingLevels = {
 	me: number,
 	others: number,
+};
+
+/**
+ *  The waveform of a recording: the loudest sample of each bar, 0–1, per
+ *  channel. Both channels have `bars` bars over the longer one's length,
+ *  so the bars line up in time.
+ */
+export type RecordingPeaks = {
+	/**  Of the longer channel. */
+	durationMs: number,
+	me: (number | null)[],
+	others: (number | null)[],
 };
 
 export type RecordingStart = {
