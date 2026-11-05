@@ -832,18 +832,30 @@ fn set_card_field(
     field: CardField,
     now: i64,
 ) -> CommandResult<()> {
+    let card = card_or_new(connection, recording, recording_id, topic_id, now)?;
+    let mut fields = card.fields;
+    match fields.iter_mut().find(|known| known.field == field.field) {
+        Some(known) => *known = field,
+        None => fields.push(field),
+    }
+    connection.execute(
+        "UPDATE task_cards SET fields = ?2, updated_at = MAX(?3, updated_at + 1)
+          WHERE id = ?1",
+        params![card.id, Json(serde_json::to_value(fields)?), now],
+    )?;
+    Ok(())
+}
+
+/// The topic's card, created empty (titled as the topic) when it has none.
+fn card_or_new(
+    connection: &Connection,
+    recording: &RecordingRow,
+    recording_id: &str,
+    topic_id: &str,
+    now: i64,
+) -> CommandResult<TaskCard> {
     if let Some(card) = card_of_topic(connection, topic_id)? {
-        let mut fields = card.fields;
-        match fields.iter_mut().find(|known| known.field == field.field) {
-            Some(known) => *known = field,
-            None => fields.push(field),
-        }
-        connection.execute(
-            "UPDATE task_cards SET fields = ?2, updated_at = MAX(?3, updated_at + 1)
-              WHERE id = ?1",
-            params![card.id, Json(serde_json::to_value(fields)?), now],
-        )?;
-        return Ok(());
+        return Ok(card);
     }
     let title: String = connection.query_row(
         "SELECT title FROM topics WHERE id = ?1",
@@ -853,18 +865,18 @@ fn set_card_field(
     connection.execute(
         "INSERT INTO task_cards
            (id, topic_id, recording_id, call_id, title, fields, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+         VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, ?6)",
         params![
             new_id(),
             topic_id,
             recording_id,
             recording.call_id,
             title,
-            Json(serde_json::to_value(vec![field])?),
             now
         ],
     )?;
-    Ok(())
+    card_of_topic(connection, topic_id)?
+        .ok_or_else(|| CommandError::invalid("Карточка темы не создана"))
 }
 
 fn add_question(
@@ -876,18 +888,30 @@ fn add_question(
     now: i64,
 ) -> CommandResult<String> {
     let text = super::required(&new.text, "Текст вопроса не может быть пустым")?;
-    let card = card_of_topic(connection, topic_id)?
-        .filter(|card| {
+    // A question about an empty field needs only the card (`validate.rs`
+    // lets `empty` name a field the card doesn't have yet); an assumption
+    // or a contradiction is about a value the card already holds.
+    let card = if new.gap_type == GapType::Empty {
+        Some(card_or_new(
+            connection,
+            recording,
+            recording_id,
+            topic_id,
+            now,
+        )?)
+    } else {
+        card_of_topic(connection, topic_id)?.filter(|card| {
             card.fields
                 .iter()
                 .any(|field| field.field == new.card_field)
         })
-        .ok_or_else(|| {
-            CommandError::invalid(format!(
-                "У карточки текущей темы нет поля {}",
-                new.card_field.as_str()
-            ))
-        })?;
+    }
+    .ok_or_else(|| {
+        CommandError::invalid(format!(
+            "У карточки текущей темы нет поля {}",
+            new.card_field.as_str()
+        ))
+    })?;
     let id = new_id();
     connection.execute(
         "INSERT INTO questions
@@ -1364,8 +1388,10 @@ mod tests {
                 question_id: "nope".to_owned(),
                 evidence: evidence("x"),
             },
+            // An assumption is about a value, and the card has no `acceptance`.
             ValidatedOp::AddQuestion(NewQuestion {
                 card_field: CardLens::Acceptance,
+                gap_type: GapType::Assumption,
                 ..match ask("Вопрос", 1) {
                     ValidatedOp::AddQuestion(new) => new,
                     _ => unreachable!(),
@@ -1392,6 +1418,56 @@ mod tests {
         assert!(matches!(error, CommandError::Invalid { .. }));
         let error = apply_patch(&connection, "nope", &ValidatedPatch::default()).unwrap_err();
         assert!(matches!(error, CommandError::NotFound { .. }));
+    }
+
+    /// The first question of a topic is about a field nobody has filled:
+    /// the patch keeps its topic, and a topic without a card gets one.
+    #[test]
+    fn a_question_about_an_empty_field_is_saved() {
+        let about = |text: &str, lens: CardLens| match ask(text, 2) {
+            ValidatedOp::AddQuestion(new) => ValidatedOp::AddQuestion(NewQuestion {
+                card_field: lens,
+                ..new
+            }),
+            _ => unreachable!(),
+        };
+        let connection = open_in_memory().unwrap();
+        let id = recording(&connection);
+        apply(
+            &connection,
+            &id,
+            vec![
+                topic("Брони"),
+                field(CardLens::Goal),
+                about("Кто подтверждает бронь?", CardLens::Users),
+                about("Как понять, что готово?", CardLens::Acceptance),
+            ],
+        );
+        let state = get(&connection, &id).unwrap();
+        assert_eq!(state.topics.len(), 1);
+        let card = state.current_card().unwrap();
+        assert_eq!(card.fields.len(), 1, "the asked fields stay empty");
+        assert_eq!(visible(&connection, &id).len(), 2);
+        assert!(
+            state
+                .questions
+                .iter()
+                .all(|question| question.card_id.as_deref() == Some(card.id.as_str()))
+        );
+
+        let bare = recording(&connection);
+        apply(
+            &connection,
+            &bare,
+            vec![
+                topic("Табло"),
+                about("Где стоит табло?", CardLens::Constraints),
+            ],
+        );
+        let state = get(&connection, &bare).unwrap();
+        let card = state.current_card().unwrap();
+        assert_eq!((card.title.as_str(), card.fields.len()), ("Табло", 0));
+        assert_eq!(visible(&connection, &bare), vec!["Где стоит табло?"]);
     }
 
     /// `call-questions`, «Новый вопрос»: the visible ones keep their order.
