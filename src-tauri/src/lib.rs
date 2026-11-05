@@ -8,6 +8,7 @@ mod events;
 mod permissions;
 mod projects;
 mod recording;
+mod records;
 mod shell;
 mod speech;
 mod storage;

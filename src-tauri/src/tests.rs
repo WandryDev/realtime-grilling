@@ -1242,6 +1242,27 @@ mod acl {
         }
     }
 
+    /// A finished call's records (post-call tasks 3.1–3.4) are reviewed,
+    /// changed and read in the main window only.
+    const RECORDS_COMMANDS: [&str; 4] = [
+        "proposals_list",
+        "proposals_for_person",
+        "proposal_decide",
+        "proposal_undo",
+    ];
+
+    #[test]
+    fn call_records_are_for_the_main_window_only() {
+        for command in RECORDS_COMMANDS {
+            for label in ["overlay", "widget"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+            let result = invoke("main", command);
+            assert!(!denied(&result), "main → {command}: {result:?}");
+        }
+    }
+
     #[test]
     fn allowed_commands_pass_the_acl() {
         // The mock app has no command handlers: an allowed command gets past
@@ -1422,6 +1443,10 @@ fn capabilities_match_the_command_list() {
         "speech_benchmark",
         "speech_benchmark_cancel",
         "speech_mic_check",
+        "proposals_list",
+        "proposals_for_person",
+        "proposal_decide",
+        "proposal_undo",
     ] {
         assert!(
             !floating.iter().any(|command| command == forbidden),

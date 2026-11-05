@@ -350,6 +350,29 @@ export const commands = {
 	 *  `reason` when the microphone can't be used.
 	 */
 	speechMicCheck: () => typedError<string, CommandError>(__TAURI_INVOKE("speech_mic_check")),
+	/**
+	 *  The proposals of a call, oldest first, with their decisions.
+	 *  `NotFound` for an unknown call.
+	 */
+	proposalsList: (callId: string) => typedError<Proposal[], CommandError>(__TAURI_INVOKE("proposals_list", { callId })),
+	/**
+	 *  A person's pending proposals from every call, newest first (the
+	 *  person's page). `NotFound` for an unknown person.
+	 */
+	proposalsForPerson: (personId: string) => typedError<Proposal[], CommandError>(__TAURI_INVOKE("proposals_for_person", { personId })),
+	/**
+	 *  Accepts a pending proposal and applies it to the profile or the
+	 *  project's notes, or rejects it (nothing changes). `Invalid` with the
+	 *  reason when it can't be applied (notes over the limit, a level that is
+	 *  not 1–5) or is already decided; nothing changes then.
+	 */
+	proposalDecide: (id: string, input: ProposalDecide) => typedError<Proposal, CommandError>(__TAURI_INVOKE("proposal_decide", { id, input })),
+	/**
+	 *  «Отменить» / «Вернуть»: the proposal is pending again, an accepted one
+	 *  with the field put back. `Invalid` «Поле изменили после принятия» when
+	 *  the field changed since; nothing changes then.
+	 */
+	proposalUndo: (id: string) => typedError<Proposal, CommandError>(__TAURI_INVOKE("proposal_undo", { id })),
 };
 
 /** Events */
@@ -578,6 +601,19 @@ export type CallCreate = {
 	endedAt?: number | null,
 	summary?: Value | null,
 	participantIds?: string[] | null,
+};
+
+/**
+ *  A quote of the client the code found in the transcript, with where it
+ *  is, so the windows need not look the time up by the segment id.
+ */
+export type CallEvidence = {
+	recordingId: string,
+	/**  A segment of the pass the summary was built from. */
+	segmentId: string,
+	/**  From the start of the recording. */
+	startMs: number,
+	quote: string,
 };
 
 /**
@@ -1035,6 +1071,69 @@ export type ProjectUpdate = {
 	 */
 	brief?: Value | null,
 };
+
+export type Proposal = {
+	id: string,
+	callId: string,
+	target: ProposalTarget,
+	/**  Set when `target` is `person`. */
+	personId: string | null,
+	field: string,
+	/**
+	 *  The value when the proposal was made, taken from the data; `null`
+	 *  when there was none. Levels 1–5 are text too (`"4"`).
+	 */
+	before: string | null,
+	after: string,
+	kind: ProposalKind,
+	evidence: CallEvidence[],
+	decision: ProposalDecision,
+	/**  The manager's text of "Изменить и принять". */
+	edited: string | null,
+	applied: ProposalApplied | null,
+	/**  When it was accepted or rejected; `null` while pending. */
+	decidedAt: number | null,
+	createdAt: number,
+	updatedAt: number,
+};
+
+/**  What accepting a proposal wrote, for its undo (decision 8). */
+export type ProposalApplied = {
+	/**  The value written (for the notes: the line added). */
+	written: Value,
+	/**  The value before; `null` when there was none (or for the notes). */
+	previous: Value | null,
+};
+
+/**
+ *  `proposal_decide`: accept (with the manager's text of "Изменить и
+ *  принять", if any) or reject.
+ */
+export type ProposalDecide = {
+	/**  `accepted` or `rejected`; `pending` is the undo's. */
+	decision: ProposalDecision,
+	/**  Accepted with this text instead of the proposed one. */
+	edited?: string | null,
+};
+
+export type ProposalDecision = "pending" | "accepted" | "rejected";
+
+/**  What a proposal rests on. */
+export type ProposalKind = 
+/**  The client said it: `evidence` holds the quotes. */
+"said" | 
+/**  "вывод агента". */
+"inferred";
+
+/**  What a proposal updates. */
+export type ProposalTarget = 
+/**  The project's brief: `product`, `stack`, `modules`, `glossary`. */
+"brief" | 
+/**
+ *  A person's profile (`personId`): `role`, `tech`, `project`,
+ *  `howToAsk`, `portrait:<label>`, `notes`.
+ */
+"person";
 
 export type Question = {
 	id: string,

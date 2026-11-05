@@ -3839,6 +3839,7 @@ name = "realtime-grilling"
 version = "0.2.0"
 dependencies = [
  "block2",
+ "chrono",
  "cpal",
  "encoding_rs",
  "hound",
