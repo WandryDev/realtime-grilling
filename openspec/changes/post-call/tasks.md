@@ -31,7 +31,7 @@
 
 ## 5. Проверка
 
-- [ ] 5.1 Прогнать `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings`, `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate --strict` проходит.
+- [x] 5.1 Прогнать `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings`, `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate --strict` проходит.
 - [ ] 5.2 Живой прогон в подписанном debug-бандле со звонком «Обменник» и искусственным клиентом: итоги, карточки, предложения (принять по профилю и по брифу, отменить), детали с плеером и каналами, поиск в истории, удаление аудио. Проверка: всё совпадает со сценариями; время и стоимость сборки итогов записаны в `docs/spikes/agent.md`.
 - [ ] 5.3 Changeset (`minor`) и пункты подзадач «После звонка» в ClickUp. Проверка: `.changeset/*.md` есть; чеклисты обновлены.
 
