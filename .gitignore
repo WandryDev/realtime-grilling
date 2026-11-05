@@ -47,3 +47,4 @@ blob-report/
 # oh-my-claudecode state created in subdirectories
 src-tauri/**/.omc/
 src/**/.omc/
+**/.omc/
