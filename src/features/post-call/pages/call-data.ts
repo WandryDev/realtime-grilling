@@ -26,6 +26,7 @@ import type {
   TaskFactData,
   UnaskedQuestion,
 } from "../mock";
+import { momentParam } from "../moment";
 
 /*
  * The records of a finished call as the post-call screens draw them: the
@@ -35,8 +36,9 @@ import type {
  *
  * Times on the screens are wall-clock: a phrase was said at its
  * recording's `startedAt + startMs`. A link to a moment of the transcript
- * is the id of a segment of the shown pass (`call_transcript`), the
- * `?moment=` of the details page.
+ * is `momentParam` of `../moment.ts` (`<recordingId>@<startMs>@<segmentId>`),
+ * which the details page resolves also after the second pass replaced the
+ * segment.
  */
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
@@ -63,26 +65,6 @@ export function wallClock(
 ) {
   const recording = recordings.find((item) => item.id === at.recordingId);
   return recording ? clockOf(recording.startedAt + at.startMs, seconds) : "";
-}
-
-/**
- * The `?moment=` of a phrase: its segment when the shown transcript has
- * it, otherwise the client's phrase of the shown pass at that time (the
- * summary was built from the live pass, the second pass came later).
- */
-export function momentOf(recordings: readonly CallRecording[], at: At) {
-  const recording = recordings.find((item) => item.id === at.recordingId);
-  if (!recording || recording.segments.some((s) => s.id === at.segmentId)) {
-    return at.segmentId;
-  }
-  const before = recording.segments.filter(
-    (segment) => segment.startMs <= at.startMs
-  );
-  const said =
-    before.filter((segment) => segment.channel === "others").at(-1) ??
-    before.at(-1) ??
-    recording.segments[0];
-  return said?.id ?? at.segmentId;
 }
 
 /* ---------------------------------------------------------- Сборка итогов */
@@ -203,7 +185,7 @@ export function summaryTopics(
         return [
           {
             id: `${topic.id}-${index}`,
-            moment: momentOf(recordings, first),
+            moment: momentParam(first),
             note: status ? POINT_NOTE[status] : undefined,
             status,
             text: point.text,
@@ -435,7 +417,7 @@ function quoteOf(
 ): NonNullable<TaskFactData["quote"]> {
   return {
     initial: "К",
-    moment: momentOf(recordings, evidence),
+    moment: momentParam(evidence),
     text: evidence.quote,
     time: wallClock(recordings, evidence, true),
   };

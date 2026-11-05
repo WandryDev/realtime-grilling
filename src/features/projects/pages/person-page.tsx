@@ -16,6 +16,7 @@ import { type CallRecord, useCalls } from "@/data/calls";
 import { updatePerson, usePerson } from "@/data/people";
 import { useProject } from "@/data/projects";
 import { usePersonProposals } from "@/data/proposals";
+import { momentParam } from "@/features/post-call/moment";
 import { plural } from "@/lib/plural";
 import {
   proposalSection,
@@ -67,7 +68,7 @@ function callSuggestions(
     return {
       id: callId,
       quoteHref: quote
-        ? routes.callTranscript(callId, quote.segmentId)
+        ? routes.callTranscript(callId, momentParam(quote))
         : undefined,
       reviewHref: routes.callProposals(callId),
       suggestion: {

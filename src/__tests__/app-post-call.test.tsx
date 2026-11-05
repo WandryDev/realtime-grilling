@@ -38,11 +38,14 @@ const { routes } = await import("@/lib/routes");
 
 const FIRST_CALL = /Приём звонков, Интеграция с CRM/u;
 const MOMENT = /Здесь спросили/u;
-const OPERATORS_MOMENT = /Здесь спросили «Сколько операторов/u;
+const OPERATORS_ANSWER = /Ответ на «Сколько операторов/u;
 const PROPOSALS = /Предложения/u;
 const TASK_CARDS_NAV = /Карточки задач/u;
 const CLIENT_SOURCE = /сказал клиент, 12:02/u;
 const EDITED_CRM = /amoCRM, ключ у Игоря/u;
+/** `momentParam` of the demo's phrases: recording, offset, segment. */
+const OPERATORS_POINT = "telemedia-19-oct-recording@195000@t-120415";
+const QUEUE_FACT = "telemedia-19-oct-recording@74000@t-120214";
 const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
 const GITHUB_SOON = /Отправить в GitHub\s*скоро/u;
 const OPERATORS_QUESTION = /Сколько операторов/u;
@@ -143,7 +146,7 @@ describe("summary", () => {
         .getAttribute("href")
     ).toBe(routes.project("telemedia"));
     expect(linkHref("Открыть расшифровку на 12:04")).toBe(
-      routes.callTranscript(CURRENT_CALL_ID, "t-120415")
+      routes.callTranscript(CURRENT_CALL_ID, OPERATORS_POINT)
     );
   });
 
@@ -188,6 +191,12 @@ describe("summary", () => {
     expect(
       screen.queryByRole("heading", { name: "Ответы для ClickUp" })
     ).toBeNull();
+  });
+
+  it("a point's time opens the details page at its phrase", () => {
+    open(TranscriptPage, { id: CURRENT_CALL_ID, moment: OPERATORS_POINT });
+
+    expect(screen.getByLabelText("Момент 12:04")).toBeTruthy();
   });
 
   it("says when the call is unknown", () => {
@@ -274,11 +283,11 @@ describe("task cards", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: CLIENT_SOURCE })[0]);
     expect(linkHref("Открыть в расшифровке")).toBe(
-      routes.callTranscript(CURRENT_CALL_ID, "t-120214")
+      routes.callTranscript(CURRENT_CALL_ID, QUEUE_FACT)
     );
     fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
     expect(push).toHaveBeenCalledWith(
-      routes.callTranscript(CURRENT_CALL_ID, "t-120214")
+      routes.callTranscript(CURRENT_CALL_ID, QUEUE_FACT)
     );
   });
 });
@@ -289,9 +298,10 @@ describe("transcript", () => {
     expect(screen.getByLabelText(MOMENT)).toBeTruthy();
     expect(screen.getByText("29:12")).toBeTruthy();
 
+    // An answered question opens the client's answer.
     fireEvent.click(screen.getByRole("button", { name: OPERATORS_QUESTION }));
-    expect(screen.getByLabelText(OPERATORS_MOMENT)).toBeTruthy();
-    expect(screen.getByText("3:02")).toBeTruthy();
+    expect(screen.getByLabelText(OPERATORS_ANSWER)).toBeTruthy();
+    expect(screen.getByText("3:15")).toBeTruthy();
   });
 
   it("plays and deletes the recording after confirmation", async () => {

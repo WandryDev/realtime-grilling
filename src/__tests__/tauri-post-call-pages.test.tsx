@@ -352,7 +352,7 @@ describe("«Итоги звонка» in Tauri", () => {
       screen
         .getByRole("link", { name: "Открыть расшифровку на 12:04" })
         .getAttribute("href")
-    ).toBe(routes.callTranscript(CALL, "s-4"));
+    ).toBe(routes.callTranscript(CALL, `${RECORDING}@240000@s-4`));
     expect(
       screen.getByText("Допущение, проверить на следующем звонке")
     ).toBeTruthy();
@@ -531,9 +531,11 @@ describe("«Карточки задач» in Tauri", () => {
       screen
         .getByRole("link", { name: "Открыть в расшифровке" })
         .getAttribute("href")
-    ).toBe(routes.callTranscript(CALL, "s-4"));
+    ).toBe(routes.callTranscript(CALL, `${RECORDING}@240000@s-4`));
     fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
-    expect(nav.push).toHaveBeenCalledWith(routes.callTranscript(CALL, "s-4"));
+    expect(nav.push).toHaveBeenCalledWith(
+      routes.callTranscript(CALL, `${RECORDING}@240000@s-4`)
+    );
   });
 
   it("Несколько людей клиента: the source is «сказал клиент», without a name", async () => {

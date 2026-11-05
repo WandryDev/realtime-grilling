@@ -12,10 +12,10 @@ import {
   useCallProposals,
 } from "@/data/proposals";
 import { inTauri } from "@/effect/runtime";
+import { plural } from "@/lib/plural";
 import { proposalEdited, proposalText } from "@/lib/proposal-fields";
 import { useDemoState } from "@/lib/use-demo-state";
 
-import { plural } from "../api";
 import { usePostCallInfo } from "../components/links";
 import type { ProposalAction } from "../components/proposals";
 import type { ProposalGroupData, ReviewTotals } from "../mock";
@@ -63,6 +63,11 @@ const CHANGE_FORMS: [string, string, string] = [
   "изменений",
 ];
 
+/** «3 изменения». */
+function changes(count: number) {
+  return `${count} ${plural(count, ...CHANGE_FORMS)}`;
+}
+
 function outcomeOf(
   groups: ProposalGroupData[],
   totals: ReviewTotals,
@@ -77,7 +82,7 @@ function outcomeOf(
       id: group.id,
       initial: group.initial,
       name: group.title,
-      note: accepted > 0 ? plural(accepted, CHANGE_FORMS) : "без изменений",
+      note: accepted > 0 ? changes(accepted) : "без изменений",
     };
   });
   const rejected =
@@ -85,7 +90,7 @@ function outcomeOf(
       ? `, ${totals.rejected} отклонили`
       : ", ничего не отклонили";
   return {
-    description: `Внесли ${plural(totals.accepted, CHANGE_FORMS)}${rejected}. В следующем звонке по проекту «${projectName}» агент опирается на обновлённый бриф и профили.`,
+    description: `Внесли ${changes(totals.accepted)}${rejected}. В следующем звонке по проекту «${projectName}» агент опирается на обновлённый бриф и профили.`,
     targets,
   };
 }
