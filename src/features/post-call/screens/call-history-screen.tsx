@@ -31,6 +31,7 @@ import {
   PROJECT_FILTERS,
   PROJECT_HISTORY,
   PROJECT_READINESS,
+  type ReadinessStatus,
   SEARCH,
   type SearchResult,
 } from "../mock";
@@ -47,6 +48,16 @@ export interface HistoryFilter {
   onValueChange?: (value: string) => void;
   options: FilterOption[];
   value?: string;
+}
+
+/** A row of «Готовность проекта»: done, or open with an action. */
+export interface ReadinessItem {
+  /** Link to the project page that fixes it. */
+  action?: string;
+  id: string;
+  label: string;
+  meta?: string;
+  status: ReadinessStatus;
 }
 
 export interface HistorySearch {
@@ -122,7 +133,7 @@ function ProjectCalls({
   );
 }
 
-function NoCalls() {
+function NoCalls({ readiness }: { readiness: ReadinessItem[] }) {
   const links = usePostCallLinks();
   return (
     <CenteredState
@@ -133,38 +144,40 @@ function NoCalls() {
       title="Звонков пока не было"
     >
       <StartCallButton size="lg" variant="secondary" />
-      <StateList className="w-[400px] pt-2" label="Готовность проекта">
-        {PROJECT_READINESS.map((item) => (
-          <StateRow
-            key={item.id}
-            media={
-              item.status === "done" ? (
-                <DoneCheck className="size-3.5" />
-              ) : (
-                <span className="flex w-3.5 shrink-0 justify-center">
-                  <OpenRing className="size-2" />
-                </span>
-              )
-            }
-            trailing={
-              item.action ? (
-                <LinkButton
-                  className="text-foreground -my-1"
-                  href={links.project}
-                  size="sm"
-                  variant="ghost"
-                >
-                  {item.action}
-                </LinkButton>
-              ) : (
-                <StateRowNote>{item.meta}</StateRowNote>
-              )
-            }
-          >
-            {item.label}
-          </StateRow>
-        ))}
-      </StateList>
+      {readiness.length === 0 ? null : (
+        <StateList className="w-[400px] pt-2" label="Готовность проекта">
+          {readiness.map((item) => (
+            <StateRow
+              key={item.id}
+              media={
+                item.status === "done" ? (
+                  <DoneCheck className="size-3.5" />
+                ) : (
+                  <span className="flex w-3.5 shrink-0 justify-center">
+                    <OpenRing className="size-2" />
+                  </span>
+                )
+              }
+              trailing={
+                item.action ? (
+                  <LinkButton
+                    className="text-foreground -my-1"
+                    href={links.project}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    {item.action}
+                  </LinkButton>
+                ) : (
+                  <StateRowNote>{item.meta}</StateRowNote>
+                )
+              }
+            >
+              {item.label}
+            </StateRow>
+          ))}
+        </StateList>
+      )}
     </CenteredState>
   );
 }
@@ -179,6 +192,7 @@ export function CallHistoryScreen({
   projectName,
   projects,
   query,
+  readiness = PROJECT_READINESS,
   search: searchProp = PREVIEW_SEARCH,
   totalCalls,
 }: {
@@ -199,6 +213,8 @@ export function CallHistoryScreen({
   projects?: HistoryProject[];
   /** Search across all projects. */
   query?: string;
+  /** «Готовность проекта» of a project without calls; none hides it. */
+  readiness?: ReadinessItem[];
   search?: HistorySearch;
   totalCalls?: number;
 }) {
@@ -250,7 +266,7 @@ export function CallHistoryScreen({
         {searching && query ? (
           <SearchResults query={query} search={searchProp} />
         ) : null}
-        {isEmpty ? <NoCalls /> : null}
+        {isEmpty ? <NoCalls readiness={readiness} /> : null}
         {searching || isEmpty ? null : (
           <ProjectCalls
             filter={filter}
