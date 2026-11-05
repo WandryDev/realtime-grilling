@@ -59,7 +59,7 @@ const { getProjects, updateProject, useProjects } = await import(
 const { usePeople } = await import("@/data/people");
 const { AppFrame } = await import("@/features/shell/app-frame");
 const { toast } = await import("@/components/ui/toast");
-const { setProposalDecision, useCalls } = await import("@/data/calls");
+const { setSummaryProgress, useCalls } = await import("@/data/calls");
 
 const CALL_ID = "019a0000-0000-7000-8000-0000000000c1";
 
@@ -69,7 +69,7 @@ function CallsProbe() {
     <ul>
       {calls.map((call) => (
         <li key={call.id}>
-          {call.title}: {Object.keys(call.proposals).sort().join(", ")}
+          {call.title}: {call.participants || "—"}, {call.summary}
         </li>
       ))}
     </ul>
@@ -188,7 +188,7 @@ describe("stores in Tauri", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/settings/general"));
   });
 
-  it("keeps both of two summary decisions made within one round trip", async () => {
+  it("keeps both of two summary writes made within one round trip", async () => {
     render(<CallsProbe />);
     act(() => {
       fake.db.calls.push(fakeCall(CALL_ID, TELEMEDIA, "Созвон"));
@@ -201,27 +201,32 @@ describe("stores in Tauri", () => {
     });
     await screen.findByText("Созвон:", { exact: false });
 
-    // Two proposals accepted before the first write came back.
-    await act(() =>
-      Promise.all([
-        setProposalDecision(CALL_ID, "p1", { decision: "accepted" }),
-        setProposalDecision(CALL_ID, "p2", { decision: "rejected" }),
-      ])
-    );
+    // The build started and ended before the first write came back.
+    act(() => {
+      setSummaryProgress(
+        CALL_ID,
+        { progress: 0, step: 0 },
+        { participants: "Ольга" }
+      );
+      setSummaryProgress(CALL_ID, undefined);
+    });
 
+    await waitFor(() =>
+      expect(
+        fake.invoked.filter((call) => call.command === "calls_patch_summary")
+      ).toHaveLength(2)
+    );
     const patches = fake.invoked
       .filter((call) => call.command === "calls_patch_summary")
       .map((call) => call.args?.patch);
     expect(patches).toEqual([
-      { proposals: { p1: { decision: "accepted" } } },
-      { proposals: { p2: { decision: "rejected" } } },
+      { participants: "Ольга", summary: "processing" },
+      { summary: "ready" },
     ]);
     expect(fake.db.calls[0]?.summary).toEqual({
-      proposals: {
-        p1: { decision: "accepted" },
-        p2: { decision: "rejected" },
-      },
+      participants: "Ольга",
+      summary: "ready",
     });
-    expect(await screen.findByText("Созвон: p1, p2")).toBeTruthy();
+    expect(await screen.findByText("Созвон: Ольга, ready")).toBeTruthy();
   });
 });

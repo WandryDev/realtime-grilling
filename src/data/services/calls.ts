@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from "effect";
 import {
   type Call,
   type CallCreate,
+  type CallSearch,
   type CallUpdate,
   commands,
   type Person,
@@ -13,18 +14,26 @@ import { mergePatch } from "@/lib/merge-patch";
 
 import {
   compareIds,
+  dropCallRecords,
   invalid,
   MockDatabase,
   notFound,
   orCurrent,
 } from "./mock-database";
+import { searchCalls } from "./mock-search";
 
 /*
  * Calls and their participants. A participant is a person of the call's
  * project; one from another project is `Invalid`. A call may have no
  * project ("Звонок без проекта"): it has no participants then. The
- * summary and the reviews live in the `summary` JSON, whose shape belongs
- * to the frontend (`src/data/calls.ts`).
+ * `summary` JSON is the frontend's (`src/data/calls.ts`); the summary,
+ * proposals and recordings Rust keeps are other services
+ * (`./summaries.ts`, `./proposals.ts`, `./call-records.ts`). Deleting a
+ * call deletes them.
+ *
+ * `search` looks through the calls' titles, transcripts (the shown pass)
+ * and summaries, without case and «ё»: at most 200 matches with ±60
+ * characters around each, and the counts per project over every call.
  *
  * In an update `null` clears a nullable field (`endedAt`, `summary`) and
  * an absent key leaves it. `patchSummary` merges an RFC 7386 patch into
@@ -61,6 +70,11 @@ export class CallsData extends Context.Service<
       callId: string,
       personId: string
     ) => Effect.Effect<Call, BackendError>;
+    /** Searches the calls of a project, or all of them for `null`. */
+    readonly search: (
+      query: string,
+      projectId: string | null
+    ) => Effect.Effect<CallSearch, BackendError>;
   }
 >()("grill/data/services/CallsData") {
   static readonly layerTauri = Layer.succeed(CallsData, {
@@ -75,6 +89,8 @@ export class CallsData extends Context.Service<
     remove: (id) => Effect.asVoid(call(() => commands.callsDelete(id))),
     removeParticipant: (callId, personId) =>
       call(() => commands.callParticipantsRemove(callId, personId)),
+    search: (query, projectId) =>
+      call(() => commands.callsSearch(query, projectId)),
     update: (id, patch) => call(() => commands.callsUpdate(id, patch)),
   });
 
@@ -201,6 +217,7 @@ export class CallsData extends Context.Service<
       const remove = Effect.fnUntraced(function* (id: string) {
         const current = yield* get(id);
         tables.calls.delete(id);
+        dropCallRecords(tables, id);
         yield* database.emit("call", id, current.projectId, "deleted");
       });
 
@@ -256,23 +273,24 @@ export class CallsData extends Context.Service<
       });
 
       const newest = (item: Call) => item.startedAt ?? item.createdAt;
+      const listed = (projectId: string | null) =>
+        [...tables.calls.values()]
+          .filter((item) => projectId === null || item.projectId === projectId)
+          .sort((a, b) => newest(b) - newest(a) || compareIds(b.id, a.id));
 
       return CallsData.of({
         addParticipant,
         create,
         get,
-        list: (projectId) =>
-          Effect.sync(() =>
-            [...tables.calls.values()]
-              .filter(
-                (item) => projectId === null || item.projectId === projectId
-              )
-              .sort((a, b) => newest(b) - newest(a) || compareIds(b.id, a.id))
-          ),
+        list: (projectId) => Effect.sync(() => listed(projectId)),
         participants,
         patchSummary,
         remove,
         removeParticipant,
+        search: (query, projectId) =>
+          Effect.sync(() =>
+            searchCalls(tables, listed(null), query, projectId)
+          ),
         update,
       });
     })

@@ -13,12 +13,25 @@
         "additionalProperties": false,
         "required": ["target", "field", "after", "kind", "evidence"],
         "properties": {
-          "target": { "description": "brief or H#.", "type": "string", "pattern": "^(brief|H[0-9]+)$" },
+          "target": {
+            "description": "brief or H#.",
+            "type": "string",
+            "pattern": "^(brief|H[0-9]+)$"
+          },
           "field": {
             "enum": [
-              "product", "stack", "modules", "glossary",
-              "role", "tech", "project", "howToAsk", "notes",
-              "portrait:Роль в бизнесе", "portrait:Темперамент", "portrait:Характер",
+              "product",
+              "stack",
+              "modules",
+              "glossary",
+              "role",
+              "tech",
+              "project",
+              "howToAsk",
+              "notes",
+              "portrait:Роль в бизнесе",
+              "portrait:Темперамент",
+              "portrait:Характер",
               "portrait:Чего ждёт от проекта"
             ]
           },
@@ -31,7 +44,11 @@
               "additionalProperties": false,
               "required": ["id", "quote"],
               "properties": {
-                "id": { "description": "S#, P# or B#.", "type": "string", "pattern": "^[SPB][0-9]+$" },
+                "id": {
+                  "description": "S#, P# or B#.",
+                  "type": "string",
+                  "pattern": "^[SPB][0-9]+$"
+                },
                 "quote": { "type": "string" }
               }
             }

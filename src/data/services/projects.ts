@@ -18,6 +18,7 @@ import { type BackendError, call } from "@/effect/tauri";
 import {
   briefStateOf,
   compareIds,
+  dropCallRecords,
   limitedText,
   MockDatabase,
   notFound,
@@ -164,6 +165,7 @@ export class ProjectsData extends Context.Service<
         for (const [callId, item] of tables.calls) {
           if (item.projectId === id) {
             tables.calls.delete(callId);
+            dropCallRecords(tables, callId);
           }
         }
         // One event about the root record, like the cascade in SQLite.

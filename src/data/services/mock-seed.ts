@@ -1,11 +1,25 @@
-import type { Brief, Call, Person, Project, Value } from "@/bindings";
+import type {
+  Brief,
+  Call,
+  CallQuestion,
+  CallSummary,
+  Person,
+  Project,
+  Proposal,
+  SummaryTopic,
+  TranscriptSegment,
+  Value,
+} from "@/bindings";
 import { PROJECTS } from "@/features/mock/projects";
 import {
   type HistoryCall,
   PROJECT_HISTORY,
-  PROPOSAL_GROUPS,
+  SEARCH,
 } from "@/features/post-call/mock";
 import { BRIEF } from "@/features/projects/mock";
+
+import type { MockRecording } from "./mock-database";
+import { demoRecords, notesDate, notesLine } from "./mock-records";
 
 /*
  * The demo records the mock repository starts with, in the shapes of
@@ -68,6 +82,8 @@ const SEED_PEOPLE: {
       howToAsk:
         "Можно сразу про API, поля и форматы. Любит конкретику, не любит «потом решим».",
       initials: "ИС",
+      // Accepted from the demo call's proposal (`./mock-records.ts`).
+      portrait: { "Роль в бизнесе": "Держит доступы к amoCRM, выдаёт ключи" },
       project: 4,
       tech: 5,
     },
@@ -124,26 +140,6 @@ function durationOf(call: HistoryCall) {
   );
 }
 
-/**
- * The current call starts with the proposals of the Paper review; older
- * calls were reviewed already, so their pending proposals are accepted.
- */
-function initialProposals(reviewed: boolean) {
-  const proposals: { [id: string]: Value } = {};
-  for (const group of PROPOSAL_GROUPS) {
-    for (const proposal of group.proposals) {
-      let decision = "pending";
-      if (proposal.state === "accepted" || proposal.state === "rejected") {
-        decision = proposal.state;
-      } else if (reviewed) {
-        decision = "accepted";
-      }
-      proposals[proposal.id] = { decision };
-    }
-  }
-  return proposals;
-}
-
 function seedCall(call: HistoryCall, projectId: string, people: Person[]) {
   const id = CALL_ALIASES[call.id] ?? call.id;
   const label = call.participants.replace(AUDIO_DELETED, "");
@@ -157,12 +153,7 @@ function seedCall(call: HistoryCall, projectId: string, people: Person[]) {
   const participantIds = known.every((personId) => personId !== undefined)
     ? (known as string[])
     : [];
-  const summary: { [key: string]: Value } = {
-    audioDeleted: call.participants.includes(AUDIO_DELETED),
-    proposals: initialProposals(id !== DEMO_CALL_ID),
-    summary: "ready",
-    tasks: {},
-  };
+  const summary: { [key: string]: Value } = { summary: "ready" };
   // People the project doesn't have yet keep the names of the history.
   if (participantIds.length === 0) {
     summary.participants = label;
@@ -184,6 +175,122 @@ export interface MockSeed {
   calls: Call[];
   people: Person[];
   projects: Project[];
+  proposals: Proposal[];
+  questions: CallQuestion[];
+  recordings: MockRecording[];
+  summaries: CallSummary[];
+}
+
+/** The note the demo call's accepted brief proposal added. */
+const DEMO_NOTE = "Операторы: 5 на старте, до 20 к лету";
+const DEMO_NOTES_SECTION = "## Из звонков";
+
+/** "Клиент, 12:38" → "12:38"; `null` for a match in the summary. */
+const CLIENT_META = /^Клиент, (?<hours>\d+):(?<minutes>\d+)/u;
+/** Where in a call without a time the summary's phrase was said. */
+const SUMMARY_PHRASE_MS = 5 * 60 * 1000;
+const PHRASE_MS = 6000;
+
+/**
+ * The records of an older demo call: a recording (without audio when the
+ * history says so) whose transcript holds the phrases the demo search
+ * finds, and a summary with the matches "в итогах звонка".
+ */
+function historyRecords(call: Call, audioDeleted: boolean) {
+  const startedAt = call.startedAt ?? call.createdAt;
+  const recordingId = `${call.id}-recording`;
+  const found = SEARCH.results.filter(
+    (result) => seedCallId(result.id) === call.id
+  );
+  const segments: TranscriptSegment[] = found.map((result, index) => {
+    const { hours = "0", minutes = "0" } =
+      CLIENT_META.exec(result.match.meta)?.groups ?? {};
+    const start = new Date(startedAt);
+    const at = new Date(start);
+    at.setHours(Number(hours), Number(minutes), 0, 0);
+    const startMs = CLIENT_META.test(result.match.meta)
+      ? at.getTime() - startedAt
+      : SUMMARY_PHRASE_MS + index;
+    const text = `${result.match.before}${SEARCH.query}${result.match.after}`
+      .replace("Итоги: ", "")
+      .replaceAll(/[«»]/gu, "");
+    return {
+      callId: call.id,
+      channel: "others",
+      createdAt: startedAt + startMs,
+      endMs: startMs + PHRASE_MS,
+      id: `${call.id}-segment-${index + 1}`,
+      pass: "refined",
+      recordingId,
+      startMs,
+      text,
+      updatedAt: startedAt + startMs,
+    };
+  });
+  const topics: SummaryTopic[] = found.flatMap((result, index) => {
+    const segment = segments[index];
+    if (!segment || CLIENT_META.test(result.match.meta)) {
+      return [];
+    }
+    const moment = {
+      endMs: segment.endMs,
+      recordingId,
+      segmentId: segment.id,
+      startMs: segment.startMs,
+    };
+    return [
+      {
+        from: moment,
+        id: `${call.id}-topic-${index + 1}`,
+        points: [
+          {
+            evidence: [
+              {
+                quote: segment.text,
+                recordingId,
+                segmentId: segment.id,
+                startMs: segment.startMs,
+              },
+            ],
+            status: "fact",
+            text: segment.text,
+          },
+        ],
+        title: call.title,
+        to: moment,
+        topicIds: [],
+      },
+    ];
+  });
+  const endedAt = call.endedAt ?? startedAt;
+  const recording: MockRecording = {
+    callId: call.id,
+    recording: {
+      audioDeleted,
+      durationMs: endedAt - startedAt,
+      endedAt,
+      id: recordingId,
+      meBytes: audioDeleted ? null : 0,
+      othersBytes: audioDeleted ? null : 0,
+      pass: "refined",
+      segments,
+      startedAt,
+      transcriptState: "refined",
+    },
+  };
+  const summary: CallSummary = {
+    builtAt: endedAt,
+    callId: call.id,
+    content: { cards: [], next: [], topics },
+    createdAt: endedAt,
+    error: null,
+    state: "ready",
+    title: call.title,
+    tldr: "",
+    transcriptPass: "refined",
+    updatedAt: endedAt,
+  };
+  return { recording, summary };
 }
 
 /** A fresh copy of the demo records. */
@@ -203,7 +310,10 @@ export function mockSeed(): MockSeed {
     description: project.description,
     id: project.id,
     name: project.name,
-    notes: "",
+    notes:
+      project.id === "telemedia"
+        ? `${DEMO_NOTES_SECTION}\n${notesLine(notesDate(demoCallStart()), DEMO_NOTE)}`
+        : "",
     openQuestions: project.openQuestions,
     ...stamp(),
   }));
@@ -231,7 +341,48 @@ export function mockSeed(): MockSeed {
     ...stamp(),
   }));
 
-  return { calls, people, projects };
+  const records: Omit<MockSeed, "calls" | "people" | "projects"> = {
+    proposals: [],
+    questions: [],
+    recordings: [],
+    summaries: [],
+  };
+  for (const [item, call] of history.map(
+    ([row], index) => [row, calls[index]] as const
+  )) {
+    if (!call) {
+      continue;
+    }
+    if (call.id === DEMO_CALL_ID) {
+      const demo = demoRecords(
+        call.id,
+        call.startedAt ?? call.createdAt,
+        (name) => name,
+        true
+      );
+      records.recordings.push({ callId: call.id, recording: demo.recording });
+      records.questions.push(...demo.questions);
+      records.summaries.push(demo.summary);
+      records.proposals.push(...demo.proposals);
+      continue;
+    }
+    const older = historyRecords(
+      call,
+      item.participants.includes(AUDIO_DELETED)
+    );
+    records.recordings.push(older.recording);
+    records.summaries.push(older.summary);
+  }
+
+  return { calls, people, projects, ...records };
+}
+
+/** When the demo call started: its notes line carries that date. */
+function demoCallStart() {
+  const row = PROJECT_HISTORY.telemedia[0]?.calls.find(
+    (call) => seedCallId(call.id) === DEMO_CALL_ID
+  );
+  return row ? startOf(row) : 0;
 }
 
 /** Resolves the history ids other screens use to the seeded call. */

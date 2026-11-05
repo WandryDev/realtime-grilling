@@ -3,12 +3,17 @@ import { Clock, Context, Effect, Layer, PubSub, Stream } from "effect";
 import type {
   BriefState,
   Call,
+  CallQuestion,
+  CallRecording,
+  CallSummary,
   Change,
   DataChanged,
   Entity,
   Person,
   Project,
   ProjectSource,
+  Proposal,
+  SummaryProgress,
   Value,
 } from "@/bindings";
 import { charCount } from "@/data/project-limits";
@@ -28,7 +33,19 @@ import { mockSeed } from "./mock-seed";
  * The brief state of a project is computed on read, as in Rust: the
  * fingerprint of its description, notes, people and readable documents
  * against the one the brief was built from (design.md, decision 7).
+ *
+ * The records of a call (post-call design.md, decision 5) live in their
+ * own tables, as in Rust: its recordings with their transcript, the
+ * questions of those recordings, its summary and its proposals. Deleting
+ * the call deletes them (`dropCallRecords`); deleting a person deletes
+ * the proposals about them.
  */
+
+/** A recording of a call, as `call_transcript` reads it. */
+export interface MockRecording {
+  readonly callId: string;
+  readonly recording: CallRecording;
+}
 
 /** A document of a project with what the screens never see. */
 export interface MockSource {
@@ -45,8 +62,50 @@ export interface MockTables {
   calls: Map<string, Call>;
   people: Map<string, Person>;
   projects: Map<string, Project>;
+  /** By id; `proposals_list` reads them by call. */
+  proposals: Map<string, Proposal>;
+  /** The questions of the recordings, by id. */
+  questions: Map<string, CallQuestion>;
+  recordings: Map<string, MockRecording>;
   settings: Map<string, Value>;
   sources: Map<string, MockSource>;
+  /** The stored summary of a call, by call id. */
+  summaries: Map<string, CallSummary>;
+  /** The last progress of the summary build running for a call. */
+  summaryBuilds: Map<string, SummaryProgress>;
+}
+
+/** The tables that belong to the calls: `resetCalls` seeds them again. */
+const CALL_TABLES = [
+  "calls",
+  "proposals",
+  "questions",
+  "recordings",
+  "summaries",
+] as const;
+
+/**
+ * Deletes what belongs to a call (the `ON DELETE CASCADE` of its
+ * recordings, questions, summary and proposals).
+ */
+export function dropCallRecords(tables: MockTables, callId: string) {
+  for (const [id, { callId: owner }] of tables.recordings) {
+    if (owner === callId) {
+      tables.recordings.delete(id);
+      for (const [questionId, question] of tables.questions) {
+        if (question.recordingId === id) {
+          tables.questions.delete(questionId);
+        }
+      }
+    }
+  }
+  for (const [id, proposal] of tables.proposals) {
+    if (proposal.callId === callId) {
+      tables.proposals.delete(id);
+    }
+  }
+  tables.summaries.delete(callId);
+  tables.summaryBuilds.delete(callId);
 }
 
 /** Where the browser keeps the mock settings between reloads. */
@@ -122,8 +181,15 @@ function seedTables(): MockTables {
     calls: new Map(seed.calls.map((call) => [call.id, call])),
     people: new Map(seed.people.map((person) => [person.id, person])),
     projects: new Map(seed.projects.map((project) => [project.id, project])),
+    proposals: new Map(seed.proposals.map((item) => [item.id, item])),
+    questions: new Map(seed.questions.map((item) => [item.id, item])),
+    recordings: new Map(
+      seed.recordings.map((item) => [item.recording.id, item])
+    ),
     settings: storedSettings(),
     sources: new Map(),
+    summaries: new Map(seed.summaries.map((item) => [item.callId, item])),
+    summaryBuilds: new Map(),
   };
   // The demo briefs were built from the demo records as they are.
   for (const project of seed.projects) {
@@ -265,14 +331,20 @@ export class MockDatabase extends Context.Service<
           const seed = seedTables();
           tables.briefInputs = seed.briefInputs;
           tables.building = seed.building;
-          tables.calls = seed.calls;
           tables.people = seed.people;
           tables.projects = seed.projects;
           tables.settings = new Map();
           tables.sources = seed.sources;
+          for (const name of CALL_TABLES) {
+            Object.assign(tables, { [name]: seed[name] });
+          }
+          tables.summaryBuilds = seed.summaryBuilds;
         }),
         resetCalls: Effect.sync(() => {
-          tables.calls = seedTables().calls;
+          const seed = seedTables();
+          for (const name of CALL_TABLES) {
+            Object.assign(tables, { [name]: seed[name] });
+          }
         }),
         stamp: Effect.map(Clock.currentTimeMillis, (now) => ({
           id: uuidv7(now),

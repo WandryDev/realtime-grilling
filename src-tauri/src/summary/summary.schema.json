@@ -58,7 +58,14 @@
                         "required": ["text", "status", "evidence"],
                         "properties": {
                           "text": { "type": "string" },
-                          "status": { "enum": ["confirmed", "assumption", "contradiction", "empty"] },
+                          "status": {
+                            "enum": [
+                              "confirmed",
+                              "assumption",
+                              "contradiction",
+                              "empty"
+                            ]
+                          },
                           "evidence": { "$ref": "#/$defs/evidence" }
                         }
                       }
@@ -92,8 +99,13 @@
         "required": ["text", "topic", "field", "gap"],
         "properties": {
           "text": { "type": "string" },
-          "topic": { "description": "Position in topics, from 1.", "type": ["integer", "null"] },
-          "field": { "anyOf": [{ "$ref": "#/$defs/lens" }, { "type": "null" }] },
+          "topic": {
+            "description": "Position in topics, from 1.",
+            "type": ["integer", "null"]
+          },
+          "field": {
+            "anyOf": [{ "$ref": "#/$defs/lens" }, { "type": "null" }]
+          },
           "gap": { "enum": ["empty", "assumption", "contradiction"] }
         }
       }
@@ -102,7 +114,15 @@
   "$defs": {
     "segment": { "type": "string", "pattern": "^S[0-9]+$" },
     "lens": {
-      "enum": ["goal", "users", "scenarios", "edgeCases", "integrations", "constraints", "acceptance"]
+      "enum": [
+        "goal",
+        "users",
+        "scenarios",
+        "edgeCases",
+        "integrations",
+        "constraints",
+        "acceptance"
+      ]
     },
     "evidence": {
       "type": "array",
@@ -111,7 +131,11 @@
         "additionalProperties": false,
         "required": ["id", "quote"],
         "properties": {
-          "id": { "description": "S#, P# or B#.", "type": "string", "pattern": "^[SPB][0-9]+$" },
+          "id": {
+            "description": "S#, P# or B#.",
+            "type": "string",
+            "pattern": "^[SPB][0-9]+$"
+          },
           "quote": { "description": "Verbatim, 3-15 words.", "type": "string" }
         }
       }

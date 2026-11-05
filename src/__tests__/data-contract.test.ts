@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, type Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
-import type { DataChanged } from "@/bindings";
+import type { DataChanged, SummaryProgress } from "@/bindings";
 import {
   charCount,
   DESCRIPTION_MAX_CHARS,
@@ -10,13 +10,18 @@ import {
   NOTES_MAX_CHARS,
   NOTES_TOO_LONG,
 } from "@/data/project-limits";
+import { CallRecordsData } from "@/data/services/call-records";
 import { CallsData } from "@/data/services/calls";
 import { DataEvents } from "@/data/services/data-events";
 import { DataLayerMock } from "@/data/services/layers";
+import { MockDatabase } from "@/data/services/mock-database";
+import { DEMO_CALL_ID } from "@/data/services/mock-seed";
 import { PeopleData } from "@/data/services/people";
 import { ProjectsData } from "@/data/services/projects";
+import { CHANGED_SINCE, ProposalsData } from "@/data/services/proposals";
 import { SettingsData } from "@/data/services/settings";
 import { ProjectSourcesData } from "@/data/services/sources";
+import { MOCK_STAGE_MS, SummaryData } from "@/data/services/summaries";
 import type { BackendError, BackendErrorKind } from "@/effect/tauri";
 
 /*
@@ -29,12 +34,15 @@ import type { BackendError, BackendErrorKind } from "@/effect/tauri";
  */
 
 type DataServices =
+  | CallRecordsData
   | CallsData
   | DataEvents
   | PeopleData
   | ProjectsData
   | ProjectSourcesData
-  | SettingsData;
+  | ProposalsData
+  | SettingsData
+  | SummaryData;
 
 const UUID_V7 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -751,7 +759,673 @@ function dataContract(
   });
 }
 
+/*
+ * The contract of the post-call records (post-call design.md, decisions
+ * 5–12; `src-tauri/src/storage/{summaries,proposals,call_records,
+ * call_search}.rs`). Rust has no commands that write a transcript or a
+ * proposal from a window, so these run on the demo records the mock
+ * starts with: the Телемедиа call of 19 October (`DEMO_CALL_ID`).
+ */
+function postCallContract(
+  name: string,
+  layer: Layer.Layer<DataServices | MockDatabase, never, never>
+) {
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, DataServices | MockDatabase>
+  ) => effect.pipe(Effect.provide(layer));
+
+  /** A finished call of a new project, without any records. */
+  const finishedCall = Effect.gen(function* () {
+    const projects = yield* ProjectsData;
+    const calls = yield* CallsData;
+    const project = yield* projects.create({ name: "Ромашка" });
+    const created = yield* calls.create({ projectId: project.id });
+    const finished = yield* calls.update(created.id, {
+      endedAt: (created.startedAt ?? 0) + 60_000,
+      status: "finished",
+    });
+    return { call: finished, project };
+  });
+
+  /** Starts recording `SummaryProgress`; the effect reads them so far. */
+  const recordProgress = Effect.gen(function* () {
+    const seen: SummaryProgress[] = [];
+    const summaries = yield* SummaryData;
+    yield* Effect.forkChild(
+      Stream.runForEach(summaries.progress, (item) =>
+        Effect.sync(() => seen.push(item))
+      ),
+      { startImmediately: true }
+    );
+    return Effect.as(Effect.yieldNow, seen);
+  });
+
+  describe(`${name}: summaries`, () => {
+    it.effect("reads the demo summary, saved and ready", () =>
+      run(
+        Effect.gen(function* () {
+          const summaries = yield* SummaryData;
+          const view = yield* summaries.get(DEMO_CALL_ID);
+          assert.strictEqual(view.building, null);
+          assert.strictEqual(view.summary?.state, "ready");
+          assert.strictEqual(view.summary?.transcriptPass, "refined");
+          const content = view.summary?.content;
+          assert.deepStrictEqual(
+            content?.topics.map((topic) => topic.title),
+            ["Приём звонков", "Интеграция с CRM"]
+          );
+          assert.strictEqual(content?.cards.length, 2);
+          // Every quote says where it is: the windows need not look it up.
+          const [first] = content?.topics[0]?.points[0]?.evidence ?? [];
+          assert.isDefined(first);
+          assert.isTrue((first?.startMs ?? -1) >= 0);
+          assert.strictEqual(
+            yield* failureKind(summaries.get("nope")),
+            "NotFound"
+          );
+        })
+      )
+    );
+
+    it.effect(
+      "reads a live call as none and a finished one as interrupted",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const summaries = yield* SummaryData;
+            const calls = yield* CallsData;
+            const { call: finished, project } = yield* finishedCall;
+            const live = yield* calls.create({ projectId: project.id });
+            assert.strictEqual((yield* summaries.get(live.id)).summary, null);
+            const failed = (yield* summaries.get(finished.id)).summary;
+            assert.strictEqual(failed?.state, "failed");
+            assert.strictEqual(failed?.error, "interrupted");
+            assert.strictEqual(failed?.content, null);
+            assert.strictEqual(
+              yield* failureKind(summaries.build(live.id)),
+              "Invalid"
+            );
+          })
+        )
+    );
+
+    it.effect("builds through the stages of Rust and saves at the end", () =>
+      run(
+        Effect.gen(function* () {
+          const summaries = yield* SummaryData;
+          const calls = yield* CallsData;
+          const proposals = yield* ProposalsData;
+          const records = yield* CallRecordsData;
+          const { call: finished, project } = yield* finishedCall;
+          const readProgress = yield* recordProgress;
+          const readChanges = yield* recordChanges;
+
+          yield* summaries.build(finished.id);
+          // A second start while it runs does nothing.
+          yield* summaries.build(finished.id);
+          const building = yield* summaries.get(finished.id);
+          assert.strictEqual(building.summary?.state, "building");
+          assert.strictEqual(building.building?.stage, "transcript");
+
+          yield* TestClock.adjust(MOCK_STAGE_MS * 5);
+          const progress = yield* readProgress;
+          assert.deepStrictEqual(
+            progress.map((item) => [item.stage, item.state.status]),
+            [
+              ["transcript", "running"],
+              ["transcript", "done"],
+              ["summary", "running"],
+              ["summary", "done"],
+              ["proposals", "running"],
+              ["proposals", "done"],
+              ["saving", "running"],
+              ["saving", "done"],
+            ]
+          );
+          assert.strictEqual(progress[0]?.counts, null);
+          const last = progress.at(-1);
+          assert.isTrue((last?.counts?.segments ?? 0) > 0);
+          assert.strictEqual(last?.counts?.proposals, 7);
+
+          const view = yield* summaries.get(finished.id);
+          assert.strictEqual(view.building, null);
+          assert.strictEqual(view.summary?.state, "ready");
+          // The call without a title is named after its summary.
+          assert.strictEqual(
+            (yield* calls.get(finished.id)).title,
+            view.summary?.title
+          );
+          const listed = yield* proposals.list(finished.id);
+          assert.strictEqual(listed.length, 7);
+          assert.isTrue(listed.every((item) => item.decision === "pending"));
+          assert.strictEqual(
+            (yield* records.cards(finished.id)).source,
+            "summary"
+          );
+          assert.strictEqual(
+            (yield* records.transcript(finished.id)).length,
+            1
+          );
+          // `building`, then the saved summary: the call's writes.
+          assert.deepStrictEqual(
+            (yield* readChanges).map((change) => [change.entity, change.id]),
+            [
+              ["call", finished.id],
+              ["call", finished.id],
+            ]
+          );
+          assert.strictEqual(project.id, finished.projectId);
+        })
+      )
+    );
+
+    it.effect("keeps the decided proposals and the summary on a rebuild", () =>
+      run(
+        Effect.gen(function* () {
+          const summaries = yield* SummaryData;
+          const proposals = yield* ProposalsData;
+          const before = yield* proposals.list(DEMO_CALL_ID);
+          const decided = before.filter((item) => item.decision !== "pending");
+          yield* summaries.build(DEMO_CALL_ID);
+          // A rebuild keeps the saved summary while it runs.
+          const running = yield* summaries.get(DEMO_CALL_ID);
+          assert.strictEqual(running.summary?.state, "building");
+          assert.isNotNull(running.summary?.content ?? null);
+          yield* TestClock.adjust(MOCK_STAGE_MS * 5);
+          const after = yield* proposals.list(DEMO_CALL_ID);
+          for (const item of decided) {
+            assert.deepStrictEqual(
+              after.find((known) => known.id === item.id),
+              item
+            );
+          }
+          // The pending ones are new, the decided ones not proposed again.
+          const pending = after.filter((item) => item.decision === "pending");
+          assert.strictEqual(pending.length, before.length - decided.length);
+          assert.isTrue(
+            pending.every((item) => !before.some((old) => old.id === item.id))
+          );
+        })
+      )
+    );
+
+    it.effect("stops a build: cancelled, failed, the old summary stays", () =>
+      run(
+        Effect.gen(function* () {
+          const summaries = yield* SummaryData;
+          const readProgress = yield* recordProgress;
+          const saved = (yield* summaries.get(DEMO_CALL_ID)).summary;
+          yield* summaries.build(DEMO_CALL_ID);
+          yield* TestClock.adjust(MOCK_STAGE_MS);
+          yield* summaries.cancel(DEMO_CALL_ID);
+          yield* TestClock.adjust(MOCK_STAGE_MS * 5);
+          const last = (yield* readProgress).at(-1);
+          assert.strictEqual(last?.stage, "summary");
+          assert.strictEqual(last?.state.status, "cancelled");
+          const view = yield* summaries.get(DEMO_CALL_ID);
+          assert.strictEqual(view.building, null);
+          assert.strictEqual(view.summary?.state, "failed");
+          assert.strictEqual(view.summary?.error, "cancelled");
+          assert.deepStrictEqual(view.summary?.content, saved?.content);
+        })
+      )
+    );
+  });
+
+  describe(`${name}: proposals`, () => {
+    it.effect("lists a call's proposals and a person's pending ones", () =>
+      run(
+        Effect.gen(function* () {
+          const proposals = yield* ProposalsData;
+          const listed = yield* proposals.list(DEMO_CALL_ID);
+          assert.deepStrictEqual(
+            listed.map((item) => [item.id, item.decision]),
+            [
+              ["operators", "accepted"],
+              ["channels", "pending"],
+              ["crm", "pending"],
+              ["understanding", "pending"],
+              ["temper", "rejected"],
+              ["role", "accepted"],
+              ["tech", "pending"],
+            ]
+          );
+          assert.deepStrictEqual(
+            (yield* proposals.forPerson("igor")).map((item) => item.id),
+            ["tech"]
+          );
+          assert.strictEqual(
+            yield* failureKind(proposals.list("nope")),
+            "NotFound"
+          );
+          assert.strictEqual(
+            yield* failureKind(proposals.forPerson("nope")),
+            "NotFound"
+          );
+        })
+      )
+    );
+
+    it.effect("applies an accepted profile proposal and undoes it", () =>
+      run(
+        Effect.gen(function* () {
+          const proposals = yield* ProposalsData;
+          const people = yield* PeopleData;
+          const before = yield* people.get("igor");
+          const readChanges = yield* recordChanges;
+
+          const accepted = yield* proposals.decide("tech", {
+            decision: "accepted",
+            edited: "  Сразу про API  ",
+          });
+          assert.strictEqual(accepted.decision, "accepted");
+          assert.strictEqual(accepted.edited, "Сразу про API");
+          assert.isNotNull(accepted.decidedAt);
+          assert.deepStrictEqual(accepted.applied, {
+            previous: (before.profile as { howToAsk: string }).howToAsk,
+            written: "Сразу про API",
+          });
+          const changed = yield* people.get("igor");
+          assert.strictEqual(
+            (changed.profile as { howToAsk: string }).howToAsk,
+            "Сразу про API"
+          );
+          assert.deepStrictEqual(
+            (yield* readChanges).map((change) => [change.entity, change.id]),
+            [
+              ["person", "igor"],
+              ["project", "telemedia"],
+              ["call", DEMO_CALL_ID],
+            ]
+          );
+          assert.strictEqual(
+            yield* failureKind(
+              proposals.decide("tech", { decision: "rejected" })
+            ),
+            "Invalid"
+          );
+
+          const pending = yield* proposals.undo("tech");
+          assert.strictEqual(pending.decision, "pending");
+          assert.strictEqual(pending.applied, null);
+          assert.strictEqual(pending.decidedAt, null);
+          assert.deepStrictEqual(
+            (yield* people.get("igor")).profile,
+            before.profile
+          );
+        })
+      )
+    );
+
+    it.effect("refuses to undo a field changed after it was accepted", () =>
+      run(
+        Effect.gen(function* () {
+          const proposals = yield* ProposalsData;
+          const people = yield* PeopleData;
+          yield* proposals.decide("tech", { decision: "accepted" });
+          const igor = yield* people.get("igor");
+          yield* people.update("igor", {
+            profile: { ...(igor.profile as object), howToAsk: "По-другому" },
+          });
+          const exit = yield* Effect.exit(proposals.undo("tech"));
+          assert.isTrue(Exit.isFailure(exit));
+          assert.include(JSON.stringify(exit), CHANGED_SINCE);
+          assert.strictEqual(
+            (yield* proposals.list(DEMO_CALL_ID)).find(
+              (item) => item.id === "tech"
+            )?.decision,
+            "accepted"
+          );
+          assert.strictEqual(
+            ((yield* people.get("igor")).profile as { howToAsk: string })
+              .howToAsk,
+            "По-другому"
+          );
+        })
+      )
+    );
+
+    it.effect("writes an accepted brief proposal into the notes", () =>
+      run(
+        Effect.gen(function* () {
+          const proposals = yield* ProposalsData;
+          const projects = yield* ProjectsData;
+          const before = yield* projects.get("telemedia");
+          assert.strictEqual(before.briefState, "fresh");
+          const accepted = yield* proposals.decide("channels", {
+            decision: "accepted",
+          });
+          const after = yield* projects.get("telemedia");
+          const line = accepted.applied?.written;
+          assert.strictEqual(line, `- 19.10.2026: ${accepted.after}`);
+          assert.strictEqual(after.notes, `${before.notes}\n${line}`);
+          // The notes are an input of the brief.
+          assert.strictEqual(after.briefState, "outdated");
+
+          yield* proposals.undo("channels");
+          assert.strictEqual(
+            (yield* projects.get("telemedia")).notes,
+            before.notes
+          );
+          // The seeded accepted one removes its own line and the section.
+          yield* proposals.undo("operators");
+          assert.strictEqual((yield* projects.get("telemedia")).notes, "");
+        })
+      )
+    );
+
+    it.effect(
+      "refuses notes over the limit, a bad level and changes nothing",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const proposals = yield* ProposalsData;
+            const projects = yield* ProjectsData;
+            const { tables } = yield* MockDatabase;
+            yield* projects.update("telemedia", {
+              notes: "я".repeat(NOTES_MAX_CHARS - 10),
+            });
+            const readChanges = yield* recordChanges;
+            assert.strictEqual(
+              yield* failureKind(
+                proposals.decide("channels", { decision: "accepted" })
+              ),
+              "Invalid"
+            );
+            const tech = tables.proposals.get("tech");
+            assert.isDefined(tech);
+            if (tech) {
+              tables.proposals.set("tech", { ...tech, field: "tech" });
+            }
+            assert.strictEqual(
+              yield* failureKind(
+                proposals.decide("tech", { decision: "accepted", edited: "7" })
+              ),
+              "Invalid"
+            );
+            assert.strictEqual(
+              yield* failureKind(
+                proposals.decide("tech", {
+                  decision: "accepted",
+                  edited: "   ",
+                })
+              ),
+              "Invalid"
+            );
+            const level = yield* proposals.decide("tech", {
+              decision: "accepted",
+              edited: "4",
+            });
+            assert.deepStrictEqual(level.applied?.written, 4);
+            // Only the last decision wrote anything.
+            assert.deepStrictEqual(
+              (yield* readChanges).map((change) => change.entity),
+              ["person", "project", "call"]
+            );
+            const listed = yield* proposals.list(DEMO_CALL_ID);
+            assert.strictEqual(
+              listed.find((item) => item.id === "channels")?.decision,
+              "pending"
+            );
+          })
+        )
+    );
+
+    it.effect("rejects without changing anything else", () =>
+      run(
+        Effect.gen(function* () {
+          const proposals = yield* ProposalsData;
+          const people = yield* PeopleData;
+          const olga = yield* people.get("olga");
+          const rejected = yield* proposals.decide("understanding", {
+            decision: "rejected",
+          });
+          assert.strictEqual(rejected.decision, "rejected");
+          assert.strictEqual(rejected.applied, null);
+          assert.deepStrictEqual(yield* people.get("olga"), olga);
+          assert.strictEqual(
+            yield* failureKind(
+              proposals.decide("understanding", { decision: "pending" })
+            ),
+            "Invalid"
+          );
+          assert.strictEqual(
+            (yield* proposals.undo("understanding")).decision,
+            "pending"
+          );
+          assert.strictEqual(
+            yield* failureKind(proposals.undo("understanding")),
+            "Invalid"
+          );
+          assert.strictEqual(
+            yield* failureKind(proposals.undo("nope")),
+            "NotFound"
+          );
+        })
+      )
+    );
+  });
+
+  describe(`${name}: call records`, () => {
+    it.effect("reads the recordings, questions and cards of a call", () =>
+      run(
+        Effect.gen(function* () {
+          const records = yield* CallRecordsData;
+          const [recording, ...others] =
+            yield* records.transcript(DEMO_CALL_ID);
+          assert.deepStrictEqual(others, []);
+          assert.strictEqual(recording?.pass, "refined");
+          assert.strictEqual(recording?.audioDeleted, false);
+          const starts = recording?.segments.map((item) => item.startMs) ?? [];
+          assert.deepStrictEqual(
+            starts,
+            [...starts].sort((a, b) => a - b)
+          );
+
+          const questions = yield* records.questions(DEMO_CALL_ID);
+          const answered = questions.find((item) => item.id === "operators");
+          assert.strictEqual(answered?.status, "answered");
+          assert.strictEqual(answered?.answer?.segmentId, "t-120415");
+          assert.strictEqual(answered?.moment?.recordingId, recording?.id);
+
+          const cards = yield* records.cards(DEMO_CALL_ID);
+          assert.strictEqual(cards.source, "summary");
+          assert.strictEqual(cards.next.length, 3);
+
+          const { call: fresh } = yield* finishedCall;
+          assert.deepStrictEqual(yield* records.cards(fresh.id), {
+            cards: [],
+            next: [],
+            source: "live",
+          });
+          assert.deepStrictEqual(yield* records.transcript(fresh.id), []);
+          const unknown: Effect.Effect<unknown, BackendError>[] = [
+            records.transcript("nope"),
+            records.questions("nope"),
+            records.cards("nope"),
+          ];
+          for (const read of unknown) {
+            assert.strictEqual(yield* failureKind(read), "NotFound");
+          }
+        })
+      )
+    );
+
+    it.effect("accepts and renames a card of the summary", () =>
+      run(
+        Effect.gen(function* () {
+          const records = yield* CallRecordsData;
+          const readChanges = yield* recordChanges;
+          const accepted = yield* records.updateCard(DEMO_CALL_ID, "calls", {
+            decision: "accepted",
+          });
+          assert.strictEqual(accepted.decision, "accepted");
+          assert.strictEqual(accepted.title, "Приём звонков");
+          const renamed = yield* records.updateCard(DEMO_CALL_ID, "calls", {
+            title: "  Очередь звонков ",
+          });
+          assert.strictEqual(renamed.title, "Очередь звонков");
+          assert.strictEqual(renamed.decision, "accepted");
+          const [card] = (yield* records.cards(DEMO_CALL_ID)).cards;
+          assert.deepStrictEqual(card, renamed);
+          assert.strictEqual((yield* readChanges).length, 2);
+          assert.strictEqual(
+            yield* failureKind(
+              records.updateCard(DEMO_CALL_ID, "calls", { title: " " })
+            ),
+            "Invalid"
+          );
+          assert.strictEqual(
+            yield* failureKind(
+              records.updateCard(DEMO_CALL_ID, "nope", { decision: "accepted" })
+            ),
+            "NotFound"
+          );
+        })
+      )
+    );
+
+    it.effect("deletes the audio and keeps the transcript", () =>
+      run(
+        Effect.gen(function* () {
+          const records = yield* CallRecordsData;
+          const calls = yield* CallsData;
+          const { project } = yield* finishedCall;
+          const live = yield* calls.create({ projectId: project.id });
+          assert.strictEqual(
+            yield* failureKind(records.deleteAudio(live.id)),
+            "Invalid"
+          );
+          const [recording] = yield* records.transcript(DEMO_CALL_ID);
+          const id = recording?.id ?? "";
+          assert.strictEqual((yield* records.peaks(id, 100)).me.length, 100);
+          assert.strictEqual(
+            yield* failureKind(records.peaks(id, 0)),
+            "Invalid"
+          );
+          assert.strictEqual(
+            yield* failureKind(records.peaks(id, 2001)),
+            "Invalid"
+          );
+
+          const readChanges = yield* recordChanges;
+          yield* records.deleteAudio(DEMO_CALL_ID);
+          yield* records.deleteAudio(DEMO_CALL_ID);
+          const [deleted] = yield* records.transcript(DEMO_CALL_ID);
+          assert.strictEqual(deleted?.audioDeleted, true);
+          assert.strictEqual(deleted?.meBytes, null);
+          assert.deepStrictEqual(deleted?.segments, recording?.segments);
+          assert.strictEqual(
+            yield* failureKind(records.peaks(id, 100)),
+            "NotFound"
+          );
+          // Only the first one deleted anything.
+          assert.strictEqual((yield* readChanges).length, 1);
+        })
+      )
+    );
+
+    it.effect(
+      "deletes a call's records with it, a person's proposals with them",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const calls = yield* CallsData;
+            const people = yield* PeopleData;
+            const proposals = yield* ProposalsData;
+            const summaries = yield* SummaryData;
+            const { tables } = yield* MockDatabase;
+            yield* people.remove("igor");
+            assert.isFalse(
+              [...tables.proposals.values()].some(
+                (item) => item.personId === "igor"
+              )
+            );
+            yield* calls.remove(DEMO_CALL_ID);
+            assert.strictEqual(
+              yield* failureKind(summaries.get(DEMO_CALL_ID)),
+              "NotFound"
+            );
+            assert.strictEqual(
+              yield* failureKind(proposals.list(DEMO_CALL_ID)),
+              "NotFound"
+            );
+            assert.isFalse(
+              [...tables.recordings.values()].some(
+                (item) => item.callId === DEMO_CALL_ID
+              )
+            );
+            assert.strictEqual(tables.summaries.has(DEMO_CALL_ID), false);
+          })
+        )
+    );
+  });
+
+  describe(`${name}: search`, () => {
+    it.effect("finds a term in titles, transcripts and summaries", () =>
+      run(
+        Effect.gen(function* () {
+          const calls = yield* CallsData;
+          const found = yield* calls.search("AMOCRM", null);
+          const demo = found.matches.filter(
+            (item) => item.callId === DEMO_CALL_ID
+          );
+          const segment = demo.find((item) => item.source === "segment");
+          assert.strictEqual(segment?.text, "amoCRM");
+          assert.strictEqual(segment?.channel, "others");
+          assert.strictEqual(segment?.moment?.segmentId, "t-122108");
+          assert.isNotNull(segment?.at ?? null);
+          assert.isTrue(demo.some((item) => item.source === "tldr"));
+          assert.isTrue(demo.some((item) => item.source === "fact"));
+          // Newest call first; within it the title, transcript, summary.
+          const order = ["title", "segment", "tldr", "point", "fact"];
+          const ranks = demo.map((item) => order.indexOf(item.source));
+          assert.deepStrictEqual(
+            ranks,
+            [...ranks].sort((a, b) => a - b)
+          );
+          assert.strictEqual(found.total, found.matches.length);
+          assert.deepStrictEqual(
+            found.projects.map((item) => [item.projectId, item.calls]),
+            [
+              ["lapa", 1],
+              ["telemedia", 3],
+            ]
+          );
+        })
+      )
+    );
+
+    it.effect(
+      "ignores case and «ё», and keeps the counts of every project",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const calls = yield* CallsData;
+            const yo = yield* calls.search("ВСЁ  операторы", null);
+            assert.strictEqual(yo.matches[0]?.text, "все операторы");
+            assert.strictEqual(yo.matches[0]?.source, "segment");
+            const said = yield* calls.search("пятеро.", null);
+            assert.strictEqual(said.matches[0]?.text, "Пятеро");
+            const lapa = yield* calls.search("amocrm", "lapa");
+            assert.isTrue(
+              lapa.matches.every((item) => item.projectId === "lapa")
+            );
+            assert.strictEqual(lapa.total, 1);
+            assert.strictEqual(lapa.projects.length, 2);
+            assert.deepStrictEqual(yield* calls.search("  —  ", null), {
+              matches: [],
+              projects: [],
+              total: 0,
+            });
+          })
+        )
+    );
+  });
+}
+
 dataContract("DataLayerMock", DataLayerMock);
+postCallContract("DataLayerMock", DataLayerMock);
 
 describe("SettingsData.layerMock", () => {
   it.effect("refuses ⌘ Space like a shortcut another app holds", () =>

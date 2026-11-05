@@ -123,6 +123,12 @@ export class PeopleData extends Context.Service<
       const remove = Effect.fnUntraced(function* (id: string) {
         const person = yield* get(id);
         tables.people.delete(id);
+        // Their proposals go with them (`ON DELETE CASCADE`).
+        for (const [proposalId, proposal] of tables.proposals) {
+          if (proposal.personId === id) {
+            tables.proposals.delete(proposalId);
+          }
+        }
         // They leave every call they took part in.
         for (const [callId, item] of tables.calls) {
           if (item.participantIds.includes(id)) {

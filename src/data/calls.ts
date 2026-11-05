@@ -5,11 +5,12 @@ import { useMemo } from "react";
 
 import type { Call, Value } from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
+import { PROPOSAL_GROUPS } from "@/features/post-call/mock";
 import { diffPatch } from "@/lib/merge-patch";
-
+import { deleteCallAudio, isCallAudioDeleted } from "./call-records";
 import { CallsData } from "./services/calls";
 import { MockDatabase } from "./services/mock-database";
-import { mockSeed, seedCallId } from "./services/mock-seed";
+import { DEMO_CALL_ID, mockSeed, seedCallId } from "./services/mock-seed";
 import { PeopleData } from "./services/people";
 import { createStore } from "./store";
 import { createSyncedStore } from "./synced-store";
@@ -18,11 +19,18 @@ import { createSyncedStore } from "./synced-store";
  * Finished calls: the history list and everything the user decides after a
  * call (proposals, task cards, the recording). Every finished call shows the
  * demo content of the Телемедиа call of 19 October; what differs per call is
- * the history row and the decisions stored here.
+ * the history row and the decisions kept here.
  *
- * The decisions live in the call's `summary` JSON (its shape belongs to
- * the frontend for now); dates, duration and the open count come from the
- * record. The summary build's progress is local to the window.
+ * The call's `summary` JSON (its shape belongs to the frontend) keeps the
+ * build state of the screens and the participants' names; dates, duration
+ * and the open count come from the record. The summary, proposals, task
+ * cards and recordings Rust keeps are read by `./summaries.ts`,
+ * `./proposals.ts` and `./call-records.ts`.
+ *
+ * Until the pages read those (post-call tasks 4.2–4.6), the decisions on the
+ * demo's proposals and cards and the deleted audio stay local to the
+ * window, seeded with the demo's (`reviewSeed`); «Удалить запись» also
+ * deletes the files (`call_audio_delete`).
  */
 
 /** How the screens name a call without a project. */
@@ -157,27 +165,11 @@ function formatDuration(ms: number) {
     : `${minutes}:${pad2(seconds)}`;
 }
 
-const Review = Schema.Struct({
-  decision: Schema.Literals(["pending", "accepted", "rejected"]),
-  text: Schema.optionalKey(Schema.String),
-});
-const Sync = Schema.Struct({
-  ref: Schema.optionalKey(Schema.String),
-  status: Schema.Literals(["sending", "sent"]),
-});
-const TaskReview = Schema.Struct({
-  decision: Schema.Literals(["pending", "accepted", "discarded"]),
-  sync: Schema.Record(Schema.String, Sync),
-  title: Schema.optionalKey(Schema.String),
-});
 /** The frontend's part of a call: `Call.summary`. */
 const CallSummary = Schema.Struct({
-  audioDeleted: Schema.optionalKey(Schema.Boolean),
   /** Names from the call session, for people the project doesn't have. */
   participants: Schema.optionalKey(Schema.String),
-  proposals: Schema.optionalKey(Schema.Record(Schema.String, Review)),
   summary: Schema.optionalKey(Schema.Literals(["processing", "ready"])),
-  tasks: Schema.optionalKey(Schema.Record(Schema.String, TaskReview)),
 });
 const decodeSummary = Schema.decodeUnknownOption(CallSummary);
 
@@ -205,7 +197,7 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
   });
   return {
     record: {
-      audioDeleted: summary.audioDeleted ?? false,
+      audioDeleted: false,
       date: `${start.getDate()} ${SHORT_MONTHS[month]}`,
       dateLabel: `${day}, ${time}`,
       day,
@@ -218,10 +210,10 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
       participantIds: call.participantIds,
       participants: summary.participants ?? people.join(", "),
       projectId: call.projectId,
-      proposals: { ...summary.proposals },
+      proposals: {},
       startedAt: start.getTime(),
       summary: summary.summary ?? "ready",
-      tasks: { ...summary.tasks } as Record<string, TaskCardReview>,
+      tasks: {},
       time,
       title: call.title,
     },
@@ -294,16 +286,49 @@ const callsStore = createSyncedStore({
 });
 
 /*
- * Local to the window: the progress of a summary build, and the project
- * the start widget picked for the demo call (the demo records it under
- * Телемедиа; a call record can't change its project).
+ * Local to the window: the progress of a summary build, the project the
+ * start widget picked for the demo call (the demo records it under
+ * Телемедиа; a call record can't change its project), and the decisions
+ * of the demo's proposals and cards and the deleted audio, until the pages
+ * read the backend's.
  */
 interface LocalCall {
+  audioDeleted?: boolean;
   projectId?: string;
+  proposals?: Record<string, ProposalReview>;
   summaryProgress?: SummaryProgress;
+  tasks?: Record<string, TaskCardReview>;
 }
 
-const localStore = createStore<Record<string, LocalCall>>({});
+/**
+ * The demo's decisions: the current call keeps the Paper states of its
+ * proposals, older calls were reviewed already (their pending proposals
+ * accepted); the history's «аудио удалено» calls have no audio.
+ */
+function reviewSeed(): Record<string, LocalCall> {
+  const seed = mockSeed();
+  const local: Record<string, LocalCall> = {};
+  for (const call of seed.calls) {
+    const reviewed = call.id !== DEMO_CALL_ID;
+    const proposals: Record<string, ProposalReview> = {};
+    for (const group of PROPOSAL_GROUPS) {
+      for (const proposal of group.proposals) {
+        let decision: ProposalDecision = reviewed ? "accepted" : "pending";
+        if (proposal.state === "accepted" || proposal.state === "rejected") {
+          decision = proposal.state;
+        }
+        proposals[proposal.id] = { decision };
+      }
+    }
+    const audioDeleted = seed.recordings.some(
+      (item) => item.callId === call.id && item.recording.audioDeleted
+    );
+    local[call.id] = { audioDeleted, proposals, tasks: {} };
+  }
+  return local;
+}
+
+const localStore = createStore<Record<string, LocalCall>>(reviewSeed());
 
 function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
   return entries.map(({ record }) => {
@@ -313,8 +338,11 @@ function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
     }
     return {
       ...record,
+      audioDeleted: extra.audioDeleted ?? record.audioDeleted,
       projectId: extra.projectId ?? record.projectId,
+      proposals: extra.proposals ?? record.proposals,
       summaryProgress: extra.summaryProgress,
+      tasks: extra.tasks ?? record.tasks,
     };
   });
 }
@@ -423,15 +451,20 @@ export function setSummaryProgress(
   }));
 }
 
+/** The demo's decision on a proposal, local to the window (see above). */
 export function setProposalDecision(
   id: string,
   proposalId: string,
   review: ProposalReview
 ) {
-  return updateSummary(id, (summary) => ({
-    ...summary,
-    proposals: { ...summary.proposals, [proposalId]: review },
+  localStore.set((local) => ({
+    ...local,
+    [id]: {
+      ...local[id],
+      proposals: { ...local[id]?.proposals, [proposalId]: review },
+    },
   }));
+  return Promise.resolve();
 }
 
 const NEW_TASK_CARD: TaskCardReview = { decision: "pending", sync: {} };
@@ -440,30 +473,42 @@ export function getTaskCardReview(call: CallRecord, cardId: string) {
   return call.tasks[cardId] ?? NEW_TASK_CARD;
 }
 
+/** The demo's decision on a task card, local to the window (see above). */
 export function updateTaskCard(
   id: string,
   cardId: string,
   update: (review: TaskCardReview) => TaskCardReview
 ) {
-  return updateSummary(
-    id,
-    (summary) => {
-      const tasks = { ...summary.tasks } as Record<string, TaskCardReview>;
-      return {
-        ...summary,
+  localStore.set((local) => {
+    const tasks = local[id]?.tasks ?? {};
+    return {
+      ...local,
+      [id]: {
+        ...local[id],
         tasks: { ...tasks, [cardId]: update(tasks[cardId] ?? NEW_TASK_CARD) },
-      };
-    },
-    "Не удалось сохранить карточку задачи"
-  );
+      },
+    };
+  });
+  return Promise.resolve();
 }
 
+/**
+ * «Удалить запись»: deletes the audio of every recording of the call
+ * (`call_audio_delete`); the call reads `audioDeleted` once it is done.
+ */
 export function deleteRecording(id: string) {
-  return updateSummary(
-    id,
-    (summary) => ({ ...summary, audioDeleted: true }),
-    "Не удалось удалить запись"
-  );
+  const deleted = deleteCallAudio(id);
+  // The mock deletes before this returns, as the screens' tests expect.
+  if (!inTauri && isCallAudioDeleted(id)) {
+    setLocal(id, { audioDeleted: true });
+    return deleted;
+  }
+  return deleted.then((done) => {
+    if (done) {
+      setLocal(id, { audioDeleted: true });
+    }
+    return done;
+  });
 }
 
 /** Proposals still waiting for a decision. */
@@ -494,7 +539,7 @@ export async function deleteCallsWithoutProject() {
 
 /** Back to the demo history (tests, the dev navigator). Mock only. */
 export function resetCalls() {
-  localStore.set({});
+  localStore.set(reviewSeed());
   const database = appRuntime.runSync(Effect.serviceOption(MockDatabase));
   if (Option.isSome(database)) {
     appRuntime.runSync(database.value.resetCalls);

@@ -84,6 +84,8 @@ export interface MutateOptions {
 
 export interface SyncedStore<T, R> {
   readonly get: () => T;
+  /** What the static export was prerendered with. */
+  readonly getServerState: () => Synced<T>;
   readonly getState: () => Synced<T>;
   /**
    * Runs a write. Resolves to its result, or `undefined` when it failed
@@ -347,6 +349,7 @@ export function createSyncedStore<T, R>(
 
   return {
     get,
+    getServerState,
     getState,
     mutate,
     refresh,
@@ -354,4 +357,39 @@ export function createSyncedStore<T, R>(
     use: () => useSyncExternalStore(subscribe, get, getServerData),
     useState: () => useSyncExternalStore(subscribe, getState, getServerState),
   };
+}
+
+/**
+ * One synced store per key (a call, a person), made when the key is first
+ * used and kept: the per-call reads of the post-call pages.
+ */
+export function createSyncedStores<T, R>(
+  options: (key: string) => SyncedStoreOptions<T, R>
+): (key: string) => SyncedStore<T, R> {
+  const stores = new Map<string, SyncedStore<T, R>>();
+  return (key) => {
+    let store = stores.get(key);
+    if (!store) {
+      store = createSyncedStore(options(key));
+      stores.set(key, store);
+    }
+    return store;
+  };
+}
+
+const subscribeToNothing = () => () => undefined;
+
+/**
+ * The state of `store` for components; `fallback` without one (no key
+ * yet, e.g. before the search params are read).
+ */
+export function useSyncedState<T, R>(
+  store: SyncedStore<T, R> | undefined,
+  fallback: Synced<T>
+): Synced<T> {
+  return useSyncExternalStore(
+    store?.subscribe ?? subscribeToNothing,
+    store?.getState ?? (() => fallback),
+    store?.getServerState ?? (() => fallback)
+  );
 }
