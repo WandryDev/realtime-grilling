@@ -113,6 +113,10 @@ pub struct ProposalApplied {
     pub written: Value,
     /// The value before; `null` when there was none (or for the notes).
     pub previous: Option<Value>,
+    /// For the notes: the accept added the «Из звонков» heading, so the
+    /// undo that empties the section removes it too.
+    #[serde(default)]
+    pub section_added: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -510,6 +514,7 @@ mod tests {
         let applied = ProposalApplied {
             written: json!(5),
             previous: Some(json!(3)),
+            section_added: false,
         };
         let accept = DecisionChange {
             decision: ProposalDecision::Accepted,

@@ -1380,6 +1380,11 @@ export type ProposalApplied = {
 	written: Value,
 	/**  The value before; `null` when there was none (or for the notes). */
 	previous: Value | null,
+	/**
+	 *  For the notes: the accept added the «Из звонков» heading, so the
+	 *  undo that empties the section removes it too.
+	 */
+	sectionAdded?: boolean,
 };
 
 /**

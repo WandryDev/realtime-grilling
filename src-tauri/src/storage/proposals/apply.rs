@@ -8,12 +8,14 @@
 //!   (1–5), `howToAsk`, `notes` and `portrait:<label>` are keys of the
 //!   `profile` JSON, written read-modify-write. `applied` keeps the value
 //!   written and the one before it.
-//! - **Brief.** The line `- <call date>: <text>` goes under `## Из звонков`
-//!   in the project's notes (the section is added when missing). The notes
-//!   are part of the brief's fingerprint (`brief_inputs`), so a fresh brief
-//!   reads as `outdated` from then on; so do the people.
+//! - **Brief.** The line `- <call date> (<field>): <text>` (`- 05.11.2026
+//!   (глоссарий): USD МІКС — …`) goes under the heading «Из звонков» of the
+//!   project's notes (`## Из звонков` is added when there is none). The
+//!   notes are part of the brief's fingerprint (`brief_inputs`), so a fresh
+//!   brief reads as `outdated` from then on; so do the people.
 //! - **Undo** puts the previous value back only while the field still holds
-//!   what was written (for the notes: removes exactly that line), else
+//!   what was written (for the notes: removes exactly that line from that
+//!   section, and the heading only when the accept added it), else
 //!   `Invalid` «Поле изменили после принятия» and nothing changes.
 
 use rusqlite::Connection;
@@ -32,8 +34,11 @@ use crate::{
     },
 };
 
-/// The heading of the notes' section the accepted brief proposals go to.
+/// The heading of the notes' section the accepted brief proposals go to,
+/// as it is added.
 pub const NOTES_SECTION: &str = "## Из звонков";
+/// Its text: a heading of any level with it is the section.
+const SECTION_TITLE: &str = "Из звонков";
 
 /// A level of the profile: 1–5.
 const LEVELS: std::ops::RangeInclusive<u8> = 1..=5;
@@ -188,54 +193,91 @@ fn local_date(ms: i64) -> String {
         .unwrap_or_default()
 }
 
-/// The notes line of an accepted brief proposal: one line, whatever the
-/// text's line breaks.
-fn notes_line(date: &str, text: &str) -> String {
+/// How the notes line names a field of the brief.
+fn field_label(field: &str) -> Option<&'static str> {
+    match field {
+        "product" => Some("продукт"),
+        "stack" => Some("стек"),
+        "modules" => Some("модули"),
+        "glossary" => Some("глоссарий"),
+        _ => None,
+    }
+}
+
+/// The notes line of an accepted brief proposal, `- 05.11.2026
+/// (глоссарий): …`: one line, whatever the text's line breaks.
+fn notes_line(date: &str, field: &str, text: &str) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!("- {date}: {text}")
+    match field_label(field) {
+        Some(label) => format!("- {date} ({label}): {text}"),
+        None => format!("- {date}: {text}"),
+    }
 }
 
-fn is_heading(line: &str) -> bool {
-    line.trim_start().starts_with('#')
+/// The text of a Markdown heading (`#` to `######`, then a space or the
+/// end); `None` for any other line («#важно» is not one).
+fn heading_text(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let level = line.chars().take_while(|&c| c == '#').count();
+    let rest = &line[level..];
+    let spaced = rest.is_empty() || rest.starts_with(char::is_whitespace);
+    ((1..=6).contains(&level) && spaced).then(|| rest.trim())
 }
 
-/// The range of lines of the `## Из звонков` section after its heading.
+/// The heading of the «Из звонков» section (any level) and the end of the
+/// section: the next heading, or the end of the notes.
 fn section(lines: &[&str]) -> Option<(usize, usize)> {
-    let heading = lines.iter().position(|line| line.trim() == NOTES_SECTION)?;
+    let heading = lines
+        .iter()
+        .position(|line| heading_text(line) == Some(SECTION_TITLE))?;
     let end = lines[heading + 1..]
         .iter()
-        .position(|line| is_heading(line))
+        .position(|line| heading_text(line).is_some())
         .map_or(lines.len(), |offset| heading + 1 + offset);
     Some((heading, end))
 }
 
-/// `notes` with `line` at the end of the `## Из звонков` section, the
-/// section added at the end when there is none.
-pub fn with_line(notes: &str, line: &str) -> String {
+/// The notes' line break: CRLF notes stay CRLF.
+fn newline_of(notes: &str) -> &'static str {
+    if notes.contains("\r\n") { "\r\n" } else { "\n" }
+}
+
+/// `notes` with `line` at the end of the «Из звонков» section, and whether
+/// the section was added (at the end, as [`NOTES_SECTION`]) for it.
+pub fn with_line(notes: &str, line: &str) -> (String, bool) {
+    let newline = newline_of(notes);
     let mut lines: Vec<&str> = notes.lines().collect();
     let Some((heading, end)) = section(&lines) else {
         let notes = notes.trim_end();
-        return if notes.trim().is_empty() {
-            format!("{NOTES_SECTION}\n{line}")
+        let added = if notes.trim().is_empty() {
+            format!("{NOTES_SECTION}{newline}{line}")
         } else {
-            format!("{notes}\n\n{NOTES_SECTION}\n{line}")
+            format!("{notes}{newline}{newline}{NOTES_SECTION}{newline}{line}")
         };
+        return (added, true);
     };
     let last = (heading + 1..end)
         .rev()
         .find(|&index| !lines[index].trim().is_empty())
         .unwrap_or(heading);
     lines.insert(last + 1, line);
-    lines.join("\n")
+    (lines.join(newline), false)
 }
 
-/// `notes` without the last line equal to `line`; `None` when there is no
-/// such line. A `## Из звонков` section left empty goes too.
-pub fn without_line(notes: &str, line: &str) -> Option<String> {
+/// `notes` without the last line of the «Из звонков» section equal to
+/// `line`; `None` when the section has no such line. When the accept added
+/// the section (`section_added`) and it is left empty, its heading goes too;
+/// a heading the manager wrote stays.
+pub fn without_line(notes: &str, line: &str, section_added: bool) -> Option<String> {
+    let newline = newline_of(notes);
     let mut lines: Vec<&str> = notes.lines().collect();
-    let index = lines.iter().rposition(|known| known.trim_end() == line)?;
+    let (heading, end) = section(&lines)?;
+    let index = (heading + 1..end)
+        .rev()
+        .find(|&index| lines[index].trim_end() == line)?;
     lines.remove(index);
-    if let Some((heading, end)) = section(&lines)
+    let end = end - 1;
+    if section_added
         && lines[heading + 1..end]
             .iter()
             .all(|line| line.trim().is_empty())
@@ -246,7 +288,24 @@ pub fn without_line(notes: &str, line: &str) -> Option<String> {
             lines.pop();
         }
     }
-    Some(lines.join("\n"))
+    Some(lines.join(newline))
+}
+
+/// Whether the notes already hold `text` as the line of an accepted brief
+/// proposal (`- <date> (<field>): <text>`, or without the field), compared
+/// as `evidence::normalize` does.
+pub fn noted(notes: &str, text: &str) -> bool {
+    let wanted = crate::agent::fast_loop::evidence::normalize(text);
+    !wanted.is_empty()
+        && notes.lines().any(|line| {
+            line.trim_start()
+                .strip_prefix("- ")
+                .and_then(|rest| rest.split_once(": "))
+                .filter(|(date, _)| date.starts_with(|c: char| c.is_ascii_digit()))
+                .is_some_and(|(_, noted)| {
+                    crate::agent::fast_loop::evidence::normalize(noted) == wanted
+                })
+        })
 }
 
 fn set_notes(
@@ -338,16 +397,24 @@ fn apply(
             let written = profile_value(field, text)?;
             let previous = current_value(&person, field);
             let events = write_value(connection, &person, field, Some(written.clone()))?;
-            Ok((ProposalApplied { written, previous }, events))
+            let applied = ProposalApplied {
+                written,
+                previous,
+                section_added: false,
+            };
+            Ok((applied, events))
         }
         ProposalTarget::Brief => {
             let project_id = project_of(connection, proposal)?;
             let project = projects::get(connection, &project_id)?;
-            let line = notes_line(&call_date(connection, &proposal.call_id)?, text);
-            let events = set_notes(connection, &project_id, with_line(&project.notes, &line))?;
+            let date = call_date(connection, &proposal.call_id)?;
+            let line = notes_line(&date, &proposal.field, text);
+            let (notes, section_added) = with_line(&project.notes, &line);
+            let events = set_notes(connection, &project_id, notes)?;
             let applied = ProposalApplied {
                 written: Value::String(line),
                 previous: None,
+                section_added,
             };
             Ok((applied, events))
         }
@@ -405,7 +472,7 @@ fn revert(
             let notes = applied
                 .written
                 .as_str()
-                .and_then(|line| without_line(&project.notes, line))
+                .and_then(|line| without_line(&project.notes, line, applied.section_added))
                 .ok_or_else(|| CommandError::invalid(CHANGED_SINCE))?;
             set_notes(connection, &project_id, notes)
         }

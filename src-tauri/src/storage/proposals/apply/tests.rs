@@ -164,8 +164,8 @@ fn invalid<T: std::fmt::Debug>(result: CommandResult<T>) -> String {
     }
 }
 
-fn line(text: &str) -> String {
-    notes_line(&local_date(CALL_AT), text)
+fn line(field: &str, text: &str) -> String {
+    notes_line(&local_date(CALL_AT), field, text)
 }
 
 /// `knowledge-proposals`, "Принять по профилю".
@@ -187,6 +187,7 @@ fn accepting_a_profile_proposal_changes_the_field() {
         Some(ProposalApplied {
             written: json!(4),
             previous: Some(json!(3)),
+            section_added: false,
         })
     );
     let person = fx.person();
@@ -279,12 +280,12 @@ fn accepting_a_brief_proposal_adds_a_line_to_the_notes() {
     let stack = fx.propose(ProposalTarget::Brief, "stack", "Laravel");
 
     let accepted = fx.accept(&term.id, None).unwrap();
-    let first = line("USD МІКС — смешанная касса в долларах");
+    let first = line("glossary", "USD МІКС — смешанная касса в долларах");
     let date = local_date(CALL_AT);
     assert!(date.ends_with(".11.2026") && date.len() == 10, "{date}");
     assert_eq!(
         first,
-        format!("- {date}: USD МІКС — смешанная касса в долларах")
+        format!("- {date} (глоссарий): USD МІКС — смешанная касса в долларах")
     );
     assert_eq!(
         fx.notes(),
@@ -295,6 +296,7 @@ fn accepting_a_brief_proposal_adds_a_line_to_the_notes() {
         Some(ProposalApplied {
             written: Value::String(first.clone()),
             previous: None,
+            section_added: true,
         })
     );
     // The notes are in the brief's fingerprint: "мог устареть".
@@ -305,7 +307,7 @@ fn accepting_a_brief_proposal_adds_a_line_to_the_notes() {
         fx.notes(),
         format!(
             "Клиент любит конкретику.\n\n{NOTES_SECTION}\n{first}\n{}",
-            line("Laravel")
+            line("stack", "Laravel")
         )
     );
 }
@@ -315,34 +317,102 @@ fn the_line_goes_to_the_end_of_an_existing_section() {
     let notes = format!("# Заметки\n{NOTES_SECTION}\n- старое\n\n## Другое\nтекст");
     assert_eq!(
         with_line(&notes, "- новое"),
-        format!("# Заметки\n{NOTES_SECTION}\n- старое\n- новое\n\n## Другое\nтекст")
+        (
+            format!("# Заметки\n{NOTES_SECTION}\n- старое\n- новое\n\n## Другое\nтекст"),
+            false
+        )
     );
     assert_eq!(
         with_line("", "- новое"),
-        format!("{NOTES_SECTION}\n- новое")
+        (format!("{NOTES_SECTION}\n- новое"), true)
     );
     assert_eq!(
         with_line(&format!("{NOTES_SECTION}\n"), "- новое"),
-        format!("{NOTES_SECTION}\n- новое")
+        (format!("{NOTES_SECTION}\n- новое"), false)
     );
 
-    // Undo removes exactly that line; a section left empty goes too.
-    let added = with_line("Текст", "- новое");
-    assert_eq!(without_line(&added, "- новое").as_deref(), Some("Текст"));
+    // Undo removes exactly that line; a section it added and left empty
+    // goes too.
+    let (added, section_added) = with_line("Текст", "- новое");
+    assert!(section_added);
+    assert_eq!(
+        without_line(&added, "- новое", true).as_deref(),
+        Some("Текст")
+    );
     let two = format!("{NOTES_SECTION}\n- старое\n- новое\n\n## Другое\nтекст");
     assert_eq!(
-        without_line(&two, "- новое").unwrap(),
+        without_line(&two, "- новое", false).unwrap(),
         format!("{NOTES_SECTION}\n- старое\n\n## Другое\nтекст")
     );
     assert_eq!(
         without_line(
             &format!("А\n\n{NOTES_SECTION}\n- новое\n\n## Другое"),
-            "- новое"
+            "- новое",
+            true
         )
         .unwrap(),
         "А\n\n## Другое"
     );
-    assert_eq!(without_line("Текст", "- новое"), None);
+    assert_eq!(without_line("Текст", "- новое", true), None);
+}
+
+/// L1, L2: the section is a heading of any level with that text («#важно»
+/// is no heading); the undo looks only inside it and keeps a heading the
+/// manager wrote; CRLF notes stay CRLF.
+#[test]
+fn the_section_is_found_and_kept_as_the_manager_wrote_it() {
+    // A line equal to the written one outside the section stays.
+    let notes = "- новое\n\n### Из звонков\n#важно\n- новое\n\n## Другое";
+    let (with, added) = with_line("### Из звонков\n#важно\n\n## Другое", "- новое");
+    assert!(!added, "a level-3 heading is the section");
+    assert_eq!(with, "### Из звонков\n#важно\n- новое\n\n## Другое");
+    assert_eq!(
+        without_line(notes, "- новое", false).unwrap(),
+        "- новое\n\n### Из звонков\n#важно\n\n## Другое"
+    );
+    assert_eq!(
+        without_line("- новое\n\n## Другое", "- новое", false),
+        None,
+        "no section, no line of it"
+    );
+    // The manager's heading stays when the section is left empty.
+    assert_eq!(
+        without_line(&format!("{NOTES_SECTION}\n- новое"), "- новое", false).unwrap(),
+        NOTES_SECTION
+    );
+    // CRLF.
+    let (crlf, _) = with_line("Текст\r\nещё", "- новое");
+    assert_eq!(
+        crlf,
+        format!("Текст\r\nещё\r\n\r\n{NOTES_SECTION}\r\n- новое")
+    );
+    assert_eq!(
+        without_line(&crlf, "- новое", true).as_deref(),
+        Some("Текст\r\nещё")
+    );
+}
+
+/// L3 and M2: the line names the field, and a text already noted is found
+/// whichever field or date it was noted with.
+#[test]
+fn the_notes_line_names_the_field() {
+    assert_eq!(
+        notes_line("05.11.2026", "glossary", "USD МІКС —\nкасса"),
+        "- 05.11.2026 (глоссарий): USD МІКС — касса"
+    );
+    assert_eq!(
+        notes_line("05.11.2026", "stack", "Laravel"),
+        "- 05.11.2026 (стек): Laravel"
+    );
+    let notes =
+        format!("{NOTES_SECTION}\n- 05.11.2026 (глоссарий): USD МІКС — касса\n- 04.11.2026: Redis");
+    assert!(noted(&notes, "usd мікс — Касса"));
+    assert!(noted(&notes, "Redis"));
+    assert!(!noted(&notes, "USD МІКС"));
+    assert!(
+        !noted("USD МІКС — касса", "USD МІКС — касса"),
+        "not a line of a proposal"
+    );
 }
 
 /// `knowledge-proposals`: "Заметки длиннее лимита MUST NOT сохраняться".
