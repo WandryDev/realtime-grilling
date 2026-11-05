@@ -46,8 +46,13 @@ export const routes = {
   /** A finished call: summary, task cards, proposals, transcript. */
   callSummary: (id: string) => withQuery("/calls/summary", { id }),
   callTasks: (id: string) => withQuery("/calls/tasks", { id }),
-  callTranscript: (id: string, moment?: string) =>
-    withQuery("/calls/transcript", { id, moment }),
+  /** With `play`, the player starts at the moment («Послушать»). */
+  callTranscript: (id: string, moment?: string, play?: boolean) =>
+    withQuery("/calls/transcript", {
+      id,
+      moment,
+      play: play ? "1" : undefined,
+    }),
 
   /** All calls, or the calls of one project. */
   history: (projectId?: string) =>

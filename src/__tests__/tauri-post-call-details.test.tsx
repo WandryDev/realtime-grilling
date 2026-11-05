@@ -72,13 +72,33 @@ const ANSWER = /Подрядчик держит amoCRM/u;
 const FIRST_PART = /Часть 1/u;
 const SECOND_PART = /Часть 2/u;
 const QUESTION = /Кто администрирует amoCRM/u;
+const LATE_QUESTION = /Когда запуск/u;
+const TASK_CARDS_NAV = /^Карточки задач/u;
+const play = () => vi.mocked(HTMLMediaElement.prototype.play);
+
+/**
+ * Calls of their own for the tests below: the per-call stores live on
+ * between tests, so each opens a call no other test read.
+ */
+const OWN_CALLS = Array.from(
+  { length: 8 },
+  (_, index) => `019a0000-0000-7000-8000-0000000001${index}0`
+);
+let ownCalls = 0;
+function ownCall() {
+  const id = OWN_CALLS[ownCalls] ?? "";
+  ownCalls += 1;
+  return id;
+}
 
 fake.db.projects.push(fakeProject(PROJECT, "Телемедиа"));
-fake.db.calls.push({
-  ...fakeCall(CALL, PROJECT, "Созвон про CRM"),
-  endedAt: RESUMED + 60_000,
-  startedAt: STARTED,
-});
+for (const id of [CALL, ...OWN_CALLS]) {
+  fake.db.calls.push({
+    ...fakeCall(id, PROJECT, "Созвон про CRM"),
+    endedAt: RESUMED + 60_000,
+    startedAt: STARTED,
+  });
+}
 
 const segment = (
   recordingId: string,
@@ -146,6 +166,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  play().mockClear();
   recordings = [
     recording(FIRST, STARTED, [
       segment(FIRST, "s1", "me", 2000, "Кто у вас администрирует amoCRM?"),
@@ -159,6 +180,11 @@ beforeEach(() => {
   fake.answers.clear();
   fake.answers.set("call_transcript", () => recordings);
   fake.answers.set("call_questions", () => [question]);
+  fake.answers.set("call_cards", () => ({
+    cards: [],
+    next: [],
+    source: "live",
+  }));
   fake.answers.set("summary_get", () => NO_SUMMARY);
   fake.answers.set("proposals_list", () => []);
   fake.answers.set("recording_peaks", () => ({
@@ -249,6 +275,177 @@ describe("call details in Tauri", () => {
     );
     expect(within(moment).getByText(ANSWER)).toBeTruthy();
     expect(channelElement("others").currentTime).toBe(5);
+  });
+
+  it("jumps to a moment of a longer part at its time, not clamped to the part shown", async () => {
+    const user = userEvent.setup();
+    const long = 20 * 60_000;
+    recordings = [
+      recordings[0] as CallRecording,
+      {
+        ...recording(SECOND, RESUMED, [
+          segment(SECOND, "s3", "others", 1000, "Вернулись к срокам."),
+          segment(SECOND, "s4", "others", 720_000, "Запуск в марте."),
+        ]),
+        durationMs: long,
+        endedAt: RESUMED + long,
+      },
+    ];
+    fake.answers.set("call_questions", () => [
+      question,
+      {
+        ...question,
+        answer: { recordingId: SECOND, segmentId: "s4", startMs: 720_000 },
+        id: "019a0000-0000-7000-8000-0000000000q2",
+        moment: { recordingId: SECOND, segmentId: "s3", startMs: 1000 },
+        recordingId: SECOND,
+        text: "Когда запуск?",
+      },
+    ]);
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    // The first part (a minute) is shown; the answer is at 12:00 of the second.
+    await user.click(
+      await screen.findByRole("button", { name: LATE_QUESTION })
+    );
+    await waitFor(() =>
+      expect(channelElement("others").getAttribute("src")).toBe(
+        `grill-audio://localhost/${SECOND}/others?format=wav`
+      )
+    );
+    expect(channelElement("others").currentTime).toBe(720);
+    expect(channelElement("me").currentTime).toBe(720);
+    expect(
+      within(screen.getByRole("region", { name: "Запись звонка" })).getByText(
+        "12:00"
+      )
+    ).toBeTruthy();
+  });
+
+  it("plays a recording without the «Остальные» file from «Вы» alone", async () => {
+    const user = userEvent.setup();
+    recordings = [{ ...(recordings[0] as CallRecording), othersBytes: null }];
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    expect(await screen.findByText(ANSWER)).toBeTruthy();
+    expect(channelElement("me").getAttribute("src")).toBe(
+      `grill-audio://localhost/${FIRST}/me?format=wav`
+    );
+    expect(document.querySelector('audio[data-channel="others"]')).toBeNull();
+    // One channel: nothing to pick.
+    expect(screen.queryByRole("button", { name: "Оба канала" })).toBeNull();
+    expect(
+      screen.getByText("Opus, 1 канал, 0,4 МБ. В облако не выгружается.")
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Слушать" }));
+    expect(play()).toHaveBeenCalledTimes(1);
+    expect(play().mock.instances[0]).toBe(channelElement("me"));
+    expect(screen.getByRole("button", { name: "Пауза" })).toBeTruthy();
+    expect(channelElement("me").muted).toBe(false);
+  });
+
+  it("«Послушать» (`play=1`) plays from the moment once it stands there", async () => {
+    search = new URLSearchParams({
+      id: CALL,
+      moment: `${FIRST}@5000@s2`,
+      play: "1",
+    });
+    render(<TranscriptPage />);
+
+    expect(await screen.findByRole("button", { name: "Пауза" })).toBeTruthy();
+    expect(channelElement("others").currentTime).toBe(5);
+    // Both channels start: the lead and its follower.
+    expect(play().mock.instances).toEqual([
+      channelElement("others"),
+      channelElement("me"),
+    ]);
+  });
+
+  it("opens the moment without playing it without `play=1`", async () => {
+    search = new URLSearchParams({ id: ownCall(), moment: `${FIRST}@5000@s2` });
+    render(<TranscriptPage />);
+
+    expect(await screen.findByRole("button", { name: "Слушать" })).toBeTruthy();
+    expect(channelElement("others").currentTime).toBe(5);
+    expect(play()).not.toHaveBeenCalled();
+  });
+
+  it("offers no playing while nothing can play: loading, a recording being written", async () => {
+    let answer: (value: CallRecording[]) => void = () => undefined;
+    fake.answers.set(
+      "call_transcript",
+      () =>
+        new Promise<CallRecording[]>((resolve) => {
+          answer = resolve;
+        })
+    );
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    const toggle = (await screen.findByRole("button", {
+      name: "Слушать",
+    })) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(screen.queryByRole("slider", { name: "Позиция записи" })).toBeNull();
+
+    // Still being written: no length yet, nothing to play.
+    answer([
+      {
+        ...(recordings[0] as CallRecording),
+        durationMs: null,
+        endedAt: null,
+      },
+    ]);
+    expect(await screen.findByText(ANSWER)).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Слушать" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    expect(document.querySelector("audio")).toBeNull();
+  });
+
+  it("says the position as time, names the parts menu, loads only metadata", async () => {
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    const position = await screen.findByRole("slider", {
+      name: "Позиция записи",
+    });
+    expect(position.getAttribute("aria-valuetext")).toBe("0:00 из 1:00");
+    expect(
+      screen.getByRole("button", { name: "Часть записи: Часть 1, 12:00" })
+    ).toBeTruthy();
+    expect(channelElement("others").getAttribute("preload")).toBe("metadata");
+    expect(channelElement("me").getAttribute("preload")).toBe("metadata");
+  });
+
+  it("counts the call's own task cards in the sidebar", async () => {
+    const card = {
+      decision: "pending" as const,
+      fields: [],
+      id: "card",
+      title: "CRM",
+      topicId: "topic",
+    };
+    fake.answers.set("call_cards", () => ({
+      cards: [card, { ...card, id: "card-2" }, { ...card, id: "card-3" }],
+      next: [],
+      source: "live",
+    }));
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    const sections = await screen.findByRole("navigation", {
+      name: "Разделы звонка",
+    });
+    await waitFor(() =>
+      expect(
+        within(sections).getByRole("link", { name: TASK_CARDS_NAV }).textContent
+      ).toBe("Карточки задач3")
+    );
   });
 
   it("deletes the audio of every recording, the transcript stays", async () => {

@@ -31,8 +31,8 @@ import { APP_WINDOW, CallPageFrame } from "./call-page-frame";
  * saved summary's cards with their facts, or before a summary (or after a
  * failed one) the cards the fast loop made during the call. Every card is
  * stacked with its seven lenses, the topic pills scroll to them, a source
- * opens its quote; «Послушать» and «Открыть в расшифровке» open the
- * details page at the phrase. A card is accepted, renamed, discarded and
+ * opens its quote; «Открыть в расшифровке» opens the details page at the
+ * phrase, «Послушать» also plays it from there. A card is accepted, renamed, discarded and
  * brought back through `call_card_update`; sending to ClickUp or GitHub
  * is «скоро».
  */
@@ -108,10 +108,12 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
     setExpandedFactId((current) => (current === factId ? null : factId));
   }, []);
 
-  // «Послушать»: the details page at the phrase plays the recording.
+  // «Послушать»: the details page plays the recording from the phrase.
+  const audioDeleted =
+    recordings.length > 0 && recordings.every((item) => item.audioDeleted);
   const listen = useCallback(
     (fact: TaskFactData) => {
-      if (call.audioDeleted) {
+      if (audioDeleted) {
         toast.add({
           description: "Запись удалена, осталась только расшифровка",
           title: "Нечего проигрывать",
@@ -120,9 +122,9 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
         return;
       }
       const moment = fact.quote?.moment ?? fact.quote?.time;
-      router.push(routes.callTranscript(call.id, moment));
+      router.push(routes.callTranscript(call.id, moment, true));
     },
-    [call.audioDeleted, call.id, router]
+    [audioDeleted, call.id, router]
   );
 
   const command = useCallback(
