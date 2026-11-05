@@ -96,6 +96,9 @@ const MINUTE = 60_000;
 const LOGIN = "Итоги не собраны: нужен вход в Claude Code";
 const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
 const PROPOSALS_NAV = /^Предложения/u;
+const TASK_CARDS_NAV = /^Карточки задач/u;
+/** The summary's name of the call under «Итоги звонка». */
+const CALL_TITLE = "p.text-xl";
 
 function invokedWith(command: string) {
   return fake.invoked
@@ -484,6 +487,116 @@ describe("«Итоги звонка» in Tauri", () => {
       expect(invokedWith("summary_cancel")).toEqual([{ callId: CALL }])
     );
   });
+
+  it("left during the build and opened again after it ended: the ready summary", async () => {
+    records({
+      view: {
+        building: progress("summary", "running"),
+        summary: { ...READY, state: "building" },
+      },
+    });
+    const first = openSummary();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Собираю итоги" })
+    ).toBeTruthy();
+    act(() => fake.emit("summary-progress", progress("proposals", "running")));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("list", { name: "Шаги" }))
+          .getAllByRole("listitem")
+          .map((row) => row.textContent?.split(":")[0])
+      ).toEqual(["готово", "готово", "в работе", "ждёт"])
+    );
+    // To «Предложения» or the history: no page follows the build now.
+    first.unmount();
+    await waitFor(() =>
+      expect(fake.handlers.get("summary-progress")?.size ?? 0).toBe(0)
+    );
+
+    // Rust saves the summary meanwhile; its last stage reaches no window.
+    records();
+    act(() =>
+      fake.dataChanged({
+        change: "updated",
+        entity: "call",
+        id: CALL,
+        projectId: EXCHANGE,
+      })
+    );
+    act(() => fake.emit("summary-progress", progress("saving", "done")));
+
+    openSummary();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Итоги звонка" })
+    ).toBeTruthy();
+    expect(await screen.findByText(READY.tldr)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Остановить" })).toBeNull();
+  });
+
+  it("listens to the build's progress before it reads the summary", async () => {
+    await waitFor(() =>
+      expect(fake.handlers.get("summary-progress")?.size ?? 0).toBe(0)
+    );
+    records();
+    let listening: boolean | undefined;
+    fake.answers.set("summary_get", () => {
+      listening ??= (fake.handlers.get("summary-progress")?.size ?? 0) > 0;
+      return { building: null, summary: READY };
+    });
+    openSummary();
+
+    expect(await screen.findByText(READY.tldr)).toBeTruthy();
+    expect(listening).toBe(true);
+  });
+
+  it("names a summary without a title after its first topic, without topics after the project", async () => {
+    records({
+      view: { building: null, summary: { ...READY, title: "" } },
+    });
+    const named = openSummary();
+    expect(
+      await screen.findByText("Обмен валют", { selector: CALL_TITLE })
+    ).toBeTruthy();
+    named.unmount();
+
+    const content = READY.content ?? { cards: [], next: [], topics: [] };
+    records({
+      view: {
+        building: null,
+        summary: { ...READY, content: { ...content, topics: [] }, title: "" },
+      },
+    });
+    act(() =>
+      fake.dataChanged({
+        change: "updated",
+        entity: "call",
+        id: CALL,
+        projectId: EXCHANGE,
+      })
+    );
+    openSummary();
+    expect(
+      await screen.findByText("Обменник", { selector: CALL_TITLE })
+    ).toBeTruthy();
+  });
+
+  it("says «аудио удалено» of a call whose audio was deleted", async () => {
+    records({
+      view: { building: progress("summary", "running"), summary: null },
+    });
+    fake.answers.set("call_transcript", () =>
+      RECORDINGS.map((item) => ({
+        ...item,
+        audioDeleted: true,
+        meBytes: null,
+        othersBytes: null,
+      }))
+    );
+    openSummary();
+
+    expect(await screen.findByText("аудио удалено")).toBeTruthy();
+    expect(screen.queryByText("на этом компьютере")).toBeNull();
+  });
 });
 
 function openCards() {
@@ -532,10 +645,38 @@ describe("«Карточки задач» in Tauri", () => {
         .getByRole("link", { name: "Открыть в расшифровке" })
         .getAttribute("href")
     ).toBe(routes.callTranscript(CALL, `${RECORDING}@240000@s-4`));
+    // «Послушать» opens the details page playing from the phrase.
     fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
     expect(nav.push).toHaveBeenCalledWith(
-      routes.callTranscript(CALL, `${RECORDING}@240000@s-4`)
+      routes.callTranscript(CALL, `${RECORDING}@240000@s-4`, true)
     );
+  });
+
+  it("«Послушать» of a call whose audio was deleted says there is nothing to play, after a reload too", async () => {
+    const add = vi.spyOn(toast, "add");
+    records();
+    fake.answers.set("call_transcript", () =>
+      RECORDINGS.map((item) => ({
+        ...item,
+        audioDeleted: true,
+        meBytes: null,
+        othersBytes: null,
+      }))
+    );
+    openCards();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "сказал(а) Игорь, 12:04" })
+    );
+    // The recordings say the audio is gone, not a flag of the window.
+    await waitFor(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
+      expect(add).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Нечего проигрывать" })
+      );
+    });
+    expect(nav.push).not.toHaveBeenCalled();
+    add.mockRestore();
   });
 
   it("Несколько людей клиента: the source is «сказал клиент», without a name", async () => {
@@ -585,11 +726,15 @@ describe("«Карточки задач» in Tauri", () => {
     const card = await screen.findByRole("region", {
       name: "Обмен без паспорта",
     });
+    // A card not decided yet already shows the tracker as «скоро».
+    const pending = within(card).getByRole("button", { name: CLICKUP_SOON });
+    expect(pending.getAttribute("aria-disabled")).toBe("true");
+    expect(pending.getAttribute("aria-describedby")).toBeTruthy();
     fireEvent.click(within(card).getByRole("button", { name: "Принять" }));
-    const clickUp = (await within(card).findByRole("button", {
-      name: CLICKUP_SOON,
-    })) as HTMLButtonElement;
-    expect(clickUp.disabled).toBe(true);
+    await within(card).findByText("принята");
+    const clickUp = within(card).getByRole("button", { name: CLICKUP_SOON });
+    expect(clickUp.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(clickUp);
     expect(invokedWith("call_card_update")).toEqual([
       { callId: CALL, cardId: CARD, patch: { decision: "accepted" } },
     ]);
@@ -710,6 +855,30 @@ describe("«Предложения» in Tauri", () => {
     nav.search = new URLSearchParams({ project: EXCHANGE });
     render(<HistoryPage />);
     expect(await screen.findByText("3 предложения")).toBeTruthy();
+  });
+
+  it("counts the call's own task cards in the sidebar, not the demo's", async () => {
+    const card = (id: string) => ({ ...CARD_RECORD, id });
+    records({
+      cards: {
+        cards: [card("c-1"), card("c-2"), card("c-3")],
+        next: [],
+        source: "summary",
+      },
+    });
+    fake.answers.set("proposals_list", fiveProposals);
+    openProposals();
+
+    const sections = await screen.findByRole("navigation", {
+      name: "Разделы звонка",
+    });
+    await waitFor(() =>
+      expect(
+        within(sections).getByRole("link", { name: TASK_CARDS_NAV }).textContent
+      ).toBe("Карточки задач3")
+    );
+    // Once the proposals are read, the panel is no longer busy.
+    expect(document.querySelector("main[aria-busy]")).toBeNull();
   });
 
   it("groups by the brief and the people, and decides through the commands", async () => {

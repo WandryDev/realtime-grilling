@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import type { CallRecording } from "@/bindings";
 import { toast } from "@/components/ui/toast";
 import {
   useCallCards,
@@ -10,8 +11,14 @@ import {
   useCallTranscript,
 } from "@/data/call-records";
 import { useCallSession } from "@/data/call-session";
-import { type CallRecord, getCall, useCall } from "@/data/calls";
+import {
+  type CallRecord,
+  getCall,
+  NO_PROJECT_CALL,
+  useCall,
+} from "@/data/calls";
 import { usePeople } from "@/data/people";
+import { useProject } from "@/data/projects";
 import { countPending, useCallProposals } from "@/data/proposals";
 import {
   buildFinishingSummary,
@@ -20,13 +27,14 @@ import {
   useCallSummary,
 } from "@/data/summaries";
 import { inTauri } from "@/effect/runtime";
+import { clockTime } from "@/lib/clock";
+import { plural } from "@/lib/plural";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
 import { CallSummaryScreen } from "../screens/call-summary-screen";
 import {
   cardsOverview,
-  clockOf,
   failureReason,
   processingSteps,
   summaryChips,
@@ -69,11 +77,28 @@ function showSavedToast(callId: string, openHistory: (href: string) => void) {
   });
 }
 
+/** «Opus, 2 канала, 13 МБ», «аудио удалено». */
+function recordingFact(recordings: readonly CallRecording[], bytes: number) {
+  if (recordings.length > 0 && recordings.every((item) => item.audioDeleted)) {
+    return "аудио удалено";
+  }
+  if (bytes === 0) {
+    return "на этом компьютере";
+  }
+  const channels = Math.max(
+    ...recordings.map(
+      (item) =>
+        Number(item.meBytes !== null) + Number(item.othersBytes !== null)
+    )
+  );
+  return `Opus, ${channels} ${plural(channels, "канал", "канала", "каналов")}, ${Math.max(1, Math.round(bytes / MB))} МБ`;
+}
+
 /** «Звонок завершён в 12:41, длился 40:12». */
 function finishedNote(call: CallRecord) {
   return call.endedAt === null
     ? `Звонок длился ${call.duration}`
-    : `Звонок завершён в ${clockOf(call.endedAt)}, длился ${call.duration}`;
+    : `Звонок завершён в ${clockTime(call.endedAt, false)}, длился ${call.duration}`;
 }
 
 function SummaryOfCall({ call }: { call: CallRecord }) {
@@ -86,6 +111,7 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
   const cards = useCallCards(call.id).data;
   const proposals = useCallProposals(call.id).data;
   const people = usePeople(call.projectId);
+  const project = useProject(call.projectId);
 
   const justFinished =
     session.status === "finishing" && session.callId === call.id;
@@ -130,20 +156,15 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
       (total, item) => total + (item.meBytes ?? 0) + (item.othersBytes ?? 0),
       0
     );
-    const ended = call.endedAt === null ? "" : `–${clockOf(call.endedAt)}`;
+    const ended =
+      call.endedAt === null ? "" : `–${clockTime(call.endedAt, false)}`;
     return [
       { label: "Когда", value: `${call.dateLabel}${ended}` },
       {
         label: "Участники",
         value: call.participants ? `${call.participants} и вы` : "вы",
       },
-      {
-        label: "Запись",
-        value:
-          bytes > 0
-            ? `Opus, 2 канала, ${Math.max(1, Math.round(bytes / MB))} МБ`
-            : "на этом компьютере",
-      },
+      { label: "Запись", value: recordingFact(recordings, bytes) },
     ];
   }, [call, recordings]);
 
@@ -186,7 +207,13 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
 
   return (
     <CallSummaryScreen
-      callTitle={summary?.title || call.title || undefined}
+      callTitle={
+        summary?.title.trim() ||
+        call.title.trim() ||
+        content?.topics[0]?.title.trim() ||
+        (call.projectId === null ? NO_PROJECT_CALL : project?.name) ||
+        undefined
+      }
       className={APP_WINDOW}
       clickUpAnswers={null}
       facts={facts}

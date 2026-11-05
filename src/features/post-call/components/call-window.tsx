@@ -167,14 +167,20 @@ export function CallWindow({
 
 /** Content of the panel: 64px sides, 48 top, 56 bottom. */
 export function PanelPage({
+  "aria-busy": busy,
   children,
   className,
 }: {
+  /** The content is still being read. */
+  "aria-busy"?: boolean;
   children: ReactNode;
   className?: string;
 }) {
   return (
-    <main className={cn("flex flex-col gap-7 px-16 pt-12 pb-14", className)}>
+    <main
+      aria-busy={busy || undefined}
+      className={cn("flex flex-col gap-7 px-16 pt-12 pb-14", className)}
+    >
       {children}
     </main>
   );

@@ -105,8 +105,7 @@ function ProcessingContent({
         <p className="text-muted-foreground text-sm">{finishedNote}</p>
         <CallTitle>Собираю итоги</CallTitle>
         <p className="text-muted-foreground max-w-[560px] text-lg">
-          Около минуты. Окно можно закрыть, итоги появятся в истории звонков, и
-          я пришлю уведомление.
+          Около минуты. Окно можно закрыть, итоги появятся в истории звонков.
         </p>
         {onStop ? (
           <div className="pt-1.5">
@@ -228,7 +227,7 @@ function ReadyContent({
         countTone="accent"
         divided
         id="unasked"
-        meta="перейдут в следующий звонок"
+        meta="открытые и без ответа"
         title="Не успели спросить"
       >
         <UnaskedQuestions questions={unasked} />
