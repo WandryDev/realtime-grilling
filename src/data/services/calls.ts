@@ -20,8 +20,9 @@ import {
 } from "./mock-database";
 
 /*
- * Calls of the projects and their participants. A participant is a person
- * of the call's project; one from another project is `Invalid`. The
+ * Calls and their participants. A participant is a person of the call's
+ * project; one from another project is `Invalid`. A call may have no
+ * project ("Звонок без проекта"): it has no participants then. The
  * summary and the reviews live in the `summary` JSON, whose shape belongs
  * to the frontend (`src/data/calls.ts`).
  *
@@ -102,11 +103,17 @@ export class CallsData extends Context.Service<
         }
       });
 
-      /** A person of the call's project, or why not. */
+      /**
+       * A person of the call's project, or why not. A call without a
+       * project has no participants.
+       */
       const participant = Effect.fnUntraced(function* (
-        projectId: string,
+        projectId: string | null,
         personId: string
       ) {
+        if (projectId === null) {
+          return yield* invalid("У звонка без проекта нет участников");
+        }
         const person = tables.people.get(personId);
         if (!person) {
           return yield* notFound(`Человек ${personId} не найден`);
@@ -120,8 +127,9 @@ export class CallsData extends Context.Service<
       });
 
       const create = Effect.fnUntraced(function* (input: CallCreate) {
-        if (!tables.projects.has(input.projectId)) {
-          return yield* notFound(`Проект ${input.projectId} не найден`);
+        const projectId = input.projectId ?? null;
+        if (projectId !== null && !tables.projects.has(projectId)) {
+          return yield* notFound(`Проект ${projectId} не найден`);
         }
         const { id, now } = yield* database.stamp;
         const startedAt = input.startedAt ?? now;
@@ -129,7 +137,7 @@ export class CallsData extends Context.Service<
         yield* checkTimes(startedAt, endedAt);
         const participantIds: string[] = [];
         for (const personId of input.participantIds ?? []) {
-          yield* participant(input.projectId, personId);
+          yield* participant(projectId, personId);
           if (!participantIds.includes(personId)) {
             participantIds.push(personId);
           }
@@ -140,7 +148,7 @@ export class CallsData extends Context.Service<
           id,
           openQuestions: 0,
           participantIds,
-          projectId: input.projectId,
+          projectId,
           startedAt,
           status: input.status ?? "live",
           summary: input.summary ?? null,
@@ -148,7 +156,7 @@ export class CallsData extends Context.Service<
           updatedAt: now,
         };
         tables.calls.set(id, created);
-        yield* database.emit("call", id, input.projectId, "created");
+        yield* database.emit("call", id, projectId, "created");
         return created;
       });
 

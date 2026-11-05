@@ -272,6 +272,54 @@ function dataContract(
       )
     );
 
+    it.effect("keeps a call without a project, without participants", () =>
+      run(
+        Effect.gen(function* () {
+          const projects = yield* ProjectsData;
+          const people = yield* PeopleData;
+          const calls = yield* CallsData;
+          const project = yield* projects.create({ name: "Любой" });
+          const anna = yield* people.create({
+            name: "Анна",
+            projectId: project.id,
+          });
+          const readChanges = yield* recordChanges;
+          const alone = yield* calls.create({});
+
+          assert.match(alone.id, UUID_V7);
+          assert.isNull(alone.projectId);
+          assert.deepStrictEqual(yield* readChanges, [
+            {
+              change: "created",
+              entity: "call",
+              id: alone.id,
+              projectId: null,
+            },
+          ]);
+          // Nobody of a project can be on it.
+          assert.strictEqual(
+            yield* failureKind(
+              calls.create({ participantIds: [anna.id], projectId: null })
+            ),
+            "Invalid"
+          );
+          assert.strictEqual(
+            yield* failureKind(calls.addParticipant(alone.id, anna.id)),
+            "Invalid"
+          );
+          assert.deepStrictEqual(yield* calls.participants(alone.id), []);
+          // Every call lists it; deleting any project leaves it
+          // (local-storage, «Звонок без проекта»).
+          assert.include(
+            (yield* calls.list(null)).map((item) => item.id),
+            alone.id
+          );
+          yield* projects.remove(project.id);
+          assert.strictEqual((yield* calls.get(alone.id)).id, alone.id);
+        })
+      )
+    );
+
     it.effect("shows one person on two calls, stored once", () =>
       run(
         Effect.gen(function* () {

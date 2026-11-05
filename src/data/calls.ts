@@ -25,6 +25,9 @@ import { createSyncedStore } from "./synced-store";
  * record. The summary build's progress is local to the window.
  */
 
+/** How the screens name a call without a project. */
+export const NO_PROJECT_CALL = "Звонок без проекта";
+
 export type SummaryStatus = "processing" | "ready";
 
 export type ProposalDecision = "pending" | "accepted" | "rejected";
@@ -77,9 +80,14 @@ export interface CallRecord {
   /** Month heading of the history, "Октябрь". */
   month: string;
   openCount: number;
+  /** The client's people on the call, as stored. */
+  participantIds: string[];
   participants: string;
-  projectId: string;
+  /** null: a call without a project ("Звонок без проекта"). */
+  projectId: string | null;
   proposals: Record<string, ProposalReview>;
+  /** When it started (its creation without a start), ms since the epoch. */
+  startedAt: number;
   summary: SummaryStatus;
   summaryProgress?: SummaryProgress;
   tasks: Record<string, TaskCardReview>;
@@ -207,9 +215,11 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
       id: call.id,
       month: MONTH_HEADINGS[month] ?? "",
       openCount: call.openQuestions,
+      participantIds: call.participantIds,
       participants: summary.participants ?? people.join(", "),
       projectId: call.projectId,
       proposals: { ...summary.proposals },
+      startedAt: start.getTime(),
       summary: summary.summary ?? "ready",
       tasks: { ...summary.tasks } as Record<string, TaskCardReview>,
       time,
@@ -232,7 +242,11 @@ const readCalls = (projectId: string | null) =>
     const calls = yield* CallsData;
     const people = yield* PeopleData;
     const list = yield* calls.list(projectId);
-    const projects = [...new Set(list.map((item) => item.projectId))];
+    const projects = [
+      ...new Set(
+        list.flatMap((item) => (item.projectId ? [item.projectId] : []))
+      ),
+    ];
     const perProject = yield* Effect.forEach(
       projects,
       (id) => people.list(id),
@@ -254,8 +268,14 @@ const callsStore = createSyncedStore({
   empty: [] as CallEntry[],
   live: inTauri,
   // A call, its project or one of its people changed: re-read the project.
-  onChange: (change) =>
-    change.entity !== "settings" && change.projectId
+  // A call without a project has no scope of its own: re-read them all.
+  onChange: (change) => {
+    if (change.entity === "call" && change.projectId === null) {
+      return {
+        update: Effect.map(readCalls(null), (entries) => () => entries),
+      };
+    }
+    return change.entity !== "settings" && change.projectId
       ? {
           scope: change.projectId,
           update: Effect.map(
@@ -266,7 +286,8 @@ const callsStore = createSyncedStore({
                 .concat(entries)
           ),
         }
-      : undefined,
+      : undefined;
+  },
   read: readCalls(null),
   runtime: appRuntime,
   seed: seedEntries,
@@ -450,6 +471,25 @@ export function countPendingProposals(call: CallRecord) {
   return Object.values(call.proposals).filter(
     (review) => review.decision === "pending"
   ).length;
+}
+
+/**
+ * Deletes the calls without a project ("Удалить все данные": a deleted
+ * project takes its calls along, these have none).
+ */
+export async function deleteCallsWithoutProject() {
+  const ids = callsStore
+    .get()
+    .filter((entry) => entry.record.projectId === null)
+    .map((entry) => entry.record.id);
+  await Promise.all(
+    ids.map((id) =>
+      callsStore.mutate(
+        CallsData.use((calls) => calls.remove(id)),
+        { error: "Не удалось удалить звонок" }
+      )
+    )
+  );
 }
 
 /** Back to the demo history (tests, the dev navigator). Mock only. */

@@ -229,7 +229,8 @@ export function plural(count: number, forms: [string, string, string]) {
 export interface CallSearch {
   /** Results per project id, for the filter pills. */
   counts: Record<string, number>;
-  results: (SearchResult & { projectId: string })[];
+  /** `projectId` null: a call without a project. */
+  results: (SearchResult & { projectId: string | null })[];
   summary: string;
 }
 
@@ -237,7 +238,7 @@ export interface CallSearch {
 export function searchCalls(
   query: string,
   calls: CallRecord[],
-  projectName: (id: string) => string
+  projectName: (id: string | null) => string
 ): CallSearch {
   const needle = query.trim().toLocaleLowerCase("ru");
   const results: CallSearch["results"] = [];
@@ -257,7 +258,9 @@ export function searchCalls(
       continue;
     }
     matches += found.length;
-    counts[call.projectId] = (counts[call.projectId] ?? 0) + 1;
+    if (call.projectId !== null) {
+      counts[call.projectId] = (counts[call.projectId] ?? 0) + 1;
+    }
 
     const start = first.text.toLocaleLowerCase("ru").indexOf(needle);
     const end = start + needle.length;

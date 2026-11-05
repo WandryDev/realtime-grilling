@@ -46,7 +46,7 @@ function showSavedToast(callId: string, openHistory: (href: string) => void) {
   toast.add({
     actionProps: {
       children: "Открыть историю",
-      onClick: () => openHistory(routes.history(projectId)),
+      onClick: () => openHistory(routes.history(projectId ?? undefined)),
     },
     description: "на этом компьютере, вместе с записью",
     timeout: 5000,

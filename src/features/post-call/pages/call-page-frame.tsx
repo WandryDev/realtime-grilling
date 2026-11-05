@@ -9,7 +9,7 @@ import {
   useMemo,
 } from "react";
 
-import type { CallRecord } from "@/data/calls";
+import { type CallRecord, NO_PROJECT_CALL } from "@/data/calls";
 import { useProject } from "@/data/projects";
 import { inTauri } from "@/effect/runtime";
 import { showFloatingWindow, windowOfRoute } from "@/features/shell/api";
@@ -77,19 +77,21 @@ export function baseLinks(): PostCallLinks {
 }
 
 function useCallLinks(call: CallRecord, projectName: string): PostCallLinks {
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    // A call without a project belongs to the whole history.
+    const { projectId } = call;
+    const project = projectId ? routes.project(projectId) : routes.history();
+    return {
       ...baseLinks(),
-      back: { href: routes.project(call.projectId), label: projectName },
-      history: routes.history(call.projectId),
-      project: routes.project(call.projectId),
+      back: { href: project, label: projectName },
+      history: routes.history(projectId ?? undefined),
+      project,
       proposals: routes.callProposals(call.id),
       summary: routes.callSummary(call.id),
       tasks: routes.callTasks(call.id),
       transcript: (moment?: string) => routes.callTranscript(call.id, moment),
-    }),
-    [call.id, call.projectId, projectName]
-  );
+    };
+  }, [call, projectName]);
 }
 
 function CallFrame({
@@ -100,7 +102,8 @@ function CallFrame({
   children: ReactNode;
 }) {
   const project = useProject(call.projectId);
-  const projectName = project?.name ?? "Проект";
+  const projectName =
+    call.projectId === null ? NO_PROJECT_CALL : (project?.name ?? "Проект");
   const links = useCallLinks(call, projectName);
   const info = useMemo<PostCallInfo>(
     () => ({

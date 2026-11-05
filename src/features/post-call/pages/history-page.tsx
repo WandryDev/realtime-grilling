@@ -3,7 +3,12 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
-import { type CallRecord, countPendingProposals, useCalls } from "@/data/calls";
+import {
+  type CallRecord,
+  countPendingProposals,
+  NO_PROJECT_CALL,
+  useCalls,
+} from "@/data/calls";
 import { useProjects } from "@/data/projects";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
@@ -42,7 +47,7 @@ function sortKey(call: CallRecord) {
 
 function byMonth(
   calls: CallRecord[],
-  projectName?: (id: string) => string
+  projectName?: (id: string | null) => string
 ): HistoryMonth[] {
   const months: HistoryMonth[] = [];
   const sorted = [...calls].sort((a, b) => sortKey(b) - sortKey(a));
@@ -101,7 +106,10 @@ function History({ projectId }: { projectId: string | null }) {
   const [searchFilter, setSearchFilter] = useState(ALL);
 
   const projectName = useCallback(
-    (id: string) => projects.find((item) => item.id === id)?.name ?? "",
+    (id: string | null) =>
+      id === null
+        ? NO_PROJECT_CALL
+        : (projects.find((item) => item.id === id)?.name ?? ""),
     [projects]
   );
   const project = projects.find((item) => item.id === projectId);
