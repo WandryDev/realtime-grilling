@@ -59,6 +59,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "call_resume",
     "call_close",
     "call_keep",
+    "call_discard",
     "recording_start",
     "recording_stop",
     "recording_status",

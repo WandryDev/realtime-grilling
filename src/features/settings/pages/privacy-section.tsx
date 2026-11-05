@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
 import { toast } from "@/components/ui/toast";
-import { closeCall, currentCallSession, finishCall } from "@/data/call-session";
+import { discardCall } from "@/data/call-session";
 import { deleteCallsWithoutProject } from "@/data/calls";
 import { resetIntegrations } from "@/data/integrations";
 import { resetOnboarding } from "@/data/onboarding";
@@ -33,15 +33,9 @@ export function PrivacySection() {
   const openDelete = useCallback(() => setDeleteOpen(true), []);
 
   const handleDeleted = useCallback(async () => {
-    // A call in progress ends first: its recording stops before its data
-    // goes, and no window keeps showing it.
-    const { callId, status } = currentCallSession();
-    if (status === "live") {
-      await finishCall();
-    }
-    if (callId !== null && status !== "idle") {
-      await closeCall(callId);
-    }
+    // A call in progress goes first, without a summary: its recording
+    // stops before its data goes, and no window keeps showing it.
+    await discardCall();
     for (const project of getProjects()) {
       deleteProject(project.id);
     }

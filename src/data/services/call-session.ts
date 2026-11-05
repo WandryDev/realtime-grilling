@@ -62,11 +62,20 @@ export class CallSessionBackend extends Context.Service<
     ) => Effect.Effect<CallSession, BackendError>;
     /** "Продолжить": the countdown of the auto end stops. */
     readonly keep: (callId: string) => Effect.Effect<CallSession, BackendError>;
+    /**
+     * "Удалить все данные": the call goes without a summary (a live one's
+     * recording stops), none is current; its data is the delete's. In Tauri
+     * the overlay hides and the main window stays where it is.
+     */
+    readonly discard: (
+      callId: string
+    ) => Effect.Effect<CallSession, BackendError>;
   }
 >()("grill/data/services/CallSessionBackend") {
   static readonly layerTauri = Layer.succeed(CallSessionBackend, {
     close: (callId) => call(() => commands.callClose(callId)),
     current: call(() => commands.callCurrent()),
+    discard: (callId) => call(() => commands.callDiscard(callId)),
     finish: (callId) => call(() => commands.callFinish(callId)),
     keep: (callId) => call(() => commands.callKeep(callId)),
     resume: (callId) => call(() => commands.callResume(callId)),
@@ -144,20 +153,35 @@ export class CallSessionBackend extends Context.Service<
         });
       });
 
+      /** A live call's recording stops; one already gone is fine. */
+      const stopRecording = (session: CallSession) =>
+        session.recordingId === null
+          ? Effect.void
+          : recorder.stop(session.recordingId).pipe(
+              Effect.catchIf(
+                (error) => error.kind === "NotFound",
+                () => Effect.void
+              )
+            );
+
       const finish = Effect.fnUntraced(function* (callId: string) {
         const session = yield* current(callId);
         if (session.status !== "live") {
           return session;
         }
-        if (session.recordingId !== null) {
-          yield* recorder.stop(session.recordingId).pipe(
-            Effect.catchIf(
-              (error) => error.kind === "NotFound",
-              () => Effect.void
-            )
-          );
-        }
+        yield* stopRecording(session);
         return yield* set({ ...session, autoEnd: null, status: "finishing" });
+      });
+
+      const discard = Effect.fnUntraced(function* (callId: string) {
+        const session = yield* current(callId);
+        if (session.status === "idle") {
+          return session;
+        }
+        if (session.status === "live") {
+          yield* stopRecording(session);
+        }
+        return yield* set(IDLE_SESSION);
       });
 
       const resume = Effect.fnUntraced(function* (callId: string) {
@@ -199,6 +223,7 @@ export class CallSessionBackend extends Context.Service<
       return CallSessionBackend.of({
         close,
         current: Effect.sync(() => mockSession.session),
+        discard,
         finish,
         keep,
         resume,

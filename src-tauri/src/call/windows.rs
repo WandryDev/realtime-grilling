@@ -59,15 +59,22 @@ pub fn finishing() -> Vec<WindowStep> {
     ]
 }
 
+/// The call is gone without a summary (deleted, or discarded before its
+/// data is): the overlay goes, the main window stays where it is.
+pub fn gone() -> Vec<WindowStep> {
+    vec![WindowStep::Hide(OVERLAY)]
+}
+
 /// The `toggle-call` shortcut and "Открыть звонок" in the tray: the call
-/// in progress as at its start, or the start widget without one.
-pub fn toggle_call(status: CallSessionStatus, compact_overlay: bool) -> Vec<WindowStep> {
+/// in progress as at its start (`overlay`: the start showed the overlay),
+/// or the start widget without one.
+pub fn toggle_call(status: CallSessionStatus, overlay: bool) -> Vec<WindowStep> {
     match status {
         CallSessionStatus::Idle => vec![WindowStep::Show {
             label: WIDGET,
             route: None,
         }],
-        status => vec![call_window(status, compact_overlay)],
+        status => vec![call_window(status, overlay)],
     }
 }
 

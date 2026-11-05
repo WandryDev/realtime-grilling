@@ -94,6 +94,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::call_resume,
             commands::call_close,
             commands::call_keep,
+            commands::call_discard,
             commands::recording_start,
             commands::recording_stop,
             commands::recording_status,

@@ -25,7 +25,10 @@ pub mod windows;
 mod tests;
 
 use std::{
-    sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -90,9 +93,20 @@ pub trait CallHost: Send + Sync + 'static {
     /// Read when the change happens (blocking).
     fn settings(&self) -> CallSettings;
     fn window(&self, step: WindowStep);
+    /// The start widget naming `app`, as the microphone watcher shows it.
+    fn show_widget(&self, app: &str);
     /// The tray menu for a call in progress, or without one.
     fn tray(&self, in_call: bool);
+    /// The wall clock, milliseconds since the Unix epoch: the countdown
+    /// ends by it (`endsAt`), also after the machine slept.
+    fn now(&self) -> i64 {
+        now_ms()
+    }
 }
+
+/// How often a countdown looks at the wall clock: the async timers stop
+/// while the machine sleeps, the wall clock doesn't.
+const CLOCK_CHECK: Duration = Duration::from_secs(5);
 
 /// Who began the call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,8 +124,8 @@ enum MicEvent {
     Busy,
     /// `app` let the input go at `released_at`.
     Free { app: String, released_at: i64 },
-    /// A busy period began with "Сразу записывать".
-    Record,
+    /// A busy period began with "Сразу записывать"; `app` took the input.
+    Record { app: String },
 }
 
 /// Under the async lock: the call and its countdown.
@@ -141,6 +155,10 @@ struct Shared {
     control: tokio::sync::Mutex<Control>,
     /// What the windows last got: reads never wait for a change.
     current: Mutex<CallSession>,
+    /// The call in progress shows in the overlay, as its start chose
+    /// ("Компактный оверлей" then, or "Сразу записывать"). Written under
+    /// `control`.
+    overlay: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -247,9 +265,11 @@ impl Shared {
         let (session, events, settings) =
             self.blocking(move |shared| shared.begin(origin)).await??;
         self.send(events);
+        let overlay = settings.compact_overlay || overlay_anyway;
+        self.overlay.store(overlay, Ordering::SeqCst);
         control.session = session;
         self.publish(&control);
-        self.move_windows(windows::started(settings.compact_overlay || overlay_anyway));
+        self.move_windows(windows::started(overlay));
         Ok(control.session.clone())
     }
 
@@ -317,19 +337,20 @@ impl Shared {
         let mut control = self.control.lock().await;
         self.check_current(&control, call_id).await?;
         if control.session.status == CallSessionStatus::Live {
-            self.end_live(&mut control).await;
+            self.end_live(&mut control).await?;
         }
         Ok(control.session.clone())
     }
 
     /// `Live → Finishing`: "Завершить", the tray or the countdown. The
     /// recording stops and the call gets its end time. A call deleted
-    /// meanwhile is over; a database that failed is logged (the next start
-    /// finishes the call) and the windows go on to the summary.
-    async fn end_live(self: &Arc<Self>, control: &mut Control) {
+    /// meanwhile is gone (`NotFound`, see [`Self::forget`]); a database
+    /// that failed is logged (the next start finishes the call) and the
+    /// windows go on to the summary.
+    async fn end_live(self: &Arc<Self>, control: &mut Control) -> CommandResult<()> {
         control.stop_countdown();
         let Some(call_id) = control.session.call_id.clone() else {
-            return;
+            return Ok(());
         };
         let recording_id = control.session.recording_id.clone();
         let ended = self
@@ -356,16 +377,48 @@ impl Shared {
             .and_then(|written| written);
         match ended {
             Ok((_, events)) => self.send(events),
-            Err(CommandError::NotFound { .. }) => {
-                control.session = CallSession::idle();
-                self.publish(control);
-                return;
+            // The recording has stopped already.
+            Err(error @ CommandError::NotFound { .. }) => {
+                self.forget(control);
+                return Err(error);
             }
             Err(error) => eprintln!("grill: could not mark the call finishing: {error}"),
         }
         control.session.status = CallSessionStatus::Finishing;
         self.publish(control);
         self.move_windows(windows::finishing());
+        Ok(())
+    }
+
+    /// The call is gone without a summary: deleted meanwhile, or discarded
+    /// before its data is. A live call's recording stops, no call is
+    /// current and the overlay goes; the main window stays where it is.
+    async fn drop_call(self: &Arc<Self>, control: &mut Control) {
+        control.stop_countdown();
+        let recording = match control.session.status {
+            CallSessionStatus::Live => control.session.recording_id.clone(),
+            _ => None,
+        };
+        if let Some(id) = recording {
+            let stopped = self
+                .blocking(move |shared| shared.recorder.stop(&id).map_err(|error| (id, error)))
+                .await;
+            match stopped {
+                Ok(Err((id, error))) => {
+                    eprintln!("grill: could not stop the recording {id}: {error}");
+                }
+                Err(error) => eprintln!("grill: could not stop the recording: {error}"),
+                Ok(Ok(())) => {}
+            }
+        }
+        self.forget(control);
+    }
+
+    /// No call is current any more, and the overlay goes.
+    fn forget(&self, control: &mut Control) {
+        control.session = CallSession::idle();
+        self.publish(control);
+        self.move_windows(windows::gone());
     }
 
     /// "Отменить завершение": the same call, recorded again. A recording
@@ -383,7 +436,7 @@ impl Shared {
             project_id: control.session.project_id.clone(),
             participant_ids: control.session.participant_ids.clone(),
         };
-        let (events, recording) = self
+        let resumed = self
             .blocking(move |shared| {
                 let patch = CallUpdate {
                     status: Some(CallStatus::Live),
@@ -394,7 +447,16 @@ impl Shared {
                     shared.write(|connection| calls::update(connection, &id, patch))?;
                 Ok::<_, CommandError>((events, shared.recorder.start(&links)))
             })
-            .await??;
+            .await?;
+        let (events, recording) = match resumed {
+            Ok(resumed) => resumed,
+            // Deleted while it finished: nothing to record on.
+            Err(error @ CommandError::NotFound { .. }) => {
+                self.drop_call(&mut control).await;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         self.send(events);
         control.session.status = CallSessionStatus::Live;
         control.session.recording_id = recording.as_ref().ok().cloned();
@@ -430,10 +492,19 @@ impl Shared {
         Ok(control.session.clone())
     }
 
-    /// "Продолжить": no countdown until the microphone is let go again.
+    /// "Продолжить": no countdown until the microphone is let go again. A
+    /// call deleted meanwhile is gone (`NotFound`).
     async fn keep(self: &Arc<Self>, call_id: &str) -> CommandResult<CallSession> {
         let mut control = self.control.lock().await;
         self.check_current(&control, call_id).await?;
+        let id = call_id.to_owned();
+        let stored = self
+            .blocking(move |shared| shared.read(|connection| calls::get(connection, &id)))
+            .await?;
+        if let Err(error @ CommandError::NotFound { .. }) = stored {
+            self.drop_call(&mut control).await;
+            return Err(error);
+        }
         if control.session.auto_end.is_some() {
             control.stop_countdown();
             self.publish(&control);
@@ -451,16 +522,31 @@ impl Shared {
                 }
             }
             MicEvent::Free { app, released_at } => self.count_down(app, released_at).await,
-            MicEvent::Record => {
+            // A call that doesn't start (no microphone access, say) falls
+            // back to the start widget: its "Начать" says why.
+            MicEvent::Record { app } => {
                 if let Err(error) = self.start(Origin::MicBusy).await {
                     eprintln!("grill: «Сразу записывать» could not start a call: {error}");
+                    self.host.show_widget(&app);
                 }
             }
         }
     }
 
-    /// The meeting app let the microphone go during a live call: the
-    /// countdown of "Завершать звонок сам" as set now, unless "Никогда".
+    /// Discards the call before its data is deleted ("Удалить все данные"):
+    /// no summary, the main window stays. The call's row is the delete's.
+    async fn discard(self: &Arc<Self>, call_id: &str) -> CommandResult<CallSession> {
+        let mut control = self.control.lock().await;
+        self.check_current(&control, call_id).await?;
+        if is_active(&control.session) {
+            self.drop_call(&mut control).await;
+        }
+        Ok(control.session.clone())
+    }
+
+    /// The meeting app let the microphone go during a live call: every
+    /// window offers to end it, with the countdown of "Завершать звонок
+    /// сам" as set now; with "Никогда" without one.
     async fn count_down(self: &Arc<Self>, app: String, released_at: i64) {
         let mut control = self.control.lock().await;
         if control.session.status != CallSessionStatus::Live || control.session.auto_end.is_some() {
@@ -473,21 +559,15 @@ impl Shared {
                 return;
             }
         };
-        let Some(delay) = settings.auto_end else {
-            return;
-        };
-        let delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX);
-        let ends_at = released_at.saturating_add(delay_ms);
         control.stop_countdown();
-        let generation = control.generation;
-        let wait = Duration::from_millis(u64::try_from(ends_at - now_ms()).unwrap_or(0));
-        let shared = Arc::downgrade(self);
-        control.timer = Some(self.runtime.spawn(async move {
-            tokio::time::sleep(wait).await;
-            if let Some(shared) = shared.upgrade() {
-                shared.expire(generation).await;
-            }
-        }));
+        let ends_at = settings.auto_end.map(|delay| {
+            let delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX);
+            released_at.saturating_add(delay_ms)
+        });
+        if let Some(ends_at) = ends_at {
+            let timer = run_out(Arc::downgrade(self), ends_at, control.generation);
+            control.timer = Some(self.runtime.spawn(timer));
+        }
         control.session.auto_end = Some(CallAutoEnd {
             app,
             released_at,
@@ -504,7 +584,28 @@ impl Shared {
         }
         // This very task: detach it, `end_live` must not abort itself.
         drop(control.timer.take());
-        self.end_live(&mut control).await;
+        if let Err(error) = self.end_live(&mut control).await {
+            eprintln!("grill: the countdown found no call to end: {error}");
+        }
+    }
+}
+
+/// The countdown's task: waits until the wall clock reaches `ends_at`,
+/// looking at it every [`CLOCK_CHECK`] (a timer alone would wait out the
+/// time the machine slept), then ends the call.
+async fn run_out(shared: Weak<Shared>, ends_at: i64, generation: u64) {
+    loop {
+        let Some(left) = shared.upgrade().map(|shared| ends_at - shared.host.now()) else {
+            return;
+        };
+        if left <= 0 {
+            break;
+        }
+        let left = Duration::from_millis(u64::try_from(left).unwrap_or(0));
+        tokio::time::sleep(left.min(CLOCK_CHECK)).await;
+    }
+    if let Some(shared) = shared.upgrade() {
+        shared.expire(generation).await;
     }
 }
 
@@ -538,6 +639,7 @@ impl CallManager {
                 generation: 0,
             }),
             current: Mutex::new(CallSession::idle()),
+            overlay: AtomicBool::new(false),
         });
         let (mic, events) = mpsc::unbounded_channel();
         runtime.spawn(follow_mic(Arc::downgrade(&shared), events));
@@ -552,6 +654,13 @@ impl CallManager {
     /// A call is live or finishing: no start widget then.
     pub fn is_active(&self) -> bool {
         is_active(&lock(&self.shared.current))
+    }
+
+    /// The `toggle-call` shortcut and "Открыть звонок": the call in
+    /// progress in the window its start chose, or the start widget.
+    pub fn toggle_steps(&self) -> Vec<WindowStep> {
+        let status = self.current().status;
+        windows::toggle_call(status, self.shared.overlay.load(Ordering::SeqCst))
     }
 
     /// "Начать": creates the call and records it, or returns the call in
@@ -582,6 +691,12 @@ impl CallManager {
         self.shared.keep(call_id).await
     }
 
+    /// The call in progress goes without a summary, its row stays for the
+    /// delete that follows; otherwise nothing changes.
+    pub async fn discard(&self, call_id: &str) -> CommandResult<CallSession> {
+        self.shared.discard(call_id).await
+    }
+
     /// "Завершить звонок" in the tray: the call in progress, if it is live.
     pub async fn finish_current(&self) {
         let Some(call_id) = self.current().call_id else {
@@ -605,9 +720,12 @@ impl CallManager {
         let _ = self.mic.send(event);
     }
 
-    /// "Сразу записывать": a call with the last call's project and people,
-    /// shown in the overlay.
-    pub fn start_on_mic(&self) {
-        let _ = self.mic.send(MicEvent::Record);
+    /// "Сразу записывать" as `app` took the microphone: a call with the
+    /// last call's project and people, shown in the overlay; the start
+    /// widget when it doesn't start.
+    pub fn start_on_mic(&self, app: &str) {
+        let _ = self.mic.send(MicEvent::Record {
+            app: app.to_owned(),
+        });
     }
 }

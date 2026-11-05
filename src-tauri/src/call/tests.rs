@@ -4,7 +4,7 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
     thread,
     time::Instant,
@@ -35,6 +35,8 @@ enum Seen {
     Data(DataChanged),
     Session(CallSession),
     Window(WindowStep),
+    /// The start widget naming the app.
+    Widget(String),
     Tray(bool),
 }
 
@@ -49,6 +51,11 @@ struct Record {
     starts: Mutex<Vec<RecordingLinks>>,
     stops: Mutex<Vec<String>>,
     running: Mutex<Option<String>>,
+    /// The wall clock: the time of the fixture's start, moving with
+    /// tokio's clock (paused in the countdown tests)…
+    clock_start: (i64, tokio::time::Instant),
+    /// …and a jump of it, as after the machine slept.
+    slept: AtomicI64,
 }
 
 impl Record {
@@ -83,6 +90,12 @@ impl Record {
     fn set(&self, settings: CallSettings) {
         *self.settings.lock().unwrap() = settings;
     }
+
+    fn now(&self) -> i64 {
+        let (wall, start) = self.clock_start;
+        let passed = i64::try_from(start.elapsed().as_millis()).unwrap();
+        wall + passed + self.slept.load(Ordering::SeqCst)
+    }
 }
 
 struct FakeHost(Arc<Record>);
@@ -110,6 +123,18 @@ impl CallHost for FakeHost {
 
     fn window(&self, step: WindowStep) {
         self.0.seen.lock().unwrap().push(Seen::Window(step));
+    }
+
+    fn show_widget(&self, app: &str) {
+        self.0
+            .seen
+            .lock()
+            .unwrap()
+            .push(Seen::Widget(app.to_owned()));
+    }
+
+    fn now(&self) -> i64 {
+        self.0.now()
     }
 
     fn tray(&self, in_call: bool) {
@@ -145,16 +170,24 @@ impl CallRecorder for FakeRecorder {
         Ok(id)
     }
 
+    /// The running recording stops even when its row is gone (a deleted
+    /// call), as `RecordingManager`'s devices do.
     fn stop(&self, id: &str) -> CommandResult<()> {
-        self.0
-            .storage
-            .read_now(|connection| recordings::finish(connection, id, now_ms()).map(|_| ()))?;
-        self.0.stops.lock().unwrap().push(id.to_owned());
-        self.0
+        let was_running = self
+            .0
             .running
             .lock()
             .unwrap()
-            .take_if(|running| running == id);
+            .take_if(|running| running == id)
+            .is_some();
+        let finished = self
+            .0
+            .storage
+            .read_now(|connection| recordings::finish(connection, id, now_ms()).map(|_| ()));
+        if !was_running {
+            finished?;
+        }
+        self.0.stops.lock().unwrap().push(id.to_owned());
         Ok(())
     }
 }
@@ -181,6 +214,8 @@ impl Fixture {
             starts: Mutex::default(),
             stops: Mutex::default(),
             running: Mutex::default(),
+            clock_start: (now_ms(), tokio::time::Instant::now()),
+            slept: AtomicI64::new(0),
         });
         let calls = CallManager::new(
             FakeHost(Arc::clone(&record)),
@@ -188,6 +223,11 @@ impl Fixture {
             Handle::current(),
         );
         Self { calls, record }
+    }
+
+    /// The wall clock as the call reads it.
+    fn now(&self) -> i64 {
+        self.record.now()
     }
 
     fn read<T>(&self, read: impl FnOnce(&Connection) -> CommandResult<T>) -> T {
@@ -610,6 +650,7 @@ async fn unknown_calls_are_not_found_and_other_calls_invalid() {
             fx.calls.resume(call_id).await,
             fx.calls.close(call_id).await,
             fx.calls.keep(call_id).await,
+            fx.calls.discard(call_id).await,
         ] {
             let error = result.unwrap_err();
             if call_id == unknown {
@@ -642,19 +683,132 @@ async fn without_the_compact_overlay_a_start_opens_the_call_window() {
     );
 }
 
-/// A call deleted while it runs ("Удалить все данные") ends: no current
-/// call is left pointing at nothing.
+/// A call deleted while it runs (its project deleted, say) is gone on
+/// "Завершить": its recording stops, no current call is left pointing at
+/// nothing, and the overlay goes.
 #[tokio::test]
 async fn a_deleted_call_is_no_longer_current() {
     let fx = Fixture::new();
     let live = fx.start(None, &[]).await;
     let call_id = id(&live);
     fx.read(|connection| calls::delete(connection, &call_id));
+    fx.record.clear();
 
-    let session = fx.calls.finish(&call_id).await.unwrap();
+    let error = fx.calls.finish(&call_id).await.unwrap_err();
 
-    assert_eq!(session, CallSession::idle());
+    assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
     assert_eq!(fx.calls.current(), CallSession::idle());
+    assert_eq!(
+        *fx.record.stops.lock().unwrap(),
+        vec![live.recording_id.clone().unwrap()]
+    );
+    assert_eq!(
+        fx.record.seen(),
+        vec![
+            Seen::Session(CallSession::idle()),
+            Seen::Tray(false),
+            Seen::Window(WindowStep::Hide(OVERLAY)),
+        ]
+    );
+}
+
+/// "Отменить завершение" of a call deleted while it finished: the call is
+/// gone, not stuck finishing.
+#[tokio::test]
+async fn a_call_deleted_while_finishing_is_gone_on_resume() {
+    let fx = Fixture::new();
+    let live = fx.start(None, &[]).await;
+    let call_id = id(&live);
+    fx.calls.finish(&call_id).await.unwrap();
+    fx.read(|connection| calls::delete(connection, &call_id));
+    fx.record.clear();
+
+    let error = fx.calls.resume(&call_id).await.unwrap_err();
+
+    assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
+    assert_eq!(fx.calls.current(), CallSession::idle());
+    assert_eq!(
+        fx.record.starts.lock().unwrap().len(),
+        1,
+        "nothing recorded"
+    );
+    assert_eq!(
+        fx.record.seen(),
+        vec![
+            Seen::Session(CallSession::idle()),
+            Seen::Tray(false),
+            Seen::Window(WindowStep::Hide(OVERLAY)),
+        ]
+    );
+    // A new call can start.
+    assert_eq!(fx.start(None, &[]).await.status, CallSessionStatus::Live);
+}
+
+/// "Продолжить" on a call deleted while it ran: gone, its recording stops.
+#[tokio::test(start_paused = true)]
+async fn a_call_deleted_while_live_is_gone_on_keep() {
+    let fx = Fixture::new();
+    let live = fx.start(None, &[]).await;
+    let call_id = id(&live);
+    fx.calls.shared.on_mic(free(fx.now())).await;
+    fx.read(|connection| calls::delete(connection, &call_id));
+    fx.record.clear();
+
+    let error = fx.calls.keep(&call_id).await.unwrap_err();
+
+    assert!(matches!(error, CommandError::NotFound { .. }), "{error:?}");
+    assert_eq!(fx.calls.current(), CallSession::idle());
+    assert_eq!(fx.record.stops.lock().unwrap().len(), 1);
+    assert_eq!(
+        fx.record.windows(),
+        vec![WindowStep::Hide(OVERLAY)],
+        "the overlay goes, the main window stays"
+    );
+    // The countdown went with it.
+    tokio::time::sleep(FIVE_MINUTES * 2).await;
+    assert_eq!(fx.calls.current(), CallSession::idle());
+}
+
+/// "Удалить все данные" during a call: discarded, no summary, the main
+/// window stays; the row is the delete's.
+#[tokio::test]
+async fn discard_drops_the_call_without_a_summary() {
+    let fx = Fixture::new();
+    let live = fx.start(None, &[]).await;
+    let call_id = id(&live);
+    fx.record.clear();
+
+    let idle = fx.calls.discard(&call_id).await.unwrap();
+
+    assert_eq!(idle, CallSession::idle());
+    assert_eq!(fx.calls.current(), CallSession::idle());
+    assert_eq!(
+        *fx.record.stops.lock().unwrap(),
+        vec![live.recording_id.clone().unwrap()]
+    );
+    assert_eq!(
+        fx.record.seen(),
+        vec![
+            Seen::Session(CallSession::idle()),
+            Seen::Tray(false),
+            Seen::Window(WindowStep::Hide(OVERLAY)),
+        ],
+        "no `DataChanged`, no main window step"
+    );
+    assert_eq!(fx.call(&call_id).status, CallStatus::Live, "left as it is");
+
+    // A finishing call: its recording has stopped already.
+    let next = fx.start(None, &[]).await;
+    fx.calls.finish(&id(&next)).await.unwrap();
+    fx.record.clear();
+    fx.calls.discard(&id(&next)).await.unwrap();
+    assert_eq!(fx.calls.current(), CallSession::idle());
+    assert_eq!(fx.record.stops.lock().unwrap().len(), 2);
+    assert_eq!(fx.record.windows(), vec![WindowStep::Hide(OVERLAY)]);
+
+    // Without a call: nothing, and an id that isn't current is `Invalid`.
+    let error = fx.calls.discard(&call_id).await.unwrap_err();
+    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
 }
 
 fn free(released_at: i64) -> MicEvent {
@@ -673,7 +827,7 @@ async fn the_countdown_finishes_the_call() {
     let live = fx.start(None, &[]).await;
     let call_id = id(&live);
     fx.record.clear();
-    let released_at = now_ms();
+    let released_at = fx.now();
 
     fx.calls.shared.on_mic(free(released_at)).await;
 
@@ -681,7 +835,7 @@ async fn the_countdown_finishes_the_call() {
     let expected = CallAutoEnd {
         app: "zoom.us".to_owned(),
         released_at,
-        ends_at: released_at + 300_000,
+        ends_at: Some(released_at + 300_000),
     };
     assert_eq!(counting.auto_end.as_ref(), Some(&expected));
     assert_eq!(fx.record.sessions(), vec![counting]);
@@ -704,7 +858,7 @@ async fn a_busy_microphone_stops_the_countdown() {
     let fx = Fixture::new();
     fx.start(None, &[]).await;
     fx.record.clear();
-    fx.calls.shared.on_mic(free(now_ms())).await;
+    fx.calls.shared.on_mic(free(fx.now())).await;
 
     fx.calls.shared.on_mic(MicEvent::Busy).await;
 
@@ -723,7 +877,7 @@ async fn keep_stops_the_countdown_until_the_next_release() {
     let fx = Fixture::new();
     let live = fx.start(None, &[]).await;
     let call_id = id(&live);
-    fx.calls.shared.on_mic(free(now_ms())).await;
+    fx.calls.shared.on_mic(free(fx.now())).await;
 
     let kept = fx.calls.keep(&call_id).await.unwrap();
 
@@ -733,39 +887,75 @@ async fn keep_stops_the_countdown_until_the_next_release() {
 
     // Zoom takes the microphone and lets it go again: a new countdown.
     fx.calls.shared.on_mic(MicEvent::Busy).await;
-    fx.calls.shared.on_mic(free(now_ms())).await;
+    fx.calls.shared.on_mic(free(fx.now())).await;
     assert!(fx.calls.current().auto_end.is_some());
 }
 
-/// "Никогда": no countdown.
+/// "Никогда": every window offers to end the call, without a countdown,
+/// and the call doesn't end by itself; "Продолжить" withdraws the offer.
 #[tokio::test(start_paused = true)]
-async fn never_has_no_countdown() {
+async fn never_offers_to_end_without_a_countdown() {
     let fx = Fixture::new();
     fx.record.set(CallSettings {
         compact_overlay: true,
         auto_end: None,
     });
-    fx.start(None, &[]).await;
+    let live = fx.start(None, &[]).await;
     fx.record.clear();
+    let released_at = fx.now();
 
-    fx.calls.shared.on_mic(free(now_ms())).await;
+    fx.calls.shared.on_mic(free(released_at)).await;
 
-    assert_eq!(fx.calls.current().auto_end, None);
-    assert!(fx.record.seen().is_empty());
+    let offered = fx.calls.current();
+    assert_eq!(
+        offered.auto_end,
+        Some(CallAutoEnd {
+            app: "zoom.us".to_owned(),
+            released_at,
+            ends_at: None,
+        })
+    );
+    assert_eq!(fx.record.sessions(), vec![offered]);
+    tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+    assert_eq!(fx.calls.current().status, CallSessionStatus::Live);
+    assert!(fx.record.stops.lock().unwrap().is_empty());
+
+    let kept = fx.calls.keep(&id(&live)).await.unwrap();
+    assert_eq!(kept.auto_end, None);
+    assert_eq!(kept.status, CallSessionStatus::Live);
+}
+
+/// The countdown goes by the wall clock: after the machine slept past its
+/// end, the call ends on the next look at the clock, not an uptime later.
+#[tokio::test(start_paused = true)]
+async fn the_countdown_follows_the_wall_clock() {
+    let fx = Fixture::new();
+    let live = fx.start(None, &[]).await;
+    fx.calls.shared.on_mic(free(fx.now())).await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(fx.calls.current().status, CallSessionStatus::Live);
+
+    // An hour of sleep: tokio's clock (the uptime) didn't move.
+    fx.record.slept.store(60 * 60 * 1000, Ordering::SeqCst);
+    tokio::time::sleep(CLOCK_CHECK).await;
+    fx.until(CallSessionStatus::Finishing).await;
+
+    assert_eq!(fx.call(&id(&live)).status, CallStatus::Finishing);
+    assert_eq!(fx.record.stops.lock().unwrap().len(), 1);
 }
 
 /// The microphone let go without a call, or while one finishes: nothing.
 #[tokio::test(start_paused = true)]
 async fn a_release_outside_a_live_call_does_nothing() {
     let fx = Fixture::new();
-    fx.calls.shared.on_mic(free(now_ms())).await;
+    fx.calls.shared.on_mic(free(fx.now())).await;
     assert!(fx.record.seen().is_empty());
     assert_eq!(fx.calls.current(), CallSession::idle());
 
     let live = fx.start(None, &[]).await;
     fx.calls.finish(&id(&live)).await.unwrap();
     fx.record.clear();
-    fx.calls.shared.on_mic(free(now_ms())).await;
+    fx.calls.shared.on_mic(free(fx.now())).await;
     assert!(fx.record.seen().is_empty());
 }
 
@@ -785,7 +975,7 @@ async fn record_right_away_starts_the_last_calls_setup() {
     fx.calls.close(&id(&first)).await.unwrap();
     fx.record.clear();
 
-    fx.calls.start_on_mic();
+    fx.calls.start_on_mic("zoom.us");
     fx.until(CallSessionStatus::Live).await;
 
     let session = fx.calls.current();
@@ -799,9 +989,59 @@ async fn record_right_away_starts_the_last_calls_setup() {
     );
 
     // During the call another busy period starts nothing new.
-    fx.calls.shared.on_mic(MicEvent::Record).await;
+    fx.calls.shared.on_mic(record_on("zoom.us")).await;
     assert_eq!(fx.calls.current(), session);
     assert_eq!(fx.count("calls"), 2);
+
+    // The shortcut opens it where it started, the overlay, whatever the
+    // setting says.
+    assert_eq!(fx.calls.toggle_steps(), vec![OVERLAY_SHOWN]);
+}
+
+fn record_on(app: &str) -> MicEvent {
+    MicEvent::Record {
+        app: app.to_owned(),
+    }
+}
+
+/// "Сразу записывать" without microphone access: no call, the start widget
+/// instead, whose "Начать" says why.
+#[tokio::test]
+async fn record_right_away_that_cannot_record_shows_the_widget() {
+    let fx = Fixture::new();
+    fx.record.denied.store(true, Ordering::SeqCst);
+
+    fx.calls.shared.on_mic(record_on("zoom.us")).await;
+
+    assert_eq!(fx.calls.current(), CallSession::idle());
+    assert_eq!(fx.count("calls"), 0);
+    assert_eq!(fx.record.seen(), vec![Seen::Widget("zoom.us".to_owned())]);
+}
+
+/// `app-shell`, "Сочетание во время звонка": the call shows as at its
+/// start, also after "Компактный оверлей" changed; the widget without one.
+#[tokio::test]
+async fn the_shortcut_opens_the_window_the_start_chose() {
+    let fx = Fixture::new();
+    let widget = WindowStep::Show {
+        label: WIDGET,
+        route: None,
+    };
+    assert_eq!(fx.calls.toggle_steps(), vec![widget]);
+
+    let live = fx.start(None, &[]).await;
+    fx.record.set(CallSettings {
+        compact_overlay: false,
+        auto_end: None,
+    });
+    assert_eq!(fx.calls.toggle_steps(), vec![OVERLAY_SHOWN]);
+    fx.calls.finish(&id(&live)).await.unwrap();
+    assert_eq!(fx.calls.toggle_steps(), vec![CALL_SHOWN]);
+    fx.calls.close(&id(&live)).await.unwrap();
+    assert_eq!(fx.calls.toggle_steps(), vec![widget]);
+
+    fx.start(None, &[]).await;
+    assert_eq!(fx.calls.toggle_steps(), vec![CALL_SHOWN]);
 }
 
 /// "Сразу записывать" before any call: a call without a project.
@@ -809,7 +1049,7 @@ async fn record_right_away_starts_the_last_calls_setup() {
 async fn record_right_away_without_calls_has_no_project() {
     let fx = Fixture::new();
     fx.project("Обменник");
-    fx.calls.shared.on_mic(MicEvent::Record).await;
+    fx.calls.shared.on_mic(record_on("zoom.us")).await;
     let session = fx.calls.current();
     assert_eq!(session.status, CallSessionStatus::Live);
     assert_eq!(session.project_id, None);
@@ -857,7 +1097,7 @@ fn the_session_serializes_in_camel_case() {
         auto_end: Some(CallAutoEnd {
             app: "zoom.us".to_owned(),
             released_at: 2,
-            ends_at: 3,
+            ends_at: Some(3),
         }),
     };
     assert_eq!(

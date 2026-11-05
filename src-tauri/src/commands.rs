@@ -985,6 +985,19 @@ pub async fn call_keep(
     calls.keep(&call_id).await
 }
 
+/// "Удалить все данные" during a call: the live call's recording stops, no
+/// call is current and the overlay goes, without a summary and without
+/// moving the main window. The call's row is left for the delete that
+/// follows. Otherwise nothing changes.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_discard(
+    calls: State<'_, CallManager>,
+    call_id: String,
+) -> CommandResult<CallSession> {
+    calls.discard(&call_id).await
+}
+
 /* Recording */
 
 #[derive(Debug, Clone, Default, Deserialize, Type)]

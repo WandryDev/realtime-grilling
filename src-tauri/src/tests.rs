@@ -1174,12 +1174,27 @@ mod acl {
 
     /// OS permissions, the agent CLI and the meters are for the main and
     /// onboarding windows only.
-    /// The summary is built in the main window: only it closes the call.
+    /// The summary is built in the main window: only it closes the call,
+    /// and only it discards one ("Удалить все данные").
     #[test]
-    fn floating_windows_cannot_close_the_call() {
+    fn floating_windows_cannot_close_or_discard_the_call() {
         for label in ["overlay", "widget"] {
-            let result = invoke(label, "call_close");
-            assert!(denied(&result), "{label} → call_close: {result:?}");
+            for command in ["call_close", "call_discard"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+        }
+    }
+
+    /// The call starts and stops its recording (`CallManager`): no window
+    /// may, or a call could go on without one.
+    #[test]
+    fn no_window_starts_or_stops_a_recording() {
+        for label in ["main", "onboarding", "overlay", "widget"] {
+            for command in ["recording_start", "recording_stop"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
         }
     }
 
@@ -1248,26 +1263,20 @@ mod acl {
             ("widget", "transcript_for_recording"),
             ("overlay", "transcript_for_recording"),
             ("main", "transcript_state"),
-            // The widget starts a recording, the overlay stops it, every
-            // window shows it.
-            ("main", "recording_start"),
-            ("main", "recording_stop"),
+            // Every window shows the recording.
             ("main", "recording_status"),
-            ("widget", "recording_start"),
-            ("widget", "recording_stop"),
             ("widget", "recording_status"),
-            ("overlay", "recording_start"),
-            ("overlay", "recording_stop"),
             ("overlay", "recording_status"),
             // Every window reads, starts, finishes and resumes the call in
             // progress and stops its countdown; the main window closes it
-            // once the summary is built.
+            // once the summary is built, or discards it before a delete.
             ("main", "call_current"),
             ("main", "call_start"),
             ("main", "call_finish"),
             ("main", "call_resume"),
             ("main", "call_close"),
             ("main", "call_keep"),
+            ("main", "call_discard"),
             ("widget", "call_current"),
             ("widget", "call_start"),
             ("overlay", "call_current"),
@@ -1306,7 +1315,8 @@ mod acl {
 }
 
 /// Every permission in the capability files is a real command, the main
-/// window gets every command, the floating windows only what a call needs.
+/// window gets every command but the recorder's start and stop (the call
+/// runs them), the floating windows only what a call needs.
 #[test]
 fn capabilities_match_the_command_list() {
     mod manifest {
@@ -1331,11 +1341,20 @@ fn capabilities_match_the_command_list() {
         .iter()
         .map(|command| (*command).to_owned())
         .collect();
+    // The call starts and stops its recording: no window may.
+    let no_window = ["recording_start", "recording_stop"];
     let mut main = read("main");
     main.sort();
-    let mut expected = all.clone();
+    let mut expected: Vec<String> = all
+        .iter()
+        .filter(|command| !no_window.contains(&command.as_str()))
+        .cloned()
+        .collect();
     expected.sort();
-    assert_eq!(main, expected, "main and onboarding get every command");
+    assert_eq!(
+        main, expected,
+        "main and onboarding get every command a window may call"
+    );
 
     let floating = read("floating");
     for command in &floating {
@@ -1352,8 +1371,6 @@ fn capabilities_match_the_command_list() {
         "agent_retry",
         "transcript_for_recording",
         "mic_activity_get",
-        "recording_start",
-        "recording_stop",
         "recording_status",
         "projects_get",
         "projects_overview",
@@ -1366,6 +1383,9 @@ fn capabilities_match_the_command_list() {
     }
     for forbidden in [
         "call_close",
+        "call_discard",
+        "recording_start",
+        "recording_stop",
         "brief_build",
         "brief_cancel",
         "brief_export",

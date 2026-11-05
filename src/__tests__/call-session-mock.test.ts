@@ -4,6 +4,7 @@ import {
   CURRENT_CALL_ID,
   closeCall,
   currentCallSession,
+  discardCall,
   finishCall,
   keepCall,
   resetCall,
@@ -55,6 +56,26 @@ describe("CallSessionBackend.layerMock", () => {
       callId: null,
       status: "idle",
     });
+  });
+
+  it("discards a live or finishing call at once, its recording stopped", () => {
+    startCall({ projectId: "telemedia" });
+    expect(mockRecordingId()).not.toBeNull();
+
+    discardCall();
+    expect(currentCallSession()).toMatchObject({
+      callId: null,
+      status: "idle",
+    });
+    expect(mockRecordingId()).toBeNull();
+
+    startCall({ projectId: null });
+    finishCall();
+    discardCall();
+    expect(currentCallSession().status).toBe("idle");
+    // Without a call: nothing.
+    discardCall();
+    expect(currentCallSession().status).toBe("idle");
   });
 
   it("starts a call without a project, but not with people", async () => {

@@ -292,7 +292,11 @@ function countdown(
   session: CallSession
 ): { elapsed: number; remaining: number | null } {
   const shared = session.autoEnd;
-  if (inTauri && shared) {
+  // «Никогда»: the backend offers to end the call without a countdown.
+  if (inTauri && shared?.endsAt === null) {
+    return { elapsed: 0, remaining: null };
+  }
+  if (inTauri && shared && shared.endsAt !== null) {
     const total = (shared.endsAt - shared.releasedAt) / 1000;
     // Whole seconds, like the clock the overlay ticks with.
     const remaining =
@@ -544,13 +548,16 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     return () => clearTimeout(timer);
   }, [incoming]);
 
-  // Ends once: the auto end keeps ticking until the page is gone. In
-  // Tauri the backend hides the overlay and opens the summary in the main
-  // window.
+  // The overlay's own countdown (the browser, a demo) ends once: it keeps
+  // ticking until the page is gone. In Tauri the backend's finish changes
+  // nothing the second time, so «Завершить» works again after «Отменить
+  // завершение» or a failed finish; the backend hides the overlay and opens
+  // the summary in the main window.
+  const ownCountdown = !inTauri || demo !== undefined;
   const ended = useRef<boolean>(false);
   const { callId } = session;
   const end = useCallback(() => {
-    if (ended.current) {
+    if (ownCountdown && ended.current) {
       return;
     }
     ended.current = true;
@@ -559,13 +566,12 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     if (!inTauri) {
       openRoute(routes.callSummary(callId ?? CURRENT_CALL_ID));
     }
-  }, [callId, openRoute]);
+  }, [callId, openRoute, ownCountdown]);
 
   const { elapsed, remaining } = countdown(release, autoEnd, now, session);
 
   // The countdown ran out: the call ends by itself (in Tauri the backend
   // ends it, also with every window hidden).
-  const ownCountdown = !inTauri || demo !== undefined;
   useEffect(() => {
     if (ownCountdown && micReleased && remaining !== null && remaining <= 0) {
       end();

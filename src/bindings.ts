@@ -259,6 +259,13 @@ export const commands = {
 	 */
 	callKeep: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_keep", { callId })),
 	/**
+	 *  "Удалить все данные" during a call: the live call's recording stops, no
+	 *  call is current and the overlay goes, without a summary and without
+	 *  moving the main window. The call's row is left for the delete that
+	 *  follows. Otherwise nothing changes.
+	 */
+	callDiscard: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_discard", { callId })),
+	/**
 	 *  Starts recording both channels and returns the recording's id (UUID v7).
 	 *  While a recording runs, returns its id and opens nothing. Without
 	 *  microphone access: `External` with `reason: noAccess`, nothing stored.
@@ -544,14 +551,20 @@ export type Call = {
 	updatedAt: number,
 };
 
-/**  One countdown for every window: they draw `endsAt − now`. */
+/**
+ *  The meeting app let the microphone go during a live call: every window
+ *  offers to end the call and draws the same countdown, `endsAt − now`.
+ */
 export type CallAutoEnd = {
 	/**  The app that let the microphone go. */
 	app: string,
 	/**  When it let it go, milliseconds since the Unix epoch. */
 	releasedAt: number,
-	/**  When the call ends by itself, milliseconds since the Unix epoch. */
-	endsAt: number,
+	/**
+	 *  When the call ends by itself, milliseconds since the Unix epoch;
+	 *  `null` with "Никогда": the offer has no countdown.
+	 */
+	endsAt: number | null,
 };
 
 export type CallCreate = {

@@ -244,6 +244,14 @@ describe("CallSessionBackend.layerTauri", () => {
           "finished"
         );
         assert.deepStrictEqual(invokedWith("call_close"), [{ callId }]);
+
+        // «Удалить все данные»: the call goes without a summary.
+        const next = yield* backend.start({ projectId: null });
+        const discarded = yield* backend.discard(next.callId ?? "");
+        assert.strictEqual(discarded.status, "idle");
+        assert.deepStrictEqual(invokedWith("call_discard"), [
+          { callId: next.callId },
+        ]);
       }).pipe(Effect.provide(CallSessionBackend.layerTauri))
   );
 
@@ -316,6 +324,67 @@ describe("the window's call", () => {
     expect(invokedWith("call_resume")).toEqual([{ callId }]);
     expect(invokedWith("recording_start")).toEqual([]);
     expect(screen.queryByText("Собираю итоги…")).toBeNull();
+  });
+
+  it("a finish the backend refused leaves the call live on the page", async () => {
+    const add = vi.spyOn(toast, "add");
+    await act(() =>
+      fake.invoke("call_start", { input: { projectId: TELEMEDIA } })
+    );
+    render(
+      <>
+        <CallPage />
+        <SessionProbe />
+      </>
+    );
+    fake.failures.set("call_finish", {
+      kind: "Storage",
+      message: "База данных не ответила",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
+
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Не удалось завершить звонок" })
+      )
+    );
+    expect(sessionText()).toMatch("live:");
+    expect(screen.queryByText("Собираю итоги…")).toBeNull();
+    expect(screen.getByRole("button", { name: "Завершить" })).toBeTruthy();
+    add.mockRestore();
+  });
+
+  it("a resume the backend refused leaves the page collecting the summary", async () => {
+    const add = vi.spyOn(toast, "add");
+    await act(() =>
+      fake.invoke("call_start", { input: { projectId: TELEMEDIA } })
+    );
+    render(
+      <>
+        <CallPage />
+        <SessionProbe />
+      </>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
+    await waitFor(() => expect(sessionText()).toMatch("finishing:"));
+    fake.failures.set("call_resume", {
+      kind: "Storage",
+      message: "База данных не ответила",
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Отменить завершение" })
+    );
+
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Запись не возобновилась" })
+      )
+    );
+    expect(sessionText()).toMatch("finishing:");
+    expect(screen.getByText("Собираю итоги…")).toBeTruthy();
+    add.mockRestore();
   });
 
   it("says why the recording did not start again; the call goes on", async () => {
@@ -491,6 +560,78 @@ describe("call window and overlay", () => {
   });
 });
 
+describe("the microphone let go", () => {
+  const OFFER = "Микрофон больше не используется. Завершить звонок?";
+
+  /** Zoom let the microphone go: the backend's offer, `endsAt` as given. */
+  function release(endsAt: (now: number) => number | null) {
+    const now = Date.now();
+    act(() =>
+      fake.setSession({
+        ...fake.session,
+        autoEnd: { app: "Zoom", endsAt: endsAt(now), releasedAt: now },
+      })
+    );
+  }
+
+  it("offers to end the call without a countdown with «Никогда»; «Продолжить» withdraws it", async () => {
+    await act(() =>
+      fake.invoke("call_start", { input: { projectId: TELEMEDIA } })
+    );
+    const { callId } = fake.session;
+    const call = within(render(<CallPage />).container);
+    win.label = "overlay";
+    const overlay = within(render(<OverlayPage />).container);
+    await call.findByRole("button", { name: "Завершить" });
+
+    release(() => null);
+
+    const panel = await call.findByRole("region", { name: OFFER });
+    expect(panel.textContent).toContain("Zoom отпустил микрофон");
+    expect(within(panel).queryByRole("progressbar")).toBeNull();
+    expect(
+      await overlay.findByText("Zoom отпустил микрофон", { exact: false })
+    ).toBeTruthy();
+    expect(overlay.queryByText("Завершу сам через")).toBeNull();
+    expect(overlay.queryByRole("progressbar")).toBeNull();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Продолжить" }));
+
+    await waitFor(() =>
+      expect(call.queryByRole("region", { name: OFFER })).toBeNull()
+    );
+    await waitFor(() =>
+      expect(
+        overlay.queryByText("Zoom отпустил микрофон", { exact: false })
+      ).toBeNull()
+    );
+    expect(invokedWith("call_keep")).toEqual([{ callId }]);
+    expect(fake.session.status).toBe("live");
+  });
+
+  it("the overlay's «Завершить» works again after «Отменить завершение»", async () => {
+    await act(() =>
+      fake.invoke("call_start", { input: { projectId: TELEMEDIA } })
+    );
+    const { callId } = fake.session;
+    win.label = "overlay";
+    render(<OverlayPage />);
+    release((now) => now + 5 * 60_000);
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
+    await waitFor(() => expect(fake.session.status).toBe("finishing"));
+
+    // «Отменить завершение» in the main window, then Zoom lets go again.
+    await act(() => fake.invoke("call_resume", { callId }));
+    release((now) => now + 5 * 60_000);
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
+
+    await waitFor(() =>
+      expect(invokedWith("call_finish")).toEqual([{ callId }, { callId }])
+    );
+    await waitFor(() => expect(fake.session.status).toBe("finishing"));
+  });
+});
+
 describe("summary and data", () => {
   it("closes the call once its summary is built: no call, the call finished", async () => {
     fake.answers.set("transcript_state", () => "refined");
@@ -539,7 +680,7 @@ describe("summary and data", () => {
     expect(document.body.textContent).not.toMatch(DEMO_PROJECT);
   });
 
-  it("«Удалить все данные» during a call ends it first", async () => {
+  it("«Удалить все данные» during a call discards it first, without a summary", async () => {
     await act(() =>
       fake.invoke("call_start", {
         input: { participantIds: [OLGA], projectId: TELEMEDIA },
@@ -570,14 +711,15 @@ describe("summary and data", () => {
       DELETE_TIMEOUT
     );
     expect(
-      commandsInOrder("call_finish", "call_close", "projects_delete")
-    ).toEqual([
-      "call_finish",
-      "call_close",
-      "projects_delete",
-      "projects_delete",
-    ]);
-    expect(invokedWith("call_finish")).toEqual([{ callId }]);
+      commandsInOrder(
+        "call_discard",
+        "call_finish",
+        "call_close",
+        "projects_delete"
+      )
+    ).toEqual(["call_discard", "projects_delete", "projects_delete"]);
+    expect(invokedWith("call_discard")).toEqual([{ callId }]);
     await waitFor(() => expect(sessionText()).toBe("idle:—"));
+    expect(nav.push.mock.calls).toEqual([["/onboarding"]]);
   });
 });

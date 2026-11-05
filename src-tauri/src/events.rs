@@ -119,7 +119,8 @@ pub enum CallSessionStatus {
     Finishing,
 }
 
-/// One countdown for every window: they draw `endsAt − now`.
+/// The meeting app let the microphone go during a live call: every window
+/// offers to end the call and draws the same countdown, `endsAt − now`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CallAutoEnd {
@@ -127,8 +128,9 @@ pub struct CallAutoEnd {
     pub app: String,
     /// When it let it go, milliseconds since the Unix epoch.
     pub released_at: i64,
-    /// When the call ends by itself, milliseconds since the Unix epoch.
-    pub ends_at: i64,
+    /// When the call ends by itself, milliseconds since the Unix epoch;
+    /// `null` with "Никогда": the offer has no countdown.
+    pub ends_at: Option<i64>,
 }
 
 /// A global shortcut from Settings was pressed; `action` is its id

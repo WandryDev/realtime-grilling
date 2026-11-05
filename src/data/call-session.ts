@@ -272,6 +272,22 @@ export async function closeCall(callId: string): Promise<void> {
   }
 }
 
+/**
+ * "Удалить все данные" during a call: the call goes without a summary, its
+ * recording stops and none is current; the deletes that follow take its
+ * data. In Tauri the overlay hides and the main window stays.
+ */
+export async function discardCall(): Promise<void> {
+  const callId = currentCallId();
+  if (callId === null) {
+    return;
+  }
+  const error = failureOf(await act((backend) => backend.discard(callId)));
+  if (error !== null) {
+    showError("Не удалось остановить звонок", error);
+  }
+}
+
 /** "Продолжить": the countdown of the auto end stops in every window. */
 export async function keepCall(): Promise<void> {
   const callId = currentCallId();

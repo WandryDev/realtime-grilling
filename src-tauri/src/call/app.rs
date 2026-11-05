@@ -8,6 +8,7 @@ use super::{
     windows::{self, WindowStep},
 };
 use crate::{
+    audio::mic_watch,
     error::{CommandError, CommandResult},
     events::{CallSession, CallSessionChanged, CallSessionStatus, DataChanged, EventSink},
     recording::RecordingManager,
@@ -70,6 +71,10 @@ impl<R: Runtime> CallHost for AppCallHost<R> {
         windows::apply(&self.app, step);
     }
 
+    fn show_widget(&self, app: &str) {
+        mic_watch::show_widget(&self.app, app);
+    }
+
     fn tray(&self, in_call: bool) {
         tray::set_in_call(&self.app, in_call);
     }
@@ -111,26 +116,16 @@ pub fn manager_for_app<R: Runtime>(
 }
 
 /// The `toggle-call` shortcut and "Открыть звонок" in the tray: the call in
-/// progress (the overlay or the call window, as at its start), or the
-/// start widget without one. Runs on the main thread: the settings are
-/// read off it.
+/// progress (the overlay or the call window, as its start chose), or the
+/// start widget without one.
 pub fn toggle_call<R: Runtime>(app: &AppHandle<R>) {
-    let status = app
-        .try_state::<CallManager>()
-        .map_or(CallSessionStatus::Idle, |calls| calls.current().status);
-    if status == CallSessionStatus::Idle {
-        for step in windows::toggle_call(status, false) {
-            windows::apply(app, step);
-        }
-        return;
+    let steps = app.try_state::<CallManager>().map_or_else(
+        || windows::toggle_call(CallSessionStatus::Idle, false),
+        |calls| calls.toggle_steps(),
+    );
+    for step in steps {
+        windows::apply(app, step);
     }
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let compact_overlay = stored_call_settings(&app).compact_overlay;
-        for step in windows::toggle_call(status, compact_overlay) {
-            windows::apply(&app, step);
-        }
-    });
 }
 
 /// "Завершить звонок" in the tray.

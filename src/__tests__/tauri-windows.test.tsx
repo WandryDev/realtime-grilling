@@ -82,7 +82,9 @@ const { StartWidgetPage } = await import(
 const { OverlayPage } = await import(
   "@/features/call-widget/pages/overlay-page"
 );
-const { useCallSession } = await import("@/data/call-session");
+const { currentCallSession, useCallSession } = await import(
+  "@/data/call-session"
+);
 const { routes } = await import("@/lib/routes");
 const { refreshProjects } = await import("@/data/projects");
 
@@ -154,6 +156,54 @@ describe("main window", () => {
     await waitFor(() =>
       expect(nav.push).toHaveBeenCalledWith(routes.newProject())
     );
+  });
+
+  it("goes back to the call window while a call finishes, also after a route away", async () => {
+    nav.pathname = routes.call();
+    const frame = render(
+      <AppFrame>
+        <p>Звонок</p>
+      </AppFrame>
+    );
+    await waitFor(() => expect(fake.handlers.get("navigate")?.size).toBe(1));
+    act(() => fake.setSession(liveSession({ projectId: TELEMEDIA })));
+    act(() => fake.setSession({ ...fake.session, status: "finishing" }));
+    expect(nav.push).not.toHaveBeenCalled();
+    // Each render subscribes again (the mocked router is new each time).
+    await waitFor(() => expect(fake.handlers.get("navigate")?.size).toBe(1));
+
+    // The tray's «Настройки» while «Собираю итоги» runs.
+    act(() => fake.emit("navigate", { route: "/settings/general" }));
+    await waitFor(() =>
+      expect(nav.push).toHaveBeenLastCalledWith("/settings/general")
+    );
+    nav.pathname = "/settings/general";
+    frame.rerender(
+      <AppFrame>
+        <p>Настройки</p>
+      </AppFrame>
+    );
+    await waitFor(() =>
+      expect(nav.push).toHaveBeenLastCalledWith(routes.call())
+    );
+
+    // The summary itself, then no call: the window stays.
+    nav.push.mockReset();
+    nav.pathname = "/calls/summary";
+    frame.rerender(
+      <AppFrame>
+        <p>Итоги</p>
+      </AppFrame>
+    );
+    act(() => fake.setSession(IDLE_SESSION));
+    await waitFor(() => expect(currentCallSession().status).toBe("idle"));
+    nav.pathname = "/settings/general";
+    frame.rerender(
+      <AppFrame>
+        <p>Настройки</p>
+      </AppFrame>
+    );
+    expect(nav.push).not.toHaveBeenCalled();
   });
 
   it("does not listen for routes in a floating window", async () => {

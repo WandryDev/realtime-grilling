@@ -478,18 +478,12 @@ impl<R: Runtime> MicHost for AppHost<R> {
     }
 
     fn show_widget(&self, app: &str) {
-        let navigate = Navigate {
-            route: widget_route(app),
-        };
-        if let Err(error) = navigate.emit_to(&self.0, windows::WIDGET) {
-            eprintln!("grill: failed to send the widget route: {error}");
-        }
-        windows::show(&self.0, windows::WIDGET);
+        show_widget(&self.0, app);
     }
 
-    fn start_call(&self, _app: &str) {
+    fn start_call(&self, app: &str) {
         if let Some(calls) = self.0.try_state::<CallManager>() {
-            calls.start_on_mic();
+            calls.start_on_mic(app);
         }
     }
 
@@ -498,6 +492,17 @@ impl<R: Runtime> MicHost for AppHost<R> {
             calls.mic_changed(transition);
         }
     }
+}
+
+/// Shows the start widget naming `name` (`/widget?app=…`).
+pub fn show_widget<R: Runtime>(app: &AppHandle<R>, name: &str) {
+    let navigate = Navigate {
+        route: widget_route(name),
+    };
+    if let Err(error) = navigate.emit_to(app, windows::WIDGET) {
+        eprintln!("grill: failed to send the widget route: {error}");
+    }
+    windows::show(app, windows::WIDGET);
 }
 
 /// The watcher of the app, started in `setup`.

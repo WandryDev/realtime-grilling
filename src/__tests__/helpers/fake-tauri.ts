@@ -89,6 +89,7 @@ const CALL_COMMANDS = new Set([
   "call_resume",
   "call_close",
   "call_keep",
+  "call_discard",
 ]);
 
 export const IDLE_SESSION: CallSession = {
@@ -338,6 +339,19 @@ export function createFakeTauri(): FakeTauri {
         return sessionChanged(IDLE_SESSION);
       case "call_keep":
         return sessionChanged({ ...session, autoEnd: null });
+      // The call goes without a summary; its row is left for the delete.
+      case "call_discard":
+        if (session.status === "idle") {
+          return session;
+        }
+        if (session.status === "live") {
+          fake.recording = IDLE_RECORDING;
+        }
+        fake.session = IDLE_SESSION;
+        queueMicrotask(() =>
+          emit("call-session-changed", { session: IDLE_SESSION })
+        );
+        return IDLE_SESSION;
       default:
         throw new Error(`Нет команды ${command} в фейке`);
     }

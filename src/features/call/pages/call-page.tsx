@@ -367,7 +367,8 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   }, [fromBackend, recordingId, startedAt]);
 
   // Tauri: the backend's countdown after the meeting app let go; none
-  // means "Продолжить" or the app taking the microphone back.
+  // means "Продолжить" or the app taking the microphone back. The browser
+  // and the demos count down, finish and resume on the page itself.
   const shared = session.autoEnd;
   const ownCountdown = !inTauri || demo !== undefined;
   useEffect(() => {
@@ -378,11 +379,15 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       dispatch({ type: "mic-continue" });
       return;
     }
+    // «Никогда»: the offer without a countdown.
     dispatch({
       app: shared.app,
       now: Date.now(),
       releasedAt: shared.releasedAt,
-      timeout: Math.round((shared.endsAt - shared.releasedAt) / 1000),
+      timeout:
+        shared.endsAt === null
+          ? null
+          : Math.round((shared.endsAt - shared.releasedAt) / 1000),
       type: "mic-released",
     });
   }, [ownCountdown, shared]);
@@ -435,10 +440,14 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     return waitForTranscript(() => dispatch({ type: "transcript-caught-up" }));
   }, [lagging]);
 
+  // In Tauri the session drives «Собираю итоги» (the effect above): a
+  // finish the backend refused leaves the call live on the page too.
   const end = useCallback(() => {
     finishCall();
-    dispatch({ project: projectName, type: "finish-start" });
-  }, [projectName]);
+    if (ownCountdown) {
+      dispatch({ project: projectName, type: "finish-start" });
+    }
+  }, [ownCountdown, projectName]);
 
   const retry = useCallback(() => {
     dispatch({ type: "agent-retrying" });
@@ -546,8 +555,10 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
 
   const onCancelFinish = useCallback(() => {
     resumeCall();
-    dispatch({ type: "finish-cancel" });
-  }, []);
+    if (ownCountdown) {
+      dispatch({ type: "finish-cancel" });
+    }
+  }, [ownCountdown]);
 
   const onCloseWindow = useCallback(() => {
     if (callId) {
