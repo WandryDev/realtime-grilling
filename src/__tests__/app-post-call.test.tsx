@@ -40,7 +40,7 @@ const { routes } = await import("@/lib/routes");
 
 const FIRST_CALL = /Приём звонков, Интеграция с CRM/u;
 const MOMENT = /Здесь спросили/u;
-const OPERATORS_MOMENT = /Здесь спросили «Сколько операторов/u;
+const OPERATORS_ANSWER = /Ответ на «Сколько операторов/u;
 const PROPOSALS = /Предложения/u;
 const TASK_CARDS_NAV = /Карточки задач/u;
 const OLGA_SOURCE = /сказала Ольга, 12:02/u;
@@ -278,9 +278,10 @@ describe("transcript", () => {
     expect(screen.getByLabelText(MOMENT)).toBeTruthy();
     expect(screen.getByText("29:12")).toBeTruthy();
 
+    // An answered question opens the client's answer.
     fireEvent.click(screen.getByRole("button", { name: OPERATORS_QUESTION }));
-    expect(screen.getByLabelText(OPERATORS_MOMENT)).toBeTruthy();
-    expect(screen.getByText("3:02")).toBeTruthy();
+    expect(screen.getByLabelText(OPERATORS_ANSWER)).toBeTruthy();
+    expect(screen.getByText("3:15")).toBeTruthy();
   });
 
   it("plays and deletes the recording after confirmation", async () => {

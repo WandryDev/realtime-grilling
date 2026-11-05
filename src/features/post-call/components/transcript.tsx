@@ -7,7 +7,12 @@
  * constants of alert-dialog.tsx.
  */
 
-import { type ReactNode, type RefObject, useCallback } from "react";
+import {
+  type ChangeEvent,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+} from "react";
 
 import {
   AlertDialog,
@@ -57,15 +62,45 @@ import {
   type TranscriptTurnData,
   WAVEFORM,
 } from "../mock";
+import { matchRanges } from "../text-match";
 import { SideCard, SideHeading } from "./call-window";
 import { DoneCheck, OpenRing, StatusDot } from "./status-mark";
+
+/** `text` with the matches of `query` marked. */
+function Marked({ query, text }: { query?: string; text: string }) {
+  const ranges = query ? matchRanges(text, query) : [];
+  if (ranges.length === 0) {
+    return text;
+  }
+  const parts: ReactNode[] = [];
+  let from = 0;
+  for (const [start, end] of ranges) {
+    parts.push(text.slice(from, start));
+    parts.push(
+      <mark
+        className="bg-accent-soft text-foreground rounded-[4px] px-0.5 font-semibold"
+        key={start}
+      >
+        {text.slice(start, end)}
+      </mark>
+    );
+    from = end;
+  }
+  parts.push(text.slice(from));
+  return parts;
+}
 
 /** One phrase: the client on the left in white, you on the right in ink. */
 export function TranscriptTurn({
   className,
+  id,
+  query,
   turn,
 }: {
   className?: string;
+  id?: string;
+  /** Marks what the search in the transcript found. */
+  query?: string;
   turn: TranscriptTurnData;
 }) {
   const isClient = turn.speaker === "client";
@@ -78,8 +113,9 @@ export function TranscriptTurn({
   return (
     <Message
       align={isClient ? "start" : "end"}
-      className={className}
+      className={cn("scroll-mt-24", className)}
       data-turn-id={turn.id}
+      id={id}
     >
       {isClient ? (
         <MessageAvatar>
@@ -94,7 +130,7 @@ export function TranscriptTurn({
           className={isClient ? "max-w-[520px]" : "max-w-[480px]"}
           variant={isClient ? "card" : "default"}
         >
-          {turn.text}
+          <Marked query={query} text={turn.text} />
         </Bubble>
       </MessageContent>
     </Message>
@@ -138,32 +174,64 @@ function toSeconds(time: string) {
 }
 
 const WAVE_WIDTH = 574;
+const WAVE_HEIGHT = 28;
 const WAVE_STEP = 6;
+const BAR_WIDTH = 4;
+const MIN_BAR = 3;
 const PERCENT = 100;
+const SEEK_STEPS = 1000;
 
-/** Recorded waveform: played bars in ink, the rest gray, a playhead. */
+/** As many bars as the Paper waveform draws. */
+export const WAVEFORM_BARS = Math.ceil(WAVE_WIDTH / WAVE_STEP);
+
+/** Peaks (0–1) as bars of the waveform box, centred. */
+function peakBars(peaks: readonly number[]): [number, number][] {
+  return peaks.slice(0, WAVEFORM_BARS).map((peak) => {
+    const height = Math.max(
+      MIN_BAR,
+      Math.round(Math.min(Math.max(peak, 0), 1) * WAVE_HEIGHT)
+    );
+    return [(WAVE_HEIGHT - height) / 2, height];
+  });
+}
+
+/**
+ * Recorded waveform: played bars in ink, the rest gray, a playhead. With
+ * `onSeek` a click or the arrow keys move the position.
+ */
 export function Waveform({
   className,
+  onSeek,
+  peaks,
   progress,
 }: {
   className?: string;
+  /** Seeks to a share of the recording, 0 to 1. */
+  onSeek?: (progress: number) => void;
+  /** The recording's peaks, 0 to 1; the Paper bars by default. */
+  peaks?: readonly number[];
   /** Played share, 0 to 1. */
   progress: number;
 }) {
   const playedWidth = progress * WAVE_WIDTH;
+  const bars = peaks ? peakBars(peaks) : WAVEFORM;
+  const seek = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      onSeek?.(Number(event.target.value) / SEEK_STEPS),
+    [onSeek]
+  );
 
   return (
     <div
-      aria-hidden="true"
       className={cn("relative flex h-7 min-w-0 flex-1 items-center", className)}
     >
       <svg
         aria-hidden="true"
         className="h-7 w-full"
         preserveAspectRatio="none"
-        viewBox={`0 0 ${WAVE_WIDTH} 28`}
+        viewBox={`0 0 ${WAVE_WIDTH} ${WAVE_HEIGHT}`}
       >
-        {WAVEFORM.map(([y, height], index) => {
+        {bars.map(([y, height], index) => {
           const x = index * WAVE_STEP;
           return (
             <rect
@@ -174,7 +242,7 @@ export function Waveform({
               // biome-ignore lint/suspicious/noArrayIndexKey: bars are a fixed list, the position is the identity
               key={index}
               rx="2"
-              width="4"
+              width={BAR_WIDTH}
               x={x}
               y={y}
             />
@@ -182,9 +250,21 @@ export function Waveform({
         })}
       </svg>
       <span
+        aria-hidden="true"
         className="bg-foreground absolute top-0 h-7 w-0.5 rounded-[1px]"
         style={{ left: `${(progress * PERCENT).toFixed(1)}%` }}
       />
+      {onSeek ? (
+        <input
+          aria-label="Позиция записи"
+          className="absolute inset-0 size-full cursor-pointer opacity-0"
+          max={SEEK_STEPS}
+          min={0}
+          onChange={seek}
+          type="range"
+          value={Math.round(progress * SEEK_STEPS)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -201,25 +281,33 @@ export const PLAYER_CHANNELS = [
 
 export type PlayerChannel = (typeof PLAYER_CHANNELS)[number]["id"];
 
-/** Channel picker of the player: a static button in /dev, a menu in the app. */
-function ChannelButton({
-  channel,
-  onChannelChange,
+/** A part of a call recorded again after «Отменить завершение». */
+export interface PlayerPart {
+  id: string;
+  label: string;
+}
+
+/** A menu of a secondary button: the channel, the part of the call. */
+function PlayerMenu({
+  label,
+  onValueChange,
+  options,
+  value,
 }: {
-  channel: PlayerChannel;
-  onChannelChange?: (channel: PlayerChannel) => void;
+  label: string;
+  onValueChange?: (value: string) => void;
+  options: readonly { id: string; label: string }[];
+  value: string;
 }) {
   const change = useCallback(
-    (value: unknown) => {
-      const next = PLAYER_CHANNELS.find((item) => item.id === value);
-      if (next) {
-        onChannelChange?.(next.id);
+    (next: unknown) => {
+      const found = options.find((item) => item.id === next);
+      if (found) {
+        onValueChange?.(found.id);
       }
     },
-    [onChannelChange]
+    [onValueChange, options]
   );
-  const label =
-    PLAYER_CHANNELS.find((item) => item.id === channel)?.label ?? "";
   const button = (
     <Button
       className="h-7 gap-1.5 px-2.5 font-normal"
@@ -231,15 +319,15 @@ function ChannelButton({
     </Button>
   );
 
-  if (!onChannelChange) {
+  if (!onValueChange) {
     return button;
   }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={button} />
       <DropdownMenuContent align="end" side="top">
-        <DropdownMenuRadioGroup onValueChange={change} value={channel}>
-          {PLAYER_CHANNELS.map((item) => (
+        <DropdownMenuRadioGroup onValueChange={change} value={value}>
+          {options.map((item) => (
             <DropdownMenuRadioItem closeOnClick key={item.id} value={item.id}>
               {item.label}
             </DropdownMenuRadioItem>
@@ -250,33 +338,81 @@ function ChannelButton({
   );
 }
 
+/** Channel picker of the player: a static button in /dev, a menu in the app. */
+function ChannelButton({
+  channel,
+  onChannelChange,
+}: {
+  channel: PlayerChannel;
+  onChannelChange?: (channel: PlayerChannel) => void;
+}) {
+  const change = useCallback(
+    (value: string) => {
+      const next = PLAYER_CHANNELS.find((item) => item.id === value);
+      if (next) {
+        onChannelChange?.(next.id);
+      }
+    },
+    [onChannelChange]
+  );
+  const label =
+    PLAYER_CHANNELS.find((item) => item.id === channel)?.label ?? "";
+  return (
+    <PlayerMenu
+      label={label}
+      onValueChange={onChannelChange ? change : undefined}
+      options={PLAYER_CHANNELS}
+      value={channel}
+    />
+  );
+}
+
 /** Player pinned to the bottom of the panel. */
 export function AudioPlayer({
   channel = "both",
   className,
   duration,
   onChannelChange,
+  onPartChange,
+  onSeek,
   onSpeedChange,
   onTogglePlay,
+  part,
+  parts = [],
+  peaks,
   playing = true,
   position,
+  progress: progressProp,
   speed = RECORDING.speed as PlayerSpeed,
 }: {
   channel?: PlayerChannel;
   className?: string;
   duration: string;
   onChannelChange?: (channel: PlayerChannel) => void;
+  onPartChange?: (partId: string) => void;
+  /** Seeks to a share of the recording, 0 to 1. */
+  onSeek?: (progress: number) => void;
   onSpeedChange?: (speed: PlayerSpeed) => void;
   onTogglePlay?: () => void;
+  /** The part that plays, of `parts`. */
+  part?: string;
+  /** Parts of a call with several recordings; none for one. */
+  parts?: readonly PlayerPart[];
+  /** The waveform's peaks, 0 to 1. */
+  peaks?: readonly number[];
   playing?: boolean;
   position: string;
+  /** Played share, 0 to 1; from `position` and `duration` by default. */
+  progress?: number;
   speed?: PlayerSpeed;
 }) {
-  const progress = Math.min(toSeconds(position) / toSeconds(duration), 1);
+  const progress =
+    progressProp ?? Math.min(toSeconds(position) / toSeconds(duration), 1);
   const nextSpeed = useCallback(() => {
     const index = PLAYER_SPEEDS.indexOf(speed);
     onSpeedChange?.(PLAYER_SPEEDS[(index + 1) % PLAYER_SPEEDS.length] ?? "1×");
   }, [onSpeedChange, speed]);
+  const current = parts.find((item) => item.id === part) ?? parts[0];
 
   return (
     <section
@@ -301,7 +437,15 @@ export function AudioPlayer({
         <span className="text-sm">{position}</span>
         <span className="text-muted-foreground text-xs">{duration}</span>
       </p>
-      <Waveform progress={progress} />
+      <Waveform onSeek={onSeek} peaks={peaks} progress={progress} />
+      {parts.length > 1 && current ? (
+        <PlayerMenu
+          label={current.label}
+          onValueChange={onPartChange}
+          options={parts}
+          value={current.id}
+        />
+      ) : null}
       <Button
         aria-label={`Скорость ${speed}`}
         className="h-7 px-2.5 font-mono text-xs font-normal"
@@ -413,11 +557,14 @@ export function CallQuestionList({
 export function RecordingCard({
   className,
   deleted = false,
+  description = RECORDING.description,
   onDelete,
 }: {
   className?: string;
   /** The audio is gone; transcript and moments still work. */
   deleted?: boolean;
+  /** «Opus, 2 канала, 13 МБ. В облако не выгружается.» */
+  description?: string;
   onDelete?: () => void;
 }) {
   if (deleted) {
@@ -439,7 +586,7 @@ export function RecordingCard({
         <LockIcon className="text-muted-foreground size-3.5 shrink-0" />
         {RECORDING.title}
       </h2>
-      <p className="text-muted-foreground text-sm">{RECORDING.description}</p>
+      <p className="text-muted-foreground text-sm">{description}</p>
       <Button
         className="text-destructive hover:bg-contradiction-soft hover:text-destructive -mx-2 -my-[5px] w-fit px-2"
         onClick={onDelete}
@@ -488,11 +635,14 @@ const DELETE_FOOTER_CLASS_NAME = "gap-3 [&>button]:h-10 [&>button]:px-[18px]";
  */
 export function DeleteRecordingAlert({
   cancelRef,
+  description = DELETE_RECORDING.description,
   onConfirm,
   onOpenChange,
   open,
 }: {
   cancelRef: RefObject<HTMLButtonElement | null>;
+  /** What goes: «Аудио 19 октября, 40 минут, 13 МБ, удалится …». */
+  description?: string;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
@@ -503,9 +653,7 @@ export function DeleteRecordingAlert({
         <DeleteRecordingMark />
         <AlertDialogHeader>
           <AlertDialogTitle>{DELETE_RECORDING.title}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {DELETE_RECORDING.description}
-          </AlertDialogDescription>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <DeleteRecordingKeeps />
         <AlertDialogFooter className={DELETE_FOOTER_CLASS_NAME}>
