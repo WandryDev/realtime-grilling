@@ -5,21 +5,18 @@ import { useMemo } from "react";
 
 import type { Call, Value } from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
-import { PROPOSAL_GROUPS } from "@/features/post-call/mock";
 import { diffPatch } from "@/lib/merge-patch";
 import { deleteCallAudio, isCallAudioDeleted } from "./call-records";
 import { CallsData } from "./services/calls";
 import { MockDatabase } from "./services/mock-database";
-import { DEMO_CALL_ID, mockSeed, seedCallId } from "./services/mock-seed";
+import { mockSeed, seedCallId } from "./services/mock-seed";
 import { PeopleData } from "./services/people";
 import { createStore } from "./store";
 import { createSyncedStore, refreshMockStores } from "./synced-store";
 
 /*
- * Finished calls: the history list and everything the user decides after a
- * call (proposals, task cards, the recording). Every finished call shows the
- * demo content of the Телемедиа call of 19 October; what differs per call is
- * the history row and the decisions kept here.
+ * Finished calls: the history list and the call record every post-call
+ * page frames itself with.
  *
  * The call's `summary` JSON (its shape belongs to the frontend) keeps the
  * participants' names of the call session; dates, duration and the open
@@ -27,22 +24,14 @@ import { createSyncedStore, refreshMockStores } from "./synced-store";
  * cards and recordings Rust keeps are read by `./summaries.ts`,
  * `./proposals.ts` and `./call-records.ts`.
  *
- * Until the pages read those (post-call tasks 4.2–4.6), the decisions on the
- * demo's proposals and cards and the deleted audio stay local to the
- * window, seeded with the demo's (`reviewSeed`); «Удалить запись» also
- * deletes the files (`call_audio_delete`).
+ * Until the details page reads the recordings (post-call task 4.5), the
+ * deleted audio stays local to the window too, seeded with the demo's
+ * (`reviewSeed`); «Удалить запись» also deletes the files
+ * (`call_audio_delete`).
  */
 
 /** How the screens name a call without a project. */
 export const NO_PROJECT_CALL = "Звонок без проекта";
-
-export type ProposalDecision = "pending" | "accepted" | "rejected";
-
-export interface ProposalReview {
-  decision: ProposalDecision;
-  /** The user's version, set by "Сохранить и принять". */
-  text?: string;
-}
 
 export interface CallRecord {
   /** The recording was deleted; transcript and summary stay. */
@@ -65,7 +54,6 @@ export interface CallRecord {
   participants: string;
   /** null: a call without a project ("Звонок без проекта"). */
   projectId: string | null;
-  proposals: Record<string, ProposalReview>;
   /** When it started (its creation without a start), ms since the epoch. */
   startedAt: number;
   time: string;
@@ -179,7 +167,6 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
       participantIds: call.participantIds,
       participants: summary.participants ?? people.join(", "),
       projectId: call.projectId,
-      proposals: {},
       startedAt: start.getTime(),
       time,
       title: call.title,
@@ -253,41 +240,24 @@ const callsStore = createSyncedStore({
 });
 
 /*
- * Local to the window: the project the start widget picked for the demo call (the demo records it under
- * Телемедиа; a call record can't change its project), and the decisions
- * of the demo's proposals and cards and the deleted audio, until the pages
- * read the backend's.
+ * Local to the window: the project the start widget picked for the demo
+ * call (the demo records it under Телемедиа; a call record can't change
+ * its project) and the deleted audio, until the details page reads it.
  */
 interface LocalCall {
   audioDeleted?: boolean;
   projectId?: string;
-  proposals?: Record<string, ProposalReview>;
 }
 
-/**
- * The demo's decisions: the current call keeps the Paper states of its
- * proposals, older calls were reviewed already (their pending proposals
- * accepted); the history's «аудио удалено» calls have no audio.
- */
+/** The history's «аудио удалено» calls of the demo have no audio. */
 function reviewSeed(): Record<string, LocalCall> {
   const seed = mockSeed();
   const local: Record<string, LocalCall> = {};
   for (const call of seed.calls) {
-    const reviewed = call.id !== DEMO_CALL_ID;
-    const proposals: Record<string, ProposalReview> = {};
-    for (const group of PROPOSAL_GROUPS) {
-      for (const proposal of group.proposals) {
-        let decision: ProposalDecision = reviewed ? "accepted" : "pending";
-        if (proposal.state === "accepted" || proposal.state === "rejected") {
-          decision = proposal.state;
-        }
-        proposals[proposal.id] = { decision };
-      }
-    }
     const audioDeleted = seed.recordings.some(
       (item) => item.callId === call.id && item.recording.audioDeleted
     );
-    local[call.id] = { audioDeleted, proposals };
+    local[call.id] = { audioDeleted };
   }
   return local;
 }
@@ -304,7 +274,6 @@ function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
       ...record,
       audioDeleted: extra.audioDeleted ?? record.audioDeleted,
       projectId: extra.projectId ?? record.projectId,
-      proposals: extra.proposals ?? record.proposals,
     };
   });
 }
@@ -412,22 +381,6 @@ export function setCallPeople(
   return updateSummary(id, (summary) => ({ ...summary, participants }));
 }
 
-/** The demo's decision on a proposal, local to the window (see above). */
-export function setProposalDecision(
-  id: string,
-  proposalId: string,
-  review: ProposalReview
-) {
-  localStore.set((local) => ({
-    ...local,
-    [id]: {
-      ...local[id],
-      proposals: { ...local[id]?.proposals, [proposalId]: review },
-    },
-  }));
-  return Promise.resolve();
-}
-
 /**
  * «Удалить запись»: deletes the audio of every recording of the call
  * (`call_audio_delete`); the call reads `audioDeleted` once it is done.
@@ -445,13 +398,6 @@ export function deleteRecording(id: string) {
     }
     return done;
   });
-}
-
-/** Proposals still waiting for a decision. */
-export function countPendingProposals(call: CallRecord) {
-  return Object.values(call.proposals).filter(
-    (review) => review.decision === "pending"
-  ).length;
 }
 
 /**

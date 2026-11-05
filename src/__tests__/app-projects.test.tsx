@@ -19,6 +19,7 @@ const OLGA = /Ольга Демченко/u;
 const MARINA = /Марина Ковальчук/u;
 const NEXT = /Далее/u;
 const SAVE = /Сохранить/u;
+const PROPOSAL_AFTER_CALL = /^Предложение после звонка/u;
 const UUID_V7 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
@@ -231,11 +232,19 @@ describe("NewProjectPage", () => {
 });
 
 describe("PersonPage", () => {
-  it("accepts the suggestion and saves edits", async () => {
+  it("shows her pending proposals with the call's review, and saves edits", async () => {
     setSearch("project=telemedia&id=olga");
     render(<PersonPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Принять" }));
+    const suggestion = screen.getByRole("region", {
+      name: PROPOSAL_AFTER_CALL,
+    });
+    expect(within(suggestion).getByText("Чего ждёт от проекта")).toBeTruthy();
+    expect(
+      within(suggestion)
+        .getByRole("link", { name: "Разобрать в звонке" })
+        .getAttribute("href")
+    ).toBe("/calls/proposals?id=telemedia-19-oct");
     expect(
       screen.queryByRole("heading", {
         name: "Предложение после звонка сегодня",

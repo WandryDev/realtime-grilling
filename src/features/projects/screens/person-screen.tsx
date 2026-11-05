@@ -27,9 +27,27 @@ export const PERSON_FORM_SLOT = "person-form";
 const SUGGESTION_CALL_ID = "telemedia-19-oct";
 const SUGGESTION_MOMENT = "12:14";
 
+/** Pending proposals of one call about the person, for its review. */
+export interface CallSuggestion {
+  /** The call's id. */
+  id: string;
+  /** The quote's moment in the call transcript. */
+  quoteHref?: string;
+  /** The call's review of proposals. */
+  reviewHref: string;
+  suggestion: {
+    changes: { field: string; text: string }[];
+    quote?: string;
+    title: string;
+  };
+}
+
 /*
  * 13 Человек: the profile of a person of the client with the suggestion
- * after the call. 14 (`mode="edit"`): every field editable in place.
+ * after the call. 14 (`mode="edit"`): every field editable in place. The
+ * app passes the person's pending proposals of each call
+ * (`callSuggestions`), reviewed on the call's page; without them the demo
+ * suggestion with its own buttons.
  *
  * In edit mode the fields sit in a form; `onSave` gets its submit event
  * (fields: role, askStyle, portrait:<label>).
@@ -44,10 +62,13 @@ export function PersonScreen({
   onEditSuggestion,
   onSave,
   onScaleStep,
+  callSuggestions,
   person = PERSON,
   project = PROJECT,
   suggestion = true,
 }: {
+  /** The person's pending proposals, a block per call. */
+  callSuggestions?: CallSuggestion[];
   className?: string;
   mode?: "view" | "edit";
   onAcceptSuggestion?: () => void;
@@ -99,7 +120,17 @@ export function PersonScreen({
             name={person.name}
             role={person.role}
           />
-          {suggestion && !editing && person.suggestion ? (
+          {!editing && callSuggestions
+            ? callSuggestions.map((item) => (
+                <ProfileSuggestion
+                  key={item.id}
+                  quoteHref={item.quoteHref}
+                  reviewHref={item.reviewHref}
+                  suggestion={item.suggestion}
+                />
+              ))
+            : null}
+          {suggestion && !editing && !callSuggestions && person.suggestion ? (
             <ProfileSuggestion
               onAccept={onAcceptSuggestion}
               onDecline={onDeclineSuggestion}

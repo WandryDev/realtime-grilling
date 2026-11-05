@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { type MouseEvent, type ReactNode, useId } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   InputGroup,
@@ -103,7 +103,9 @@ export function ProfileEditActions({
 
 /**
  * Suggested edit after a call, inside the profile: what changes, the quote
- * it comes from (links to the transcript) and accept / edit / decline.
+ * it comes from (links to the transcript) and accept / edit / decline. With
+ * `reviewHref` (the proposals of a call) the decisions are made in the
+ * call's review: one link there instead of the buttons.
  */
 export function ProfileSuggestion({
   className,
@@ -111,6 +113,7 @@ export function ProfileSuggestion({
   onDecline,
   onEditAccept,
   quoteHref = "#transcript-12-14",
+  reviewHref,
   suggestion,
 }: {
   className?: string;
@@ -120,7 +123,9 @@ export function ProfileSuggestion({
   onEditAccept?: () => void;
   /** The quote leads to its moment in the call transcript. */
   quoteHref?: string;
-  suggestion: Person["suggestion"];
+  /** «Разобрать в звонке»: the review of the call. */
+  reviewHref?: string;
+  suggestion: Omit<Person["suggestion"], "quote"> & { quote?: string };
 }) {
   const titleId = useId();
   return (
@@ -150,33 +155,46 @@ export function ProfileSuggestion({
           </div>
         ))}
       </dl>
-      <blockquote className="border-accent-ink/25 border-l-2 pl-3 text-sm">
-        <Link
-          className="text-accent-ink focus-visible:focus-ring rounded-xs hover:underline"
-          href={quoteHref}
-        >
-          {suggestion.quote}
-        </Link>
-      </blockquote>
-      <div className="flex items-center gap-2">
-        <Button className="h-[34px] px-4" onClick={onAccept}>
-          Принять
-        </Button>
-        <Button
-          className="bg-background hover:bg-background/70 h-[34px] px-4"
-          onClick={onEditAccept}
-          variant="secondary"
-        >
-          Изменить и принять
-        </Button>
-        <Button
-          className="text-accent-ink hover:text-accent-ink h-[34px] px-3 hover:bg-transparent"
-          onClick={onDecline}
-          variant="ghost"
-        >
-          Отклонить
-        </Button>
-      </div>
+      {suggestion.quote ? (
+        <blockquote className="border-accent-ink/25 border-l-2 pl-3 text-sm">
+          <Link
+            className="text-accent-ink focus-visible:focus-ring rounded-xs hover:underline"
+            href={quoteHref}
+          >
+            {suggestion.quote}
+          </Link>
+        </blockquote>
+      ) : null}
+      {reviewHref ? (
+        <div className="flex items-center gap-2">
+          <Link
+            className={cn(buttonVariants(), "h-[34px] px-4")}
+            href={reviewHref}
+          >
+            Разобрать в звонке
+          </Link>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button className="h-[34px] px-4" onClick={onAccept}>
+            Принять
+          </Button>
+          <Button
+            className="bg-background hover:bg-background/70 h-[34px] px-4"
+            onClick={onEditAccept}
+            variant="secondary"
+          >
+            Изменить и принять
+          </Button>
+          <Button
+            className="text-accent-ink hover:text-accent-ink h-[34px] px-3 hover:bg-transparent"
+            onClick={onDecline}
+            variant="ghost"
+          >
+            Отклонить
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

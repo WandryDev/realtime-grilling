@@ -42,6 +42,7 @@ const OPERATORS_MOMENT = /Здесь спросили «Сколько опер�
 const PROPOSALS = /Предложения/u;
 const TASK_CARDS_NAV = /Карточки задач/u;
 const CLIENT_SOURCE = /сказал клиент, 12:02/u;
+const EDITED_CRM = /amoCRM, ключ у Игоря/u;
 const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
 const GITHUB_SOON = /Отправить в GitHub\s*скоро/u;
 const OPERATORS_QUESTION = /Сколько операторов/u;
@@ -205,21 +206,23 @@ describe("proposals", () => {
     expect(screen.getByText("разобрано 3 из 7")).toBeTruthy();
 
     const channels = screen.getByRole("article", {
-      name: "Раздел «Каналы входящих»",
+      name: "Раздел «Продукт»",
     });
     fireEvent.click(within(channels).getByRole("button", { name: "Принять" }));
     expect(screen.getByText("разобрано 4 из 7")).toBeTruthy();
 
-    const tech = screen.getByRole("article", { name: "Технический уровень" });
+    const tech = screen.getByRole("article", {
+      name: "Как формулировать вопросы",
+    });
     fireEvent.click(within(tech).getByRole("button", { name: "Отклонить" }));
     expect(screen.getByText("разобрано 5 из 7")).toBeTruthy();
 
-    const crm = screen.getByRole("article", { name: "Раздел «CRM»" });
+    const crm = screen.getByRole("article", { name: "Раздел «Стек»" });
     fireEvent.click(within(crm).getByRole("button", { name: "Изменить" }));
     const editor = screen.getByRole("textbox", { name: "Новый текст" });
     fireEvent.change(editor, { target: { value: "amoCRM, ключ у Игоря" } });
     fireEvent.keyDown(editor, { ctrlKey: true, key: "Enter" });
-    expect(screen.getByText("amoCRM, ключ у Игоря")).toBeTruthy();
+    expect(screen.getByText(EDITED_CRM)).toBeTruthy();
     expect(screen.getByText("разобрано 6 из 7")).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Вернуть" })[0]);

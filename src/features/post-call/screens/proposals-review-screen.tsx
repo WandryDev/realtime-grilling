@@ -38,7 +38,9 @@ import {
 
 /*
  * "04 Ревью предложений": `partial` with accepted, rejected, pending and
- * edited proposals; `done` once nothing waits for a decision.
+ * edited proposals; `done` once nothing waits for a decision; `empty`
+ * when the call has none («Предложений нет»); `loading` until they are
+ * read.
  */
 
 export interface ReviewOutcome {
@@ -93,9 +95,29 @@ function ReviewDone({ outcome }: { outcome: ReviewOutcome }) {
   );
 }
 
+function NoProposals({ note }: { note: string }) {
+  const links = usePostCallLinks();
+  return (
+    <CenteredState
+      className="flex-1"
+      description={note}
+      media={<DocumentIcon className="size-7" strokeWidth={0.75} />}
+      mediaClassName="bg-surface text-muted-foreground size-16 rounded-full"
+      title="Предложений нет"
+    >
+      <div className="flex items-center gap-2 pt-1">
+        <LinkButton href={links.summary} size="lg">
+          К итогам звонка
+        </LinkButton>
+      </div>
+    </CenteredState>
+  );
+}
+
 export function ProposalsReviewScreen({
   className,
   currentId,
+  emptyNote = "Агент не нашёл в звонке нового для брифа и профилей.",
   groups = PROPOSAL_GROUPS,
   onAction,
   outcome = REVIEW_OUTCOME,
@@ -105,17 +127,20 @@ export function ProposalsReviewScreen({
   className?: string;
   /** Proposal the keyboard shortcuts act on (app). */
   currentId?: string;
+  /** Why there are none, under «Предложений нет». */
+  emptyNote?: string;
   /** Proposals with their states; the Paper review by default. */
   groups?: ProposalGroupData[];
   onAction?: ProposalActionHandler;
   /** What "Всё разобрано" reports. */
   outcome?: ReviewOutcome;
-  state?: "partial" | "done";
+  state?: "partial" | "done" | "empty" | "loading";
   totals?: ReviewTotals;
 }) {
   const info = usePostCallInfo();
   const links = usePostCallLinks();
-  const totals = totalsProp ?? REVIEW_TOTALS[state];
+  const totals =
+    totalsProp ?? REVIEW_TOTALS[state === "done" ? "done" : "partial"];
   const reviewed = totals.accepted + totals.rejected;
   const total = reviewed + totals.pending;
   const breadcrumb = [
@@ -156,33 +181,33 @@ export function ProposalsReviewScreen({
             </div>
           ) : null}
         </CallPageHeader>
-        {state === "done" ? (
-          <ReviewDone outcome={outcome} />
-        ) : (
-          groups.map((group) => (
-            <section
-              aria-labelledby={`proposals-${group.id}`}
-              className="flex flex-col gap-3"
-              key={group.id}
-            >
-              <ProposalGroupHeading
-                count={group.count}
-                id={`proposals-${group.id}`}
-                initial={group.initial}
-                role={group.role}
-                title={group.title}
-              />
-              {group.proposals.map((proposal) => (
-                <Proposal
-                  current={proposal.id === currentId}
-                  key={proposal.id}
-                  onAction={onAction}
-                  proposal={proposal}
+        {state === "empty" ? <NoProposals note={emptyNote} /> : null}
+        {state === "done" ? <ReviewDone outcome={outcome} /> : null}
+        {state === "partial"
+          ? groups.map((group) => (
+              <section
+                aria-labelledby={`proposals-${group.id}`}
+                className="flex flex-col gap-3"
+                key={group.id}
+              >
+                <ProposalGroupHeading
+                  count={group.count}
+                  id={`proposals-${group.id}`}
+                  initial={group.initial}
+                  role={group.role}
+                  title={group.title}
                 />
-              ))}
-            </section>
-          ))
-        )}
+                {group.proposals.map((proposal) => (
+                  <Proposal
+                    current={proposal.id === currentId}
+                    key={proposal.id}
+                    onAction={onAction}
+                    proposal={proposal}
+                  />
+                ))}
+              </section>
+            ))
+          : null}
       </PanelPage>
     </CallWindow>
   );

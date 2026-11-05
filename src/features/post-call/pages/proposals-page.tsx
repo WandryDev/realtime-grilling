@@ -3,62 +3,43 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useCallTranscript } from "@/data/call-records";
+import { type CallRecord, useCall } from "@/data/calls";
+import { usePeople } from "@/data/people";
 import {
-  type CallRecord,
-  type ProposalDecision,
-  setProposalDecision,
-  useCall,
-} from "@/data/calls";
+  decideProposal,
+  undoProposal,
+  useCallProposals,
+} from "@/data/proposals";
+import { inTauri } from "@/effect/runtime";
+import { proposalEdited, proposalText } from "@/lib/proposal-fields";
 import { useDemoState } from "@/lib/use-demo-state";
+
 import { plural } from "../api";
 import { usePostCallInfo } from "../components/links";
 import type { ProposalAction } from "../components/proposals";
-import {
-  PROPOSAL_GROUPS,
-  type ProposalData,
-  type ProposalGroupData,
-  REVIEW_RESULT,
-  type ReviewTotals,
-} from "../mock";
+import type { ProposalGroupData, ReviewTotals } from "../mock";
 import {
   ProposalsReviewScreen,
   type ReviewOutcome,
 } from "../screens/proposals-review-screen";
+import { speakerOf } from "./call-data";
 import { APP_WINDOW, CallPageFrame } from "./call-page-frame";
+import { proposalGroups } from "./proposal-data";
 
 /*
- * /calls/proposals?id=…: "04 Ревью предложений". Accept, edit (⌘ Enter
- * saves, Esc cancels), reject and undo; decisions go to the calls slice
- * right away. Keys: A accept, E edit, X reject, J/K next and previous
- * waiting proposal. Nothing waits → "Всё разобрано". `?demo=done` decides
- * every waiting proposal at once.
+ * /calls/proposals?id=…: "04 Ревью предложений" of the call's proposals
+ * (`proposals_list`), grouped by the brief and by person. Accept, edit
+ * (⌘ Enter saves and accepts, Esc cancels), reject and undo go to Rust,
+ * which applies an accepted one to the profile or the project's notes; a
+ * refusal (notes over the limit, «Поле изменили после принятия») is a
+ * toast with Rust's reason, and the proposal stays as it was. Keys: A
+ * accept, E edit, X reject, J/K next and previous waiting proposal.
+ * Nothing waits → "Всё разобрано"; none at all → «Предложений нет».
+ * `?demo=done` (browser) accepts every waiting proposal at once.
  */
 
 const DEMO_STATES = ["done"] as const;
-
-function withDecisions(
-  call: CallRecord,
-  editingId: string | null
-): ProposalGroupData[] {
-  return PROPOSAL_GROUPS.map((group) => ({
-    ...group,
-    proposals: group.proposals.map((proposal): ProposalData => {
-      const review = call.proposals[proposal.id];
-      const decision: ProposalDecision = review?.decision ?? "pending";
-      const suggestion = review?.text ?? proposal.suggestion;
-      let state: ProposalData["state"] = decision;
-      if (decision === "pending" && proposal.id === editingId) {
-        state = "editing";
-      }
-      return {
-        ...proposal,
-        resolved: review?.text ?? proposal.resolved,
-        state,
-        suggestion,
-      };
-    }),
-  }));
-}
 
 function totalsOf(groups: ProposalGroupData[]): ReviewTotals {
   const totals = { accepted: 0, pending: 0, rejected: 0 };
@@ -87,14 +68,15 @@ function outcomeOf(
   totals: ReviewTotals,
   projectName: string
 ): ReviewOutcome {
-  const targets = REVIEW_RESULT.map((target) => {
-    const group = groups.find((item) => item.id === target.id);
-    const accepted =
-      group?.proposals.filter((proposal) => proposal.state === "accepted")
-        .length ?? 0;
+  const targets = groups.map((group) => {
+    const accepted = group.proposals.filter(
+      (proposal) => proposal.state === "accepted"
+    ).length;
     return {
-      ...target,
       count: accepted,
+      id: group.id,
+      initial: group.initial,
+      name: group.title,
       note: accepted > 0 ? plural(accepted, CHANGE_FORMS) : "без изменений",
     };
   });
@@ -131,23 +113,29 @@ function isTyping(target: EventTarget | null) {
 function ProposalsOfCall({ call }: { call: CallRecord }) {
   const demo = useDemoState(DEMO_STATES);
   const info = usePostCallInfo();
+  const { data: proposals, status } = useCallProposals(call.id);
+  const people = usePeople(call.projectId);
+  const recordings = useCallTranscript(call.id).data;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [currentId, setCurrentId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (demo !== "done") {
+    if (demo !== "done" || inTauri) {
       return;
     }
-    for (const [proposalId, review] of Object.entries(call.proposals)) {
-      if (review.decision === "pending") {
-        setProposalDecision(call.id, proposalId, { decision: "accepted" });
+    for (const proposal of proposals) {
+      if (proposal.decision === "pending") {
+        decideProposal(proposal, { decision: "accepted" });
       }
     }
-  }, [call.id, call.proposals, demo]);
+  }, [demo, proposals]);
 
+  const speaker = speakerOf(
+    call.participantIds.length === 1 ? [call.participants] : []
+  );
   const groups = useMemo(
-    () => withDecisions(call, editingId),
-    [call, editingId]
+    () => proposalGroups(proposals, { editingId, people, recordings, speaker }),
+    [editingId, people, proposals, recordings, speaker]
   );
   const totals = useMemo(() => totalsOf(groups), [groups]);
   const waiting = useMemo(
@@ -165,40 +153,38 @@ function ProposalsOfCall({ call }: { call: CallRecord }) {
   const onAction = useCallback(
     (proposalId: string, action: ProposalAction, text?: string) => {
       setCurrentId(proposalId);
+      const proposal = proposals.find((item) => item.id === proposalId);
+      if (!proposal) {
+        return;
+      }
       switch (action) {
         case "accept":
-          setProposalDecision(call.id, proposalId, {
-            ...call.proposals[proposalId],
-            decision: "accepted",
-          });
+          decideProposal(proposal, { decision: "accepted" });
           break;
         case "reject":
-          setProposalDecision(call.id, proposalId, {
-            ...call.proposals[proposalId],
-            decision: "rejected",
-          });
+          decideProposal(proposal, { decision: "rejected" });
           break;
         case "undo":
-          setProposalDecision(call.id, proposalId, {
-            ...call.proposals[proposalId],
-            decision: "pending",
-          });
+          undoProposal(proposal);
           break;
         case "edit":
           setEditingId(proposalId);
           return;
-        case "save":
-          setProposalDecision(call.id, proposalId, {
+        case "save": {
+          const edited = text ? proposalEdited(proposal.field, text) : "";
+          decideProposal(proposal, {
             decision: "accepted",
-            text: text || call.proposals[proposalId]?.text,
+            edited:
+              edited && edited !== proposalText(proposal) ? edited : undefined,
           });
           break;
+        }
         default:
           break;
       }
       setEditingId(null);
     },
-    [call.id, call.proposals]
+    [proposals]
   );
 
   // A, E, X act on the current proposal; J and K move between them
@@ -229,16 +215,28 @@ function ProposalsOfCall({ call }: { call: CallRecord }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeId, editingId, onAction, waiting]);
 
-  const done = totals.pending === 0;
+  let state: "partial" | "done" | "empty" | "loading" = "partial";
+  if (status === "loading") {
+    state = "loading";
+  } else if (proposals.length === 0) {
+    state = "empty";
+  } else if (totals.pending === 0) {
+    state = "done";
+  }
 
   return (
     <ProposalsReviewScreen
       className={APP_WINDOW}
       currentId={activeId}
+      emptyNote={
+        call.projectId === null
+          ? "У звонка без проекта нет брифа и профилей, предлагать нечего."
+          : "Агент не нашёл в звонке нового для брифа и профилей."
+      }
       groups={groups}
       onAction={onAction}
       outcome={outcomeOf(groups, totals, info.project)}
-      state={done ? "done" : "partial"}
+      state={state}
       totals={totals}
     />
   );

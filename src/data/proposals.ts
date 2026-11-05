@@ -1,6 +1,7 @@
 "use client";
 
 import { Effect } from "effect";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 
 import type { Proposal, ProposalDecide } from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
@@ -80,6 +81,63 @@ export function usePersonProposals(
 /** Proposals still waiting for a decision. */
 export function countPending(proposals: readonly Proposal[]) {
   return proposals.filter((proposal) => proposal.decision === "pending").length;
+}
+
+/**
+ * The one count of a call's pending proposals: the sidebar, the summary,
+ * the history and the review show this.
+ */
+export function usePendingProposals(callId: string | null | undefined) {
+  return countPending(useCallProposals(callId).data);
+}
+
+const NO_COUNTS: Readonly<Record<string, number>> = {};
+
+/** The pending proposals of each of `callIds` (the history's rows). */
+export function usePendingProposalCounts(
+  callIds: readonly string[]
+): Readonly<Record<string, number>> {
+  const key = callIds.join("\n");
+  const stores = useMemo(
+    () =>
+      (key ? key.split("\n") : []).map(
+        (id) => [id, callProposals(id)] as const
+      ),
+    [key]
+  );
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const stops = stores.map(([, store]) => store.subscribe(listener));
+      return () => {
+        for (const stop of stops) {
+          stop();
+        }
+      };
+    },
+    [stores]
+  );
+  const last = useRef<{
+    counts: Readonly<Record<string, number>>;
+    key: string;
+    lists: readonly (readonly Proposal[])[];
+  }>({ counts: NO_COUNTS, key: "", lists: [] });
+  const snapshot = useCallback(() => {
+    const lists = stores.map(([, store]) => store.get());
+    const previous = last.current;
+    if (
+      previous.key === key &&
+      previous.lists.length === lists.length &&
+      previous.lists.every((list, index) => list === lists[index])
+    ) {
+      return previous.counts;
+    }
+    const counts = Object.fromEntries(
+      stores.map(([id], index) => [id, countPending(lists[index] ?? [])])
+    );
+    last.current = { counts, key, lists };
+    return counts;
+  }, [key, stores]);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
 /**

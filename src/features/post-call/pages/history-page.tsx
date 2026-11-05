@@ -3,13 +3,9 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
-import {
-  type CallRecord,
-  countPendingProposals,
-  NO_PROJECT_CALL,
-  useCalls,
-} from "@/data/calls";
+import { type CallRecord, NO_PROJECT_CALL, useCalls } from "@/data/calls";
 import { useProjects } from "@/data/projects";
+import { usePendingProposalCounts } from "@/data/proposals";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
@@ -47,6 +43,7 @@ function sortKey(call: CallRecord) {
 
 function byMonth(
   calls: CallRecord[],
+  pendingOf: Readonly<Record<string, number>>,
   projectName?: (id: string | null) => string
 ): HistoryMonth[] {
   const months: HistoryMonth[] = [];
@@ -60,7 +57,7 @@ function byMonth(
     const people = call.audioDeleted
       ? `${call.participants}, аудио удалено`
       : call.participants;
-    const pending = countPendingProposals(call);
+    const pending = pendingOf[call.id] ?? 0;
     month.calls.push({
       date: call.date,
       duration: call.duration,
@@ -101,6 +98,7 @@ function History({ projectId }: { projectId: string | null }) {
   const demo = useDemoState(DEMO_STATES);
   const projects = useProjects();
   const calls = useCalls();
+  const pending = usePendingProposalCounts(calls.map((call) => call.id));
   const [query, setQuery] = useState(demo === "search" ? SEARCH.query : "");
   const [filter, setFilter] = useState(ALL);
   const [searchFilter, setSearchFilter] = useState(ALL);
@@ -164,8 +162,8 @@ function History({ projectId }: { projectId: string | null }) {
     const listed = projectId
       ? scoped.filter((call) => matchesFilter(call, filter))
       : scoped.filter((call) => filter === ALL || call.projectId === filter);
-    return byMonth(listed, projectId ? undefined : projectName);
-  }, [filter, projectId, projectName, scoped]);
+    return byMonth(listed, pending, projectId ? undefined : projectName);
+  }, [filter, pending, projectId, projectName, scoped]);
 
   const search = useMemo<HistorySearch>(() => {
     const found = searchCalls(query, calls, projectName);

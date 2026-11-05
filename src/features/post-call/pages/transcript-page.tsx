@@ -4,12 +4,8 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { toast } from "@/components/ui/toast";
-import {
-  type CallRecord,
-  countPendingProposals,
-  deleteRecording,
-  useCall,
-} from "@/data/calls";
+import { type CallRecord, deleteRecording, useCall } from "@/data/calls";
+import { usePendingProposals } from "@/data/proposals";
 import { useDemoState } from "@/lib/use-demo-state";
 
 import {
@@ -108,6 +104,7 @@ function TranscriptOfCall({
   initialMoment: string | null;
 }) {
   const demo = useDemoState(DEMO_STATES);
+  const pendingProposals = usePendingProposals(call.id);
   const [momentValue, setMomentValue] = useState(initialMoment);
   /** Bumps on every jump to a moment; `null` once the glow is over. */
   const [highlight, setHighlight] = useState<number | null>(
@@ -189,7 +186,7 @@ function TranscriptOfCall({
         onDeleteRecording={askDelete}
         onSelectQuestion={selectQuestion}
         onTopicChange={changeTopic}
-        pendingProposals={countPendingProposals(call)}
+        pendingProposals={pendingProposals}
         player={player.state}
         recordingDeleted={call.audioDeleted}
         sections={TRANSCRIPT_SECTIONS}

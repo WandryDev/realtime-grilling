@@ -10,12 +10,9 @@ import {
   useCallTranscript,
 } from "@/data/call-records";
 import { useCallSession } from "@/data/call-session";
-import {
-  type CallRecord,
-  countPendingProposals,
-  getCall,
-  useCall,
-} from "@/data/calls";
+import { type CallRecord, getCall, useCall } from "@/data/calls";
+import { usePeople } from "@/data/people";
+import { countPending, useCallProposals } from "@/data/proposals";
 import {
   buildFinishingSummary,
   buildSummary,
@@ -26,7 +23,6 @@ import { inTauri } from "@/effect/runtime";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
-import { KNOWLEDGE_TARGETS, PROPOSAL_GROUPS } from "../mock";
 import { CallSummaryScreen } from "../screens/call-summary-screen";
 import {
   cardsOverview,
@@ -39,6 +35,7 @@ import {
   unaskedQuestions,
 } from "./call-data";
 import { APP_WINDOW, CallPageFrame } from "./call-page-frame";
+import { knowledgeTargets } from "./proposal-data";
 
 /*
  * /calls/summary?id=…: "02 Итоги звонка" of the call's summary
@@ -57,18 +54,6 @@ import { APP_WINDOW, CallPageFrame } from "./call-page-frame";
 const DEMO_STATES = ["processing"] as const;
 
 const MB = 1_000_000;
-
-/** Pending proposals per brief or person, for the right column. */
-function knowledgeTargets(call: CallRecord) {
-  return KNOWLEDGE_TARGETS.map((target) => {
-    const group = PROPOSAL_GROUPS.find((item) => item.id === target.id);
-    const count =
-      group?.proposals.filter(
-        (proposal) => call.proposals[proposal.id]?.decision === "pending"
-      ).length ?? 0;
-    return { ...target, count };
-  });
-}
 
 function showSavedToast(callId: string, openHistory: (href: string) => void) {
   const projectId = getCall(callId)?.projectId;
@@ -99,6 +84,8 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
   const recordings = useCallTranscript(call.id).data;
   const questions = useCallQuestions(call.id).data;
   const cards = useCallCards(call.id).data;
+  const proposals = useCallProposals(call.id).data;
+  const people = usePeople(call.projectId);
 
   const justFinished =
     session.status === "finishing" && session.callId === call.id;
@@ -192,7 +179,10 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
         : null,
     [rebuild, summary]
   );
-  const targets = useMemo(() => knowledgeTargets(call), [call]);
+  const targets = useMemo(
+    () => knowledgeTargets(proposals, people),
+    [people, proposals]
+  );
 
   return (
     <CallSummaryScreen
@@ -204,7 +194,7 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
       finishedNote={finishedNote(call)}
       knowledgeTargets={targets}
       onStop={building ? stop : undefined}
-      pendingProposals={countPendingProposals(call)}
+      pendingProposals={countPending(proposals)}
       state={processing ? "processing" : "ready"}
       steps={steps}
       taskCardOverview={overview}

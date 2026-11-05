@@ -14,6 +14,7 @@ import type {
   CallRecording,
   CallSummary,
   CallSummaryView,
+  Proposal,
   SummaryProgress,
 } from "@/bindings";
 
@@ -66,6 +67,12 @@ const { CallSummaryPage } = await import(
 const { TaskCardsPage } = await import(
   "@/features/post-call/pages/task-cards-page"
 );
+const { ProposalsPage } = await import(
+  "@/features/post-call/pages/proposals-page"
+);
+const { HistoryPage } = await import("@/features/post-call/pages/history-page");
+const { PersonPage } = await import("@/features/projects/pages/person-page");
+const { toast } = await import("@/components/ui/toast");
 const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshCalls } = await import("@/data/calls");
@@ -88,6 +95,7 @@ const MINUTE = 60_000;
 
 const LOGIN = "Итоги не собраны: нужен вход в Claude Code";
 const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
+const PROPOSALS_NAV = /^Предложения/u;
 
 function invokedWith(command: string) {
   return fake.invoked
@@ -607,5 +615,246 @@ describe("«Карточки задач» in Tauri", () => {
     expect(
       within(next).getByText("Какие критерии готовности у обмена?")
     ).toBeTruthy();
+  });
+});
+
+const proposalOf = (
+  id: string,
+  decision: Proposal["decision"],
+  patch: Partial<Proposal> = {}
+): Proposal => ({
+  after: "USD МІКС — курс межбанка на утро",
+  applied: null,
+  before: null,
+  callId: CALL,
+  createdAt: STARTED_AT,
+  decidedAt: decision === "pending" ? null : STARTED_AT,
+  decision,
+  edited: null,
+  evidence: [evidence("s-1", 1, "Курс берём из USD МІКС")],
+  field: "glossary",
+  id,
+  kind: "said",
+  personId: null,
+  target: "brief",
+  updatedAt: STARTED_AT,
+  ...patch,
+});
+
+/** Five proposals of the call, two of them accepted. */
+function fiveProposals() {
+  return [
+    proposalOf("p-1", "accepted"),
+    proposalOf("p-2", "pending", {
+      after: "Обмен до 1000 $",
+      field: "product",
+    }),
+    proposalOf("p-3", "pending", { after: "Python", field: "stack" }),
+    proposalOf("p-4", "accepted", {
+      after: "Кассир-администратор",
+      field: "role",
+      personId: IGOR,
+      target: "person",
+    }),
+    proposalOf("p-5", "pending", {
+      after: "4",
+      before: "2",
+      evidence: [],
+      field: "tech",
+      kind: "inferred",
+      personId: IGOR,
+      target: "person",
+    }),
+  ];
+}
+
+function openProposals() {
+  nav.search = new URLSearchParams({ id: CALL });
+  return render(<ProposalsPage />);
+}
+
+/** The count next to «Предложения» in the call's sidebar. */
+async function sidebarPending() {
+  const sections = await screen.findByRole("navigation", {
+    name: "Разделы звонка",
+  });
+  return within(sections).getByRole("link", { name: PROPOSALS_NAV })
+    .textContent;
+}
+
+describe("«Предложения» in Tauri", () => {
+  it("Счётчик: five proposals, two accepted — «3» everywhere", async () => {
+    records();
+    fake.answers.set("proposals_list", fiveProposals);
+
+    const review = openProposals();
+    expect(await screen.findByText("разобрано 2 из 5")).toBeTruthy();
+    const tally = screen.getByRole("complementary", { name: "Решения" });
+    expect(
+      within(tally).getByText("Ждут решения").nextSibling?.textContent
+    ).toBe("3");
+    expect(await sidebarPending()).toBe("Предложения3 ждут решения");
+    review.unmount();
+
+    const summary = openSummary();
+    await screen.findByText(READY.tldr);
+    expect(await sidebarPending()).toBe("Предложения3 ждут решения");
+    const card = screen
+      .getByRole("heading", { name: "Предложения обновить знания" })
+      .closest("div");
+    expect(card?.textContent).toContain("3");
+    summary.unmount();
+
+    nav.search = new URLSearchParams({ project: EXCHANGE });
+    render(<HistoryPage />);
+    expect(await screen.findByText("3 предложения")).toBeTruthy();
+  });
+
+  it("groups by the brief and the people, and decides through the commands", async () => {
+    records();
+    let list = fiveProposals();
+    fake.answers.set("proposals_list", () => list);
+    fake.answers.set("proposal_decide", (args) => {
+      const input = args.input as {
+        decision: Proposal["decision"];
+        edited?: string;
+      };
+      list = list.map((item) =>
+        item.id === args.id
+          ? { ...item, decision: input.decision, edited: input.edited ?? null }
+          : item
+      );
+      return list.find((item) => item.id === args.id);
+    });
+    openProposals();
+
+    expect(
+      await screen.findByRole("heading", { name: "Бриф проекта" })
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Игорь Смирнов" })).toBeTruthy();
+    const tech = screen.getByRole("article", { name: "Технический уровень" });
+    expect(within(tech).getByText("2 из 5")).toBeTruthy();
+    expect(within(tech).getByText("4 из 5")).toBeTruthy();
+    expect(within(tech).getByText("вывод агента")).toBeTruthy();
+    const product = screen.getByRole("article", { name: "Раздел «Продукт»" });
+    expect(within(product).getByText("сказал(а) Игорь, 12:01")).toBeTruthy();
+
+    // «Изменить и принять» with the manager's level.
+    fireEvent.click(within(tech).getByRole("button", { name: "Изменить" }));
+    const editor = await screen.findByRole("textbox", { name: "Новый текст" });
+    fireEvent.change(editor, { target: { value: "3 из 5" } });
+    fireEvent.keyDown(editor, { ctrlKey: true, key: "Enter" });
+    await waitFor(() =>
+      expect(invokedWith("proposal_decide")).toEqual([
+        { id: "p-5", input: { decision: "accepted", edited: "3" } },
+      ])
+    );
+
+    // Keys: X rejects the current one.
+    await screen.findByText("разобрано 3 из 5");
+    fireEvent.keyDown(window, { key: "x" });
+    await waitFor(() =>
+      expect(invokedWith("proposal_decide").at(-1)).toEqual({
+        id: "p-2",
+        input: { decision: "rejected" },
+      })
+    );
+  });
+
+  it("notes over the limit: the proposal stays pending and the reason is shown", async () => {
+    const add = vi.spyOn(toast, "add");
+    records();
+    fake.answers.set("proposals_list", fiveProposals);
+    fake.failures.set("proposal_decide", {
+      kind: "Invalid",
+      message: "Заметки проекта длиннее 50 000 символов",
+    });
+    openProposals();
+
+    const product = await screen.findByRole("article", {
+      name: "Раздел «Продукт»",
+    });
+    fireEvent.click(within(product).getByRole("button", { name: "Принять" }));
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "Заметки проекта длиннее 50 000 символов",
+          title: "Не удалось принять предложение",
+        })
+      )
+    );
+    expect(
+      screen.getByRole("article", { name: "Раздел «Продукт»" })
+    ).toBeTruthy();
+    expect(screen.getByText("разобрано 2 из 5")).toBeTruthy();
+    add.mockRestore();
+  });
+
+  it("an undo Rust refuses («Поле изменили после принятия») changes nothing and says why", async () => {
+    const add = vi.spyOn(toast, "add");
+    records();
+    fake.answers.set("proposals_list", fiveProposals);
+    fake.failures.set("proposal_undo", {
+      kind: "Invalid",
+      message: "Поле изменили после принятия",
+    });
+    openProposals();
+
+    await screen.findByText("разобрано 2 из 5");
+    fireEvent.click(screen.getAllByRole("button", { name: "Отменить" })[0]);
+    await waitFor(() =>
+      expect(invokedWith("proposal_undo")).toEqual([{ id: "p-1" }])
+    );
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "Поле изменили после принятия",
+          title: "Не удалось отменить решение",
+        })
+      )
+    );
+    expect(screen.getByText("разобрано 2 из 5")).toBeTruthy();
+    add.mockRestore();
+  });
+
+  it("Звонок без проекта: «Предложений нет»", async () => {
+    const call = fake.db.calls.find((item) => item.id === CALL);
+    if (call) {
+      call.projectId = null;
+      call.participantIds = [];
+    }
+    await act(() => refreshCalls());
+    records();
+    openProposals();
+
+    expect(
+      await screen.findByRole("heading", { name: "Предложений нет" })
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "У звонка без проекта нет брифа и профилей, предлагать нечего."
+      )
+    ).toBeTruthy();
+  });
+
+  it("Предложение по Игорю: his pending proposal on his page, with the call's review", async () => {
+    records();
+    fake.answers.set("proposals_for_person", (args) =>
+      args.personId === IGOR ? [fiveProposals()[4]] : []
+    );
+    nav.search = new URLSearchParams({ id: IGOR, project: EXCHANGE });
+    render(<PersonPage />);
+
+    const suggestion = await screen.findByRole("region", {
+      name: "Предложение после звонка 19 октября",
+    });
+    expect(within(suggestion).getByText("Технический уровень")).toBeTruthy();
+    expect(within(suggestion).getByText("+ 4 из 5")).toBeTruthy();
+    expect(
+      within(suggestion)
+        .getByRole("link", { name: "Разобрать в звонке" })
+        .getAttribute("href")
+    ).toBe(routes.callProposals(CALL));
+    expect(invokedWith("proposals_for_person")).toEqual([{ personId: IGOR }]);
   });
 });

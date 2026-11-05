@@ -10,15 +10,28 @@ import {
   useState,
 } from "react";
 
+import type { Proposal } from "@/bindings";
 import { toast } from "@/components/ui/toast";
+import { type CallRecord, useCalls } from "@/data/calls";
 import { updatePerson, usePerson } from "@/data/people";
 import { useProject } from "@/data/projects";
+import { usePersonProposals } from "@/data/proposals";
+import { plural } from "@/lib/plural";
+import {
+  proposalSection,
+  proposalText,
+  proposalValue,
+} from "@/lib/proposal-fields";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
 import { MissingEntity } from "../components/missing-entity";
 import { personScales, toPersonProfile } from "../project-data";
-import { PERSON_FORM_SLOT, PersonScreen } from "../screens/person-screen";
+import {
+  type CallSuggestion,
+  PERSON_FORM_SLOT,
+  PersonScreen,
+} from "../screens/person-screen";
 
 /** `?demo=edit`: the profile opened for editing. */
 export const PERSON_DEMO_STATES = ["edit"] as const;
@@ -29,6 +42,47 @@ const PORTRAIT_PREFIX = "portrait:";
 interface Levels {
   project: number | null;
   tech: number | null;
+}
+
+/**
+ * The person's pending proposals from the calls (newest call first), a
+ * block per call with what would change, the first quote and the call's
+ * review.
+ */
+function callSuggestions(
+  proposals: readonly Proposal[],
+  calls: readonly CallRecord[]
+): CallSuggestion[] {
+  const byCall = new Map<string, Proposal[]>();
+  for (const proposal of proposals) {
+    byCall.set(proposal.callId, [
+      ...(byCall.get(proposal.callId) ?? []),
+      proposal,
+    ]);
+  }
+  return [...byCall].map(([callId, list]) => {
+    const day = calls.find((call) => call.id === callId)?.day;
+    const after = day ? ` после звонка ${day}` : " после звонка";
+    const [quote] = list.flatMap((item) => item.evidence);
+    return {
+      id: callId,
+      quoteHref: quote
+        ? routes.callTranscript(callId, quote.segmentId)
+        : undefined,
+      reviewHref: routes.callProposals(callId),
+      suggestion: {
+        changes: list.map((item) => ({
+          field: proposalSection(item),
+          text: `+ ${proposalValue(item.field, proposalText(item))}`,
+        })),
+        quote: quote ? `«${quote.quote}»` : undefined,
+        title:
+          list.length === 1
+            ? `Предложение${after}`
+            : `${list.length} ${plural(list.length, "предложение", "предложения", "предложений")}${after}`,
+      },
+    };
+  });
 }
 
 /** `/project/person?project=&id=`: the profile of a person of the client. */
@@ -54,6 +108,12 @@ function PersonView({
 }) {
   const project = useProject(projectId);
   const person = usePerson(projectId, personId);
+  const proposals = usePersonProposals(person?.id).data;
+  const calls = useCalls();
+  const suggestions = useMemo(
+    () => callSuggestions(proposals, calls),
+    [calls, proposals]
+  );
   const demo = useDemoState(PERSON_DEMO_STATES);
   const [editLevels, setEditLevels] = useState<Levels | null>(null);
 
@@ -99,9 +159,6 @@ function PersonView({
         portrait,
         project: editLevels.project,
         role: String(data.get("role") ?? person.role).trim(),
-        // The edit fields carry the suggested change: saving accepts it.
-        suggestion:
-          person.suggestion === "pending" ? "accepted" : person.suggestion,
         tech: editLevels.tech,
       }).then((saved) => {
         if (saved) {
@@ -129,29 +186,6 @@ function PersonView({
     },
     []
   );
-
-  const handleAccept = useCallback(() => {
-    if (person) {
-      updatePerson(person.projectId, person.id, { suggestion: "accepted" });
-      toast.add({ title: "Правка принята, профиль обновлён", type: "success" });
-    }
-  }, [person]);
-
-  const handleDecline = useCallback(() => {
-    if (!person) {
-      return;
-    }
-    const { id, projectId: owner } = person;
-    updatePerson(owner, id, { suggestion: "declined" });
-    toast.add({
-      actionProps: {
-        children: "Вернуть",
-        onClick: () => updatePerson(owner, id, { suggestion: "pending" }),
-      },
-      title: "Отклонено",
-      type: "success",
-    });
-  }, [person]);
 
   // ⌘S saves, Esc cancels while editing.
   const editing = editLevels !== null;
@@ -195,13 +229,11 @@ function PersonView({
 
   return (
     <PersonScreen
+      callSuggestions={suggestions}
       className="h-svh"
       mode={editing ? "edit" : "view"}
-      onAcceptSuggestion={handleAccept}
       onCancelEdit={cancelEdit}
-      onDeclineSuggestion={handleDecline}
       onEdit={startEdit}
-      onEditSuggestion={startEdit}
       onSave={handleSave}
       onScaleStep={handleScaleStep}
       person={shown}

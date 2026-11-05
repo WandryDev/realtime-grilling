@@ -11,7 +11,8 @@ import {
   useCallQuestions,
   useCallTranscript,
 } from "@/data/call-records";
-import { type CallRecord, countPendingProposals, useCall } from "@/data/calls";
+import { type CallRecord, useCall } from "@/data/calls";
+import { usePendingProposals } from "@/data/proposals";
 import { useCallSummary } from "@/data/summaries";
 import { routes } from "@/lib/routes";
 
@@ -54,6 +55,7 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
   const { summary } = useCallSummary(call.id);
   const recordings = useCallTranscript(call.id).data;
   const questions = useCallQuestions(call.id).data;
+  const pendingProposals = usePendingProposals(call.id);
   const [expandedFactId, setExpandedFactId] = useState<string | null>(null);
   const [topic, setTopic] = useState<string | null>(null);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
@@ -200,7 +202,7 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
         onListen={listen}
         onToggleFact={toggleFact}
         onTopicChange={changeTopic}
-        pendingProposals={countPendingProposals(call)}
+        pendingProposals={pendingProposals}
         renderActions={renderActions}
         topics={topics}
       />
