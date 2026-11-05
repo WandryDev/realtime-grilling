@@ -20,6 +20,7 @@ import {
 } from "@/effect/runtime";
 import type { BackendError } from "@/effect/tauri";
 
+import { getCall } from "./calls";
 import { CallRecordsData } from "./services/call-records";
 import { CallsData } from "./services/calls";
 import {
@@ -49,6 +50,15 @@ const NONE_CARDS: Synced<CallCards> = { data: NO_CARDS, status: "ready" };
 const NONE_RECORDINGS: Synced<CallRecording[]> = { data: [], status: "ready" };
 const NONE_QUESTIONS: Synced<CallQuestion[]> = { data: [], status: "ready" };
 
+/**
+ * Whether a change of the fast loop (a topic, a card) may be about the
+ * call: one of its project's recordings. A call not read yet may be.
+ */
+function ofCallProject(callId: string, projectId: string | null) {
+  const call = getCall(callId);
+  return call === undefined || call.projectId === projectId;
+}
+
 const callCards = createSyncedStores((callId) => {
   const read = CallRecordsData.use((data) => data.cards(callId));
   return {
@@ -56,8 +66,8 @@ const callCards = createSyncedStores((callId) => {
     live: inTauri,
     onChange: (change) =>
       (change.entity === "call" && change.id === callId) ||
-      change.entity === "taskCard" ||
-      change.entity === "topic"
+      ((change.entity === "taskCard" || change.entity === "topic") &&
+        ofCallProject(callId, change.projectId))
         ? { update: Effect.map(read, (cards) => () => cards) }
         : undefined,
     read,
@@ -176,15 +186,6 @@ export async function deleteCallAudio(callId: string) {
   return deleted === true;
 }
 
-/** Whether the recordings of a call read without audio, as last read. */
-export function isCallAudioDeleted(callId: string) {
-  const recordings = callTranscript(callId).get();
-  return (
-    recordings.length > 0 &&
-    recordings.every((recording) => recording.audioDeleted)
-  );
-}
-
 /**
  * Where the player reads a channel of a recording (the `grill-audio`
  * scheme as WAV); `null` in the browser, which has no audio to play.
@@ -208,7 +209,9 @@ export function recordingAudioUrl(
 function useRead<A>(
   key: string | undefined,
   read: () => Effect.Effect<A, BackendError, AppServices>,
-  empty: A
+  empty: A,
+  /** While a new key is read, show what the last one read. */
+  keepPrevious = false
 ): Synced<A> {
   const reader = useRef(read);
   reader.current = read;
@@ -225,7 +228,12 @@ function useRead<A>(
     state: { data: empty, status: "loading" },
   });
   useEffect(() => {
-    if (!inTauri || key === undefined) {
+    if (!inTauri) {
+      return;
+    }
+    if (key === undefined) {
+      // Nothing is read: a later key doesn't show these results.
+      setLive({ state: { data: empty, status: "loading" } });
       return;
     }
     return runCancelable(
@@ -249,7 +257,10 @@ function useRead<A>(
   if (mock) {
     return mock;
   }
-  return live.key === key ? live.state : { data: empty, status: "loading" };
+  if (live.key === key) {
+    return live.state;
+  }
+  return { data: keepPrevious ? live.state.data : empty, status: "loading" };
 }
 
 const NO_PEAKS: RecordingPeaks = { durationMs: 0, me: [], others: [] };
@@ -268,18 +279,44 @@ export function useRecordingPeaks(
 
 const NO_MATCHES: CallSearch = { matches: [], projects: [], total: 0 };
 
+/** Rust searches once typing pauses this long, not on every key. */
+export const SEARCH_DEBOUNCE_MS = 200;
+
 /**
  * Searches the calls' titles, transcripts and summaries for `query`, in
  * the calls of `projectId` (all for `null`); nothing for a blank query.
+ * In Tauri it searches once typing paused, and shows the last results
+ * while the next ones are read.
  */
 export function useCallSearch(
   query: string,
   projectId: string | null
 ): Synced<CallSearch> {
   const trimmed = query.trim();
-  return useRead(
-    trimmed ? JSON.stringify([trimmed, projectId]) : undefined,
-    () => CallsData.use((data) => data.search(trimmed, projectId)),
-    NO_MATCHES
+  const key = trimmed ? JSON.stringify([trimmed, projectId]) : undefined;
+  const [settled, setSettled] = useState(key);
+  useEffect(() => {
+    if (!inTauri || key === undefined) {
+      setSettled(key);
+      return;
+    }
+    const timer = setTimeout(() => setSettled(key), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [key]);
+  const searched = inTauri ? settled : key;
+  const found = useRead(
+    searched,
+    () => {
+      const [text, project] = JSON.parse(searched ?? "[]") as [
+        string,
+        string | null,
+      ];
+      return CallsData.use((data) => data.search(text, project));
+    },
+    NO_MATCHES,
+    true
   );
+  return key !== undefined && searched !== key
+    ? { data: found.data, status: "loading" }
+    : found;
 }

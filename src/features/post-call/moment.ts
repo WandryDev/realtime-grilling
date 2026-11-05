@@ -4,6 +4,7 @@ import type {
   SummaryTopic,
   TranscriptChannel,
 } from "@/bindings";
+import { clockTime, pad2 } from "@/lib/clock";
 
 import type {
   CallQuestion as QuestionItem,
@@ -73,14 +74,6 @@ const LAST_SECOND = 59;
 const TIME_CODE = /^\d{1,2}:\d{2}(?::\d{2})?$/u;
 const SEPARATOR = "@";
 
-const pad2 = (value: number) => String(value).padStart(2, "0");
-
-/** «12:02:14»: the local wall-clock time of `ms` since the epoch. */
-export function clockTime(ms: number) {
-  const date = new Date(ms);
-  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
-}
-
 /** «29:12», or «1:05:09» past an hour: a player position. */
 export function playerClock(ms: number) {
   const total = Math.max(0, Math.floor(ms / MS_PER_SECOND));
@@ -148,7 +141,7 @@ function partSections(recordings: CallRecording[]): Section[] {
     startMs: 0,
     topic: {
       id: `part-${recording.id}`,
-      time: clockTime(recording.startedAt).slice(0, 5),
+      time: clockTime(recording.startedAt, false),
       title: recordings.length > 1 ? `Часть ${index + 1}` : "Расшифровка",
     },
     turns: [],
@@ -399,7 +392,7 @@ export function questionItems(
         text: question.text,
         time:
           moment && start !== undefined
-            ? clockTime(start + moment.startMs).slice(0, 5)
+            ? clockTime(start + moment.startMs, false)
             : "",
       };
     });

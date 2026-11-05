@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useCallback, useState } from "react";
+import { type FormEvent, useCallback, useId, useState } from "react";
 import type { TaskCardDecision } from "@/bindings";
 import { Badge } from "@/components/ui/badge";
 import { ClickUpIcon, GitHubIcon } from "@/components/ui/brand-icons";
@@ -19,8 +19,9 @@ import { CheckIcon } from "../icons";
 
 /*
  * Decisions on a task card in the app: accept, edit the title, discard
- * and bring back. Sending an accepted card to ClickUp or GitHub waits for
- * the integrations: the buttons are there, unavailable, marked «скоро».
+ * and bring back. Sending a card to ClickUp or GitHub waits for the
+ * integrations: the buttons are there from the start, unavailable and
+ * marked «скоро»; they stay focusable so a screen reader hears why.
  */
 
 export type TaskCardCommand = "accept" | "discard" | "edit" | "restore";
@@ -31,10 +32,22 @@ const SERVICES = [
 ] as const;
 
 /** «Отправить в ClickUp», not available until the integration is. */
-function SoonButton({ service }: { service: (typeof SERVICES)[number] }) {
+function SoonButton({
+  describedBy,
+  service,
+}: {
+  describedBy: string;
+  service: (typeof SERVICES)[number];
+}) {
   const { icon: Icon, name } = service;
   return (
-    <Button className="gap-1.5" disabled variant="secondary">
+    <Button
+      aria-describedby={describedBy}
+      className="gap-1.5"
+      disabled
+      focusableWhenDisabled
+      variant="secondary"
+    >
       <Icon aria-hidden="true" className="size-3.5" />
       {`Отправить в ${name}`}
       <Badge indicator={false} size="sm" variant="outline">
@@ -69,6 +82,17 @@ export function TaskCardActions({
     () => onCommand(cardId, "restore"),
     [cardId, onCommand]
   );
+  const soonId = useId();
+  const soon = (
+    <>
+      {SERVICES.map((service) => (
+        <SoonButton describedBy={soonId} key={service.id} service={service} />
+      ))}
+      <span className="sr-only" id={soonId}>
+        Отправка в трекер появится, когда подключатся интеграции
+      </span>
+    </>
+  );
 
   if (decision === "discarded") {
     return (
@@ -87,9 +111,7 @@ export function TaskCardActions({
           <CheckIcon className="size-3" />
           принята
         </Badge>
-        {SERVICES.map((service) => (
-          <SoonButton key={service.id} service={service} />
-        ))}
+        {soon}
         <Button className="ml-auto" onClick={edit} variant="ghost">
           Изменить
         </Button>
@@ -101,7 +123,7 @@ export function TaskCardActions({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <Button className="gap-1.5" onClick={accept} variant="secondary">
         <CheckIcon className="size-3.5" />
         Принять
@@ -112,6 +134,7 @@ export function TaskCardActions({
       <Button className="px-2.5" onClick={discard} variant="ghost">
         Отбросить
       </Button>
+      {soon}
     </div>
   );
 }

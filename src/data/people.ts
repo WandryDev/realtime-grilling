@@ -32,11 +32,6 @@ export interface ClientPerson {
   project: number | null;
   projectId: string;
   role: string;
-  /**
-   * Edit the agent suggested after the last call: `pending` waits for the
-   * manager, `accepted` is applied, `declined` is dropped.
-   */
-  suggestion?: "pending" | "accepted" | "declined";
   /** Technical level, 1–5; `null`: not set. */
   tech: number | null;
 }
@@ -63,9 +58,6 @@ const Profile = Schema.Struct({
   notes: Schema.optionalKey(Schema.String),
   portrait: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   project: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  suggestion: Schema.optionalKey(
-    Schema.Literals(["pending", "accepted", "declined"])
-  ),
   tech: Schema.optionalKey(Schema.NullOr(Schema.Number)),
 });
 const decodeProfile = Schema.decodeUnknownOption(Profile);
@@ -174,6 +166,11 @@ export function usePerson(
   return people.find(
     (person) => person.projectId === projectId && person.id === personId
   );
+}
+
+/** A person of any project as last read; `undefined` before the read. */
+export function getPerson(personId: string) {
+  return peopleStore.get().find((person) => person.id === personId);
 }
 
 /**

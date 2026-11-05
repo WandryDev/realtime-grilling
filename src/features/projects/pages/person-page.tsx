@@ -56,10 +56,12 @@ function callSuggestions(
 ): CallSuggestion[] {
   const byCall = new Map<string, Proposal[]>();
   for (const proposal of proposals) {
-    byCall.set(proposal.callId, [
-      ...(byCall.get(proposal.callId) ?? []),
-      proposal,
-    ]);
+    const list = byCall.get(proposal.callId);
+    if (list) {
+      list.push(proposal);
+    } else {
+      byCall.set(proposal.callId, [proposal]);
+    }
   }
   return [...byCall].map(([callId, list]) => {
     const day = calls.find((call) => call.id === callId)?.day;

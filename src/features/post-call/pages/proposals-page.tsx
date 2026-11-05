@@ -3,7 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useCallTranscript } from "@/data/call-records";
+import { useCallCards, useCallTranscript } from "@/data/call-records";
 import { type CallRecord, useCall } from "@/data/calls";
 import { usePeople } from "@/data/people";
 import {
@@ -121,6 +121,7 @@ function ProposalsOfCall({ call }: { call: CallRecord }) {
   const { data: proposals, status } = useCallProposals(call.id);
   const people = usePeople(call.projectId);
   const recordings = useCallTranscript(call.id).data;
+  const cards = useCallCards(call.id).data;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [currentId, setCurrentId] = useState<string | null>(null);
 
@@ -242,6 +243,7 @@ function ProposalsOfCall({ call }: { call: CallRecord }) {
       onAction={onAction}
       outcome={outcomeOf(groups, totals, info.project)}
       state={state}
+      taskCards={cards.cards.length}
       totals={totals}
     />
   );

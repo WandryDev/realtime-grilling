@@ -69,7 +69,6 @@ const SEED_PEOPLE: {
         "Спрашивать через последствия для бизнеса: деньги, пациенты, сроки. Без терминов.",
       initials: "ОД",
       project: 3,
-      suggestion: "pending",
       tech: 1,
     },
     projectId: "telemedia",

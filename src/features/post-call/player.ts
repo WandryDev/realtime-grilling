@@ -13,8 +13,10 @@ import type { PlayerChannel, PlayerSpeed } from "./components/transcript";
  * «Оба» plays both; «Только вы» and «Только клиент» mute the other one, so
  * the follower stays in time and switching back is instant.
  *
- * Without audio files (the browser, the tests) both channels are clocks
- * (`clockMedia`), so the demo player still plays.
+ * A recording with one channel file plays it alone: it leads, there is
+ * no follower and no channel to pick. Without audio files (the browser,
+ * the tests) both channels are clocks (`clockMedia`), so the demo player
+ * still plays.
  */
 
 /** What the player uses of an `HTMLMediaElement`. */
@@ -28,9 +30,12 @@ export interface MediaLike {
   playbackRate: number;
 }
 
-/** The two channels of a recording: the lead plays «Клиент». */
+/**
+ * The channels of a recording: the lead plays «Клиент» (or the only
+ * channel there is), the follower «Вы»; `null` without a second file.
+ */
 export interface MediaPair {
-  follower: MediaLike;
+  follower: MediaLike | null;
   lead: MediaLike;
 }
 
@@ -45,6 +50,10 @@ export const SPEED_RATE: Record<PlayerSpeed, number> = {
 
 /** Mutes the channel the manager doesn't want to hear. */
 export function applyChannel(pair: MediaPair, channel: PlayerChannel) {
+  if (!pair.follower) {
+    pair.lead.muted = false;
+    return;
+  }
   pair.lead.muted = channel === "you";
   pair.follower.muted = channel === "client";
 }
@@ -54,6 +63,9 @@ export function applyChannel(pair: MediaPair, channel: PlayerChannel) {
  * time within `MAX_DRIFT_S`. `true` when it had to jump.
  */
 export function syncFollower({ follower, lead }: MediaPair) {
+  if (!follower) {
+    return false;
+  }
   if (follower.playbackRate !== lead.playbackRate) {
     follower.playbackRate = lead.playbackRate;
   }
@@ -74,23 +86,27 @@ export function syncFollower({ follower, lead }: MediaPair) {
 /** Both channels to `seconds`. */
 export function seekPair(pair: MediaPair, seconds: number) {
   pair.lead.currentTime = seconds;
-  pair.follower.currentTime = seconds;
+  if (pair.follower) {
+    pair.follower.currentTime = seconds;
+  }
 }
 
 export function setPairRate(pair: MediaPair, rate: number) {
   pair.lead.playbackRate = rate;
-  pair.follower.playbackRate = rate;
+  if (pair.follower) {
+    pair.follower.playbackRate = rate;
+  }
 }
 
 /** Starts both channels; rejects when the lead can't play. */
 export async function playPair(pair: MediaPair) {
   syncFollower(pair);
-  await Promise.all([pair.lead.play(), pair.follower.play()]);
+  await Promise.all([pair.lead.play(), pair.follower?.play()]);
 }
 
 export function pausePair(pair: MediaPair) {
   pair.lead.pause();
-  pair.follower.pause();
+  pair.follower?.pause();
 }
 
 /** A channel without a file: a clock that runs while it plays. */
@@ -154,6 +170,8 @@ export interface PlayerOptions {
   onError?: () => void;
   /** The recording played; a new one starts from `initialMs` again. */
   recordingId: string | null;
+  /** One channel file only: no follower, both channels heard. */
+  single?: boolean;
 }
 
 /**
@@ -167,6 +185,7 @@ export function usePlayer({
   initialMs,
   onError,
   recordingId,
+  single = false,
 }: PlayerOptions) {
   const [playing, setPlaying] = useState(false);
   const [positionMs, setPositionMs] = useState(initialMs);
@@ -174,8 +193,9 @@ export function usePlayer({
   const [channel, setChannel] = useState<PlayerChannel>("both");
   /** Where the channels go once they are there (a new recording). */
   const startMs = useRef(initialMs);
-  const settings = useRef({ channel, speed });
-  settings.current = { channel, speed };
+  const heard: PlayerChannel = single ? "both" : channel;
+  const settings = useRef({ channel: heard, speed });
+  settings.current = { channel: heard, speed };
   const errorRef = useRef(onError);
   errorRef.current = onError;
 
@@ -201,8 +221,14 @@ export function usePlayer({
       return clocks;
     }
     const { follower, lead } = elements.current;
-    return follower && lead ? { follower, lead } : null;
-  }, [clocks]);
+    if (!lead) {
+      return null;
+    }
+    if (single) {
+      return { follower: null, lead };
+    }
+    return follower ? { follower, lead } : null;
+  }, [clocks, single]);
 
   /** A channel element as it mounts: at the position, speed and channel. */
   const attach = useCallback(
@@ -213,8 +239,9 @@ export function usePlayer({
       }
       element.currentTime = startMs.current / 1000;
       element.playbackRate = SPEED_RATE[settings.current.speed];
-      const { channel: heard } = settings.current;
-      element.muted = role === "lead" ? heard === "you" : heard === "client";
+      const { channel: listened } = settings.current;
+      element.muted =
+        role === "lead" ? listened === "you" : listened === "client";
     },
     []
   );
@@ -229,9 +256,13 @@ export function usePlayer({
     setPlaying(false);
   }, [pair]);
 
+  /**
+   * Stands the player at `ms`, within `limitMs`: the shown recording's
+   * length, or the length of the one a jump switches to.
+   */
   const seek = useCallback(
-    (ms: number) => {
-      const clamped = Math.min(Math.max(ms, 0), durationMs);
+    (ms: number, limitMs = durationMs) => {
+      const clamped = Math.min(Math.max(ms, 0), limitMs);
       startMs.current = clamped;
       setPositionMs(clamped);
       const current = pair();
@@ -315,10 +346,11 @@ export function usePlayer({
   return {
     changeChannel,
     changeSpeed,
-    channel,
+    channel: heard,
     followerRef,
     leadRef,
     pause,
+    play,
     playing,
     positionMs,
     seek,

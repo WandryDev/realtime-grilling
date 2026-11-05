@@ -207,7 +207,7 @@ describe("CallSessionBackend.layerTauri", () => {
   );
 
   effectIt.effect(
-    "starts, finishes, resumes and closes the call through the backend",
+    "starts, finishes and resumes the call through the backend, which closes it",
     () =>
       Effect.gen(function* () {
         const backend = yield* CallSessionBackend;
@@ -235,14 +235,18 @@ describe("CallSessionBackend.layerTauri", () => {
         yield* backend.finish(callId);
         const kept = yield* backend.keep(callId);
         assert.isNull(kept.autoEnd);
-        const closed = yield* backend.close(callId);
+        // The window doesn't close a call: the summary build does, in Rust.
+        const refused = yield* Effect.flip(backend.close(callId));
+        assert.strictEqual(refused.kind, "Invalid");
+        assert.deepStrictEqual(invokedWith("call_close"), []);
+        yield* Effect.promise(() => fake.invoke("call_close", { callId }));
+        const closed = yield* backend.current;
         assert.strictEqual(closed.status, "idle");
         assert.isNull(closed.callId);
         assert.strictEqual(
           fake.db.calls.find((call) => call.id === callId)?.status,
           "finished"
         );
-        assert.deepStrictEqual(invokedWith("call_close"), [{ callId }]);
 
         // «Удалить все данные»: the call goes without a summary.
         const next = yield* backend.start({ projectId: null });
@@ -677,6 +681,52 @@ describe("summary and data", () => {
       expect(nav.push).toHaveBeenCalledWith(routes.callSummary(callId))
     );
     expect(invokedWith("call_close")).toEqual([]);
+  });
+
+  it("«Собираю итоги» of a call without a project: no proposals stage, the last stage shown done", async () => {
+    await act(() => fake.invoke("call_start", { input: { projectId: null } }));
+    const callId = fake.session.callId ?? "";
+    fake.answers.set("summary_get", () => ({ building: null, summary: null }));
+    render(<CallPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
+    const card = await screen.findByRole("dialog", { name: "Собираю итоги…" });
+    const steps = () =>
+      within(card)
+        .getAllByRole("listitem")
+        .map((row) => row.textContent);
+
+    expect(steps()).toEqual([
+      "Расшифровка дописана, готово",
+      "Итоги и короткое резюме по темам, идёт",
+      "Незакрытые вопросы и сохранение, ждёт",
+    ]);
+
+    // Rust goes from the summary straight to saving, then ends.
+    const progress = (stage: string, status: string) => ({
+      callId,
+      counts: null,
+      stage,
+      state: { status },
+    });
+    act(() => fake.emit("summary-progress", progress("saving", "running")));
+    await waitFor(() =>
+      expect(steps()).toEqual([
+        "Расшифровка дописана, готово",
+        "Итоги и короткое резюме по темам, готово",
+        "Незакрытые вопросы и сохранение, идёт",
+      ])
+    );
+    act(() => fake.emit("summary-progress", progress("saving", "done")));
+    await waitFor(() =>
+      expect(steps()).toEqual([
+        "Расшифровка дописана, готово",
+        "Итоги и короткое резюме по темам, готово",
+        "Незакрытые вопросы и сохранение, готово",
+      ])
+    );
+    expect(
+      within(card).queryByRole("button", { name: "Отменить завершение" })
+    ).toBeNull();
   });
 
   it("follows the build Rust runs and shows the summary once Rust closed the call", async () => {

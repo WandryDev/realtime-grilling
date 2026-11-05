@@ -2,6 +2,12 @@
  * Finding a query in a phrase of the transcript without regard to case and
  * «ё» («Планфикс» for «планфикс», «ещё» for «еще»), with the places in the
  * original text to mark.
+ *
+ * Light stemming, the same rule as the search of the history in Rust
+ * (`src-tauri/src/storage/call_search.rs`): when the last word of the
+ * query is longer than 3 letters and ends in a vowel, «ь» or «й», it also
+ * matches without that letter, so «бронь» finds «броне» and «брони». Such
+ * a match is marked to the end of the word it found.
  */
 
 /** A character in the form the search compares. */
@@ -10,9 +16,35 @@ function fold(char: string) {
   return lower === "ё" ? "е" : lower;
 }
 
+/** The letters a word may end in and still match without (after `fold`). */
+const DROPPED_ENDINGS = new Set("аеиоуыэюяьй");
+/** Shorter words match only as they are. */
+const STEM_FROM_LETTERS = 4;
+const LETTER = /\p{L}/u;
+const WHITESPACE = /\s/u;
+
+/** The query as the folded text is searched for, and whether it was cut. */
+function needleOf(query: string) {
+  const folded = Array.from(query.trim(), fold);
+  const last = folded.at(-1);
+  let start = folded.length;
+  while (start > 0 && !WHITESPACE.test(folded[start - 1] ?? "")) {
+    start -= 1;
+  }
+  const wordLength = folded.length - start;
+  if (
+    last !== undefined &&
+    wordLength >= STEM_FROM_LETTERS &&
+    DROPPED_ENDINGS.has(last)
+  ) {
+    return { needle: folded.slice(0, -1).join(""), stemmed: true };
+  }
+  return { needle: folded.join(""), stemmed: false };
+}
+
 /** `[start, end)` of every match of `query` in `text`, in UTF-16 units. */
 export function matchRanges(text: string, query: string): [number, number][] {
-  const needle = Array.from(query.trim(), fold).join("");
+  const { needle, stemmed } = needleOf(query);
   if (!needle) {
     return [];
   }
@@ -31,7 +63,11 @@ export function matchRanges(text: string, query: string): [number, number][] {
   const ranges: [number, number][] = [];
   let from = folded.indexOf(needle);
   while (from !== -1) {
-    const to = from + needle.length;
+    let to = from + needle.length;
+    // A stem marks the rest of its word: «брон» of «броне».
+    while (stemmed && to < folded.length && LETTER.test(folded[to] ?? "")) {
+      to += 1;
+    }
     ranges.push([origin[from] ?? 0, origin[to] ?? text.length]);
     from = folded.indexOf(needle, to);
   }

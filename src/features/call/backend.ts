@@ -43,9 +43,6 @@ export interface FeedUpdate {
   next?: number;
 }
 
-/** Stages of the summary build (`SummaryStage`): transcript, summary, proposals, saving. */
-export const SUMMARY_STAGES = 4;
-
 export const AGENT_RETRY_MS = 1500;
 export const SOURCE_RECONNECT_MS = 1500;
 export const SYSTEM_AUDIO_GRANT_MS = 2500;

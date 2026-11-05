@@ -25,6 +25,7 @@ import {
   type TaskFactData,
   TRANSCRIPT_SECTIONS,
 } from "@/features/post-call/mock";
+import { pad2 } from "@/lib/clock";
 
 /*
  * The records of the demo call (the Телемедиа call of 19 October,
@@ -180,7 +181,6 @@ const PROPOSAL_FIELDS: Record<
 };
 
 /** The date of the demo call in the notes line, as Rust writes it. */
-const pad2 = (value: number) => String(value).padStart(2, "0");
 export function notesDate(ms: number) {
   const date = new Date(ms);
   return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;

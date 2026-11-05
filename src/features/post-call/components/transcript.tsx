@@ -203,6 +203,7 @@ export function Waveform({
   className,
   onSeek,
   peaks,
+  position,
   progress,
 }: {
   className?: string;
@@ -210,6 +211,8 @@ export function Waveform({
   onSeek?: (progress: number) => void;
   /** The recording's peaks, 0 to 1; the Paper bars by default. */
   peaks?: readonly number[];
+  /** «12:04 из 40:12»: what a screen reader says of the position. */
+  position?: string;
   /** Played share, 0 to 1. */
   progress: number;
 }) {
@@ -257,6 +260,7 @@ export function Waveform({
       {onSeek ? (
         <input
           aria-label="Позиция записи"
+          aria-valuetext={position}
           className="absolute inset-0 size-full cursor-pointer opacity-0"
           max={SEEK_STEPS}
           min={0}
@@ -291,10 +295,13 @@ export interface PlayerPart {
 function PlayerMenu({
   label,
   onValueChange,
+  name,
   options,
   value,
 }: {
   label: string;
+  /** What the button picks, for a screen reader: «Часть записи». */
+  name?: string;
   onValueChange?: (value: string) => void;
   options: readonly { id: string; label: string }[];
   value: string;
@@ -310,6 +317,7 @@ function PlayerMenu({
   );
   const button = (
     <Button
+      aria-label={name ? `${name}: ${label}` : undefined}
       className="h-7 gap-1.5 px-2.5 font-normal"
       size="sm"
       variant="secondary"
@@ -371,7 +379,9 @@ function ChannelButton({
 export function AudioPlayer({
   channel = "both",
   className,
+  disabled = false,
   duration,
+  oneChannel = false,
   onChannelChange,
   onPartChange,
   onSeek,
@@ -387,8 +397,12 @@ export function AudioPlayer({
 }: {
   channel?: PlayerChannel;
   className?: string;
+  /** Nothing to play yet (or at all): the controls are unavailable. */
+  disabled?: boolean;
   duration: string;
   onChannelChange?: (channel: PlayerChannel) => void;
+  /** The recording has one channel file: nothing to pick. */
+  oneChannel?: boolean;
   onPartChange?: (partId: string) => void;
   /** Seeks to a share of the recording, 0 to 1. */
   onSeek?: (progress: number) => void;
@@ -424,6 +438,7 @@ export function AudioPlayer({
     >
       <Button
         aria-label={playing ? "Пауза" : "Слушать"}
+        disabled={disabled}
         onClick={onTogglePlay}
         size="icon-lg"
       >
@@ -437,10 +452,16 @@ export function AudioPlayer({
         <span className="text-sm">{position}</span>
         <span className="text-muted-foreground text-xs">{duration}</span>
       </p>
-      <Waveform onSeek={onSeek} peaks={peaks} progress={progress} />
+      <Waveform
+        onSeek={disabled ? undefined : onSeek}
+        peaks={peaks}
+        position={`${position} из ${duration}`}
+        progress={progress}
+      />
       {parts.length > 1 && current ? (
         <PlayerMenu
           label={current.label}
+          name="Часть записи"
           onValueChange={onPartChange}
           options={parts}
           value={current.id}
@@ -455,7 +476,9 @@ export function AudioPlayer({
       >
         {speed}
       </Button>
-      <ChannelButton channel={channel} onChannelChange={onChannelChange} />
+      {oneChannel ? null : (
+        <ChannelButton channel={channel} onChannelChange={onChannelChange} />
+      )}
     </section>
   );
 }

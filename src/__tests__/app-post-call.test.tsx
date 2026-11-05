@@ -49,6 +49,7 @@ const QUEUE_FACT = "telemedia-19-oct-recording@74000@t-120214";
 const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
 const GITHUB_SOON = /Отправить в GitHub\s*скоро/u;
 const OPERATORS_QUESTION = /Сколько операторов/u;
+const ALL_PROJECTS = /^Все проекты/u;
 const COLLECT_MS = 3000;
 
 let probed: ReturnType<typeof useCallSession> | undefined;
@@ -108,6 +109,9 @@ describe("history", () => {
       screen.getByRole("searchbox", { name: "Поиск по звонкам" }),
       { target: { value: "операторов" } }
     );
+    // The project's calls first; «Все проекты» widens the search.
+    expect(screen.queryByRole("link", { name: FIRST_CALL })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: ALL_PROJECTS }));
     const result = screen.getByRole("link", { name: FIRST_CALL });
     expect(result.getAttribute("href")).toContain("/calls/transcript");
     expect(result.getAttribute("href")).toContain("moment=");
@@ -253,17 +257,14 @@ describe("task cards", () => {
     const card = screen.getByRole("region", { name: "Приём звонков" });
     fireEvent.click(within(card).getByRole("button", { name: "Принять" }));
     expect(await within(card).findByText("принята")).toBeTruthy();
-    const clickUp = within(card).getByRole("button", {
-      name: CLICKUP_SOON,
-    }) as HTMLButtonElement;
-    expect(clickUp.disabled).toBe(true);
+    // Unavailable, but focusable: a screen reader hears why.
+    const clickUp = within(card).getByRole("button", { name: CLICKUP_SOON });
+    expect(clickUp.getAttribute("aria-disabled")).toBe("true");
     expect(
-      (
-        within(card).getByRole("button", {
-          name: GITHUB_SOON,
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(true);
+      within(card)
+        .getByRole("button", { name: GITHUB_SOON })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
   });
 
   it("discards a card and brings it back", async () => {
@@ -285,9 +286,10 @@ describe("task cards", () => {
     expect(linkHref("Открыть в расшифровке")).toBe(
       routes.callTranscript(CURRENT_CALL_ID, QUEUE_FACT)
     );
+    // «Послушать» opens the details page playing from the phrase.
     fireEvent.click(screen.getByRole("button", { name: "Послушать" }));
     expect(push).toHaveBeenCalledWith(
-      routes.callTranscript(CURRENT_CALL_ID, QUEUE_FACT)
+      routes.callTranscript(CURRENT_CALL_ID, QUEUE_FACT, true)
     );
   });
 });

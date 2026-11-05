@@ -83,6 +83,8 @@ export interface PlayerState {
   /** «40:12» of the part that plays. */
   duration?: string;
   onChannelChange: (channel: PlayerChannel) => void;
+  /** The part has one channel file: no channel menu. */
+  oneChannel?: boolean;
   onPartChange?: (partId: string) => void;
   onSeek?: (progress: number) => void;
   onSpeedChange: (speed: PlayerSpeed) => void;
@@ -91,6 +93,11 @@ export interface PlayerState {
   parts?: readonly PlayerPart[];
   /** The waveform of the part, 0 to 1. */
   peaks?: readonly number[];
+  /**
+   * Whether there is anything to play: not while the transcript loads, a
+   * call without recordings or a recording still being written.
+   */
+  playable?: boolean;
   playing: boolean;
   position: string;
   /** Played share, 0 to 1. */
@@ -181,6 +188,7 @@ export function CallDetailsScreen({
   recordingDescription,
   search,
   sections = PREVIEW_SECTIONS,
+  taskCards,
 }: {
   /** Selected topic pill; the last topic by default. */
   activeTopic?: string;
@@ -207,6 +215,8 @@ export function CallDetailsScreen({
   /** Makes the search field live (app). */
   search?: TranscriptSearch;
   sections?: TranscriptSection[];
+  /** The call's task cards, counted in the sidebar. */
+  taskCards?: number;
 }) {
   const info = usePostCallInfo();
   const moment =
@@ -243,6 +253,7 @@ export function CallDetailsScreen({
       overlay={dialog ? <DeleteRecordingDialog /> : null}
       panelClassName="relative overflow-clip"
       pendingProposals={pendingProposals}
+      taskCards={taskCards}
     >
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-16">
         <div className="border-border bg-background sticky top-0 z-[1] flex shrink-0 items-center justify-between gap-6 border-b pt-4 pb-3.5">
@@ -309,8 +320,10 @@ export function CallDetailsScreen({
         <AudioPlayer
           channel={player?.channel}
           className="absolute inset-x-6 bottom-6"
+          disabled={player?.playable === false}
           duration={player?.duration ?? info.duration}
           onChannelChange={player?.onChannelChange}
+          oneChannel={player?.oneChannel}
           onPartChange={player?.onPartChange}
           onSeek={player?.onSeek}
           onSpeedChange={player?.onSpeedChange}

@@ -161,7 +161,7 @@ export function TaskCardsScreen({
           ) : null}
           <p className="text-muted-foreground px-2 py-1 text-sm">
             {nextQuestions.length > 0
-              ? "Агент подмешает их в начало следующего звонка по проекту"
+              ? "Агент вывел их из пустых полей, допущений и противоречий карточек"
               : "Агент предложит их по пробелам карточек, когда соберутся итоги"}
           </p>
         </SideColumn>

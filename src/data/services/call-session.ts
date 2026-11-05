@@ -56,7 +56,11 @@ export class CallSessionBackend extends Context.Service<
     readonly resume: (
       callId: string
     ) => Effect.Effect<CallSession, BackendError>;
-    /** The summary is built: the call is over, none is current. */
+    /**
+     * Browser: the mock summary is built, the call is over and none is
+     * current. In Tauri the backend's build closes the call itself (post-call
+     * design.md, decision 1), so no window does: `Invalid`, nothing sent.
+     */
     readonly close: (
       callId: string
     ) => Effect.Effect<CallSession, BackendError>;
@@ -73,7 +77,8 @@ export class CallSessionBackend extends Context.Service<
   }
 >()("grill/data/services/CallSessionBackend") {
   static readonly layerTauri = Layer.succeed(CallSessionBackend, {
-    close: (callId) => call(() => commands.callClose(callId)),
+    close: () =>
+      Effect.fail(invalid("Звонок закрывает сборка итогов, а не окно")),
     current: call(() => commands.callCurrent()),
     discard: (callId) => call(() => commands.callDiscard(callId)),
     finish: (callId) => call(() => commands.callFinish(callId)),

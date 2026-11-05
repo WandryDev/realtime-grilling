@@ -46,8 +46,8 @@ export interface CallSuggestion {
  * 13 Человек: the profile of a person of the client with the suggestion
  * after the call. 14 (`mode="edit"`): every field editable in place. The
  * app passes the person's pending proposals of each call
- * (`callSuggestions`), reviewed on the call's page; without them the demo
- * suggestion with its own buttons.
+ * (`callSuggestions`), reviewed on the call's page; without them (`/dev`)
+ * the demo suggestion.
  *
  * In edit mode the fields sit in a form; `onSave` gets its submit event
  * (fields: role, askStyle, portrait:<label>).
@@ -55,11 +55,8 @@ export interface CallSuggestion {
 export function PersonScreen({
   className,
   mode = "view",
-  onAcceptSuggestion,
   onCancelEdit,
-  onDeclineSuggestion,
   onEdit,
-  onEditSuggestion,
   onSave,
   onScaleStep,
   callSuggestions,
@@ -71,11 +68,8 @@ export function PersonScreen({
   callSuggestions?: CallSuggestion[];
   className?: string;
   mode?: "view" | "edit";
-  onAcceptSuggestion?: () => void;
   onCancelEdit?: () => void;
-  onDeclineSuggestion?: () => void;
   onEdit?: () => void;
-  onEditSuggestion?: () => void;
   onSave?: (event: FormEvent<HTMLFormElement>) => void;
   /** A step of a scale in edit mode: `data-scale` is "tech" or "project". */
   onScaleStep?: (event: MouseEvent<HTMLButtonElement>) => void;
@@ -132,9 +126,6 @@ export function PersonScreen({
             : null}
           {suggestion && !editing && !callSuggestions && person.suggestion ? (
             <ProfileSuggestion
-              onAccept={onAcceptSuggestion}
-              onDecline={onDeclineSuggestion}
-              onEditAccept={onEditSuggestion}
               quoteHref={routes.callTranscript(
                 SUGGESTION_CALL_ID,
                 SUGGESTION_MOMENT

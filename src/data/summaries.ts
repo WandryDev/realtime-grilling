@@ -1,7 +1,7 @@
 "use client";
 
 import { Effect, Stream } from "effect";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 
 import type { CallSummary, CallSummaryView, SummaryProgress } from "@/bindings";
 import { appRuntime, inTauri, runCancelable } from "@/effect/runtime";
@@ -36,6 +36,11 @@ import {
 export interface CallSummaryState {
   /** The build running now (its last progress); `null` when none runs. */
   building: SummaryProgress | null;
+  /**
+   * The last progress of a build that ended while it was followed here
+   * (`(saving, done)`, `failed`, `cancelled`); `null` otherwise.
+   */
+  ended: SummaryProgress | null;
   /** Why the first read failed (`status: "error"`). */
   error?: BackendError;
   status: LoadStatus;
@@ -84,11 +89,16 @@ export function summaryBuildEnded(progress: SummaryProgress) {
   return state.status === "done" && stage === "saving";
 }
 
-/** The last progress of each call's build; `null` once it ended. */
-const progressStore = createStore<Record<string, SummaryProgress | null>>({});
+/**
+ * The last progress of each call's build, while it is followed. A stop of
+ * the following clears it: a build that ends meanwhile would leave a stage
+ * that is over, so a page shown again reads `summary_get` instead.
+ */
+const progressStore = createStore<Record<string, SummaryProgress>>({});
 
 let followers = 0;
-let stopFollowing: (() => void) | undefined;
+/** The fiber that follows the progress; unset once it ended. */
+let following: { stop: () => void } | undefined;
 
 /** Browser: the finishing calls whose mock build closes them when it ends. */
 const finishing = new Map<string, () => void>();
@@ -97,7 +107,7 @@ function onProgress(progress: SummaryProgress) {
   const ended = summaryBuildEnded(progress);
   progressStore.set((current) => ({
     ...current,
-    [progress.callId]: ended ? null : progress,
+    [progress.callId]: progress,
   }));
   if (!inTauri) {
     refreshMockStores();
@@ -123,24 +133,71 @@ function closeFinished(callId: string) {
   }
 }
 
-/** Follows every build's progress while a summary is shown. */
+/**
+ * Follows every build's progress while a summary is shown. A stream that
+ * ends (an error of the listener) lets the next follower start it again.
+ */
 function followProgress() {
   followers += 1;
-  stopFollowing ??= runCancelable(
-    SummaryData.use((data) =>
-      Stream.runForEach(data.progress, (progress) =>
-        Effect.sync(() => onProgress(progress))
+  if (!following) {
+    const current: { stop: () => void } = { stop: () => undefined };
+    following = current;
+    current.stop = runCancelable(
+      SummaryData.use((data) =>
+        Stream.runForEach(data.progress, (progress) =>
+          Effect.sync(() => onProgress(progress))
+        )
+      ).pipe(
+        Effect.catch(() => Effect.void),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (following === current) {
+              following = undefined;
+              progressStore.set({});
+            }
+          })
+        )
       )
-    ).pipe(Effect.catch(() => Effect.void))
-  );
+    );
+  }
   return () => {
     followers -= 1;
-    if (followers === 0) {
-      stopFollowing?.();
-      stopFollowing = undefined;
+    if (followers === 0 && following) {
+      const { stop } = following;
+      following = undefined;
+      progressStore.set({});
+      stop();
     }
   };
 }
+
+/**
+ * The summary store of a call, whose first subscriber starts following
+ * the progress before the store's first read: a stage sent while
+ * `summary_get` runs is not lost.
+ */
+const followedSummary = (() => {
+  const stores = new Map<string, ReturnType<typeof summaryStore>>();
+  return (callId: string) => {
+    let store = stores.get(callId);
+    if (!store) {
+      const inner = summaryStore(callId);
+      store = {
+        ...inner,
+        subscribe: (listener) => {
+          const unfollow = followProgress();
+          const unsubscribe = inner.subscribe(listener);
+          return () => {
+            unsubscribe();
+            unfollow();
+          };
+        },
+      };
+      stores.set(callId, store);
+    }
+    return store;
+  };
+})();
 
 /**
  * The summary of `callId` and the build running for it. In the browser it
@@ -150,15 +207,22 @@ export function useCallSummary(
   callId: string | null | undefined
 ): CallSummaryState {
   const state = useSyncedState(
-    callId ? summaryStore(callId) : undefined,
+    callId ? followedSummary(callId) : undefined,
     NO_SUMMARY
   );
   const progress = progressStore.use();
-  useEffect(() => followProgress(), []);
   return useMemo(() => {
     const followed = callId ? progress[callId] : undefined;
+    let { building } = state.data;
+    let ended: SummaryProgress | null = null;
+    if (followed) {
+      const over = summaryBuildEnded(followed);
+      building = over ? null : followed;
+      ended = over ? followed : null;
+    }
     return {
-      building: followed === undefined ? state.data.building : followed,
+      building,
+      ended,
       error: state.error,
       status: state.status,
       summary: state.data.summary,
@@ -200,7 +264,14 @@ export function buildFinishingSummary(callId: string) {
     });
   }
   finishing.set(callId, followProgress());
-  buildSummary(callId);
+  buildSummary(callId).then((started) => {
+    // A build that didn't start never ends: nothing to close.
+    const unfollow = finishing.get(callId);
+    if (!started && unfollow) {
+      finishing.delete(callId);
+      unfollow();
+    }
+  });
 }
 
 /** «Остановить»: the build stops, nothing is saved. */

@@ -122,6 +122,7 @@ export function ProposalsReviewScreen({
   onAction,
   outcome = REVIEW_OUTCOME,
   state = "partial",
+  taskCards,
   totals: totalsProp,
 }: {
   className?: string;
@@ -135,6 +136,8 @@ export function ProposalsReviewScreen({
   /** What "Всё разобрано" reports. */
   outcome?: ReviewOutcome;
   state?: "partial" | "done" | "empty" | "loading";
+  /** The call's task cards, counted in the sidebar. */
+  taskCards?: number;
   totals?: ReviewTotals;
 }) {
   const info = usePostCallInfo();
@@ -168,8 +171,9 @@ export function ProposalsReviewScreen({
       }
       className={className}
       pendingProposals={totals.pending}
+      taskCards={taskCards}
     >
-      <PanelPage className="flex-1">
+      <PanelPage aria-busy={state === "loading"} className="flex-1">
         <CallPageHeader breadcrumb={breadcrumb} title="Предложения">
           {state === "partial" ? (
             <div className="flex flex-col gap-4">

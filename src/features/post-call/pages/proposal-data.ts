@@ -7,7 +7,7 @@ import {
 } from "@/lib/proposal-fields";
 
 import type { KnowledgeTarget, ProposalData, ProposalGroupData } from "../mock";
-import { wallClock } from "./call-data";
+import { saidBy, wallClock } from "./call-data";
 
 /*
  * The proposals of a call (`proposals_list`) as the review and the
@@ -80,8 +80,7 @@ function sourceOf(
     .map((item) => wallClock(recordings, item))
     .filter(Boolean);
   if (proposal.kind === "said") {
-    const said =
-      speaker === "клиент" ? "сказал клиент" : `сказал(а) ${speaker}`;
+    const said = saidBy(speaker);
     return { kind: "said", text: times[0] ? `${said}, ${times[0]}` : said };
   }
   return {
