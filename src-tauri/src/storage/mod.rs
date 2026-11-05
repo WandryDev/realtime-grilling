@@ -57,6 +57,11 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!(
         "../../migrations/0005_project_sources_and_brief.sql"
     )),
+    // Rebuilds `calls`: runs with the foreign keys off (see `migrate`).
+    M::up(include_str!(
+        "../../migrations/0006_call_without_project.sql"
+    ))
+    .foreign_key_check(),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
@@ -83,7 +88,8 @@ impl Storage {
     /// Opens `<dir>/grill.db`, migrating it to [`SCHEMA_VERSION`].
     ///
     /// Then tidies the recordings: rows a crash left `recording` become
-    /// `interrupted`, folders without a row are removed. Copies of project
+    /// `interrupted`, folders without a row are removed. Calls a crash or a
+    /// quit left `live` or `finishing` become `finished`. Copies of project
     /// documents without a row and folders of deleted projects go too.
     pub fn open_in(dir: &Path) -> Self {
         let recordings = Arc::new(LocalStore::new(dir));
@@ -237,6 +243,10 @@ fn open_dir(dir: &Path, recordings: &LocalStore) -> Result<Db, String> {
         .map_err(|error| format!("Не удалось создать папку данных {}: {error}", dir.display()))
         .and_then(|()| open(&dir.join(DATABASE_FILE), &MIGRATIONS))?;
     tidy_recordings(&connection, dir, recordings);
+    // After the recordings: a call ends when its last recording did.
+    if let Err(error) = calls::finish_stale(&connection, now_ms()) {
+        eprintln!("grill: could not finish the calls left running: {error}");
+    }
     if let Err(error) = crate::projects::sources::files::sweep(&connection, dir) {
         eprintln!("grill: documents sweep failed: {error}");
     }
@@ -336,10 +346,18 @@ fn migrate(connection: &mut Connection, migrations: &Migrations) -> Result<(), S
     let dropped = call_transcript_rows(connection);
     let dropped_state = call_state_rows(connection);
     // All pending migrations run in one transaction: on failure the database
-    // stays on its previous version.
-    migrations
-        .to_latest(connection)
-        .map_err(|error| format!("Не удалось обновить схему базы: {error}"))?;
+    // stays on its previous version. The foreign keys are off meanwhile, as
+    // rusqlite_migration asks (a pragma inside the transaction does
+    // nothing): rebuilding a parent table (0006) must not cascade into its
+    // children. A migration that rebuilds one checks them before commit.
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
+        .map_err(|error| format!("Не удалось настроить базу: {error}"))?;
+    let migrated = migrations.to_latest(connection);
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(|error| format!("Не удалось настроить базу: {error}"))?;
+    migrated.map_err(|error| format!("Не удалось обновить схему базы: {error}"))?;
     if let Some(count) = dropped.filter(|_| !has_call_transcript(connection)) {
         eprintln!(
             "grill: migration 0003 dropped {count} transcript segment(s) without a recording"
@@ -524,6 +542,41 @@ mod tests {
         let root = dir.path().join(crate::recording::store::RECORDINGS_DIR);
         assert!(root.join(&crashed).exists());
         assert!(!root.join(orphan).exists());
+    }
+
+    /// `call-lifecycle`, "Приложение упало во время звонка".
+    #[test]
+    fn opening_finishes_the_call_a_crash_left_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let (call_id, recording_id) = {
+            let storage = Storage::open_in(dir.path());
+            storage
+                .read_now(|connection| {
+                    let (call, _) = calls::create(connection, calls::CallCreate::default())?;
+                    let links = recordings::RecordingLinks::call(&call.id);
+                    let recording = recordings::create(connection, &links, now_ms(), |id| {
+                        recordings::RecordingFiles {
+                            me: format!("recordings/{id}/me.opus"),
+                            others: format!("recordings/{id}/others.opus"),
+                        }
+                    })?;
+                    Ok((call.id, recording))
+                })
+                .unwrap()
+        };
+        // The app died mid-call: the call is `live`, its recording `recording`.
+        let storage = Storage::open_in(dir.path());
+        let (call, recording) = storage
+            .read_now(|connection| {
+                Ok((
+                    calls::get(connection, &call_id)?,
+                    recordings::get(connection, &recording_id)?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(recording.status, recordings::RecordingState::Interrupted);
+        assert_eq!(call.status, calls::CallStatus::Finished);
+        assert_eq!(call.ended_at, recording.ended_at);
     }
 
     #[test]

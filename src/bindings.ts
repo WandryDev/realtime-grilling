@@ -487,7 +487,8 @@ export type BriefState =
 
 export type Call = {
 	id: string,
-	projectId: string,
+	/**  `null`: a call without a project ("Звонок без проекта"). */
+	projectId: string | null,
 	title: string,
 	status: CallStatus,
 	/**  Milliseconds since the Unix epoch, UTC. */
@@ -506,7 +507,8 @@ export type Call = {
 };
 
 export type CallCreate = {
-	projectId: string,
+	/**  A call without a project when absent; it has no participants then. */
+	projectId?: string | null,
 	title?: string | null,
 	/**  `live` when absent. */
 	status?: CallStatus | null,

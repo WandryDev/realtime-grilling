@@ -86,7 +86,7 @@ impl Fixture {
 
     fn call(&self, project: &Project, participants: &[&Person]) -> Call {
         let input = CallCreate {
-            project_id: project.id.clone(),
+            project_id: Some(project.id.clone()),
             title: Some("Приём звонков".to_owned()),
             participant_ids: Some(participants.iter().map(|p| p.id.clone()).collect()),
             ..CallCreate::default()
@@ -399,7 +399,7 @@ fn a_failed_command_rolls_back_and_sends_no_event() {
 
     // The call row is inserted before the foreign participant fails it.
     let input = CallCreate {
-        project_id: telemedia.id.clone(),
+        project_id: Some(telemedia.id.clone()),
         participant_ids: Some(vec![marina.id.clone()]),
         ..CallCreate::default()
     };

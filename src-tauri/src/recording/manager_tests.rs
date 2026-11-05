@@ -534,7 +534,7 @@ fn a_recording_of_a_call_and_of_an_unknown_call() {
             let (call, _) = calls::create(
                 connection,
                 CallCreate {
-                    project_id: project.id,
+                    project_id: Some(project.id),
                     ..CallCreate::default()
                 },
             )?;

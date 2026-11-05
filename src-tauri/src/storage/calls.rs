@@ -49,7 +49,8 @@ impl CallStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Call {
     pub id: String,
-    pub project_id: String,
+    /// `null`: a call without a project ("Звонок без проекта").
+    pub project_id: Option<String>,
     pub title: String,
     pub status: CallStatus,
     /// Milliseconds since the Unix epoch, UTC.
@@ -68,7 +69,9 @@ pub struct Call {
 #[derive(Debug, Clone, Default, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CallCreate {
-    pub project_id: String,
+    /// A call without a project when absent; it has no participants then.
+    #[specta(optional)]
+    pub project_id: Option<String>,
     #[specta(optional)]
     pub title: Option<String>,
     /// `live` when absent.
@@ -166,8 +169,9 @@ pub fn get(connection: &Connection, id: &str) -> CommandResult<Call> {
         .ok_or_else(|| CommandError::not_found(format!("Звонок {id} не найден")))
 }
 
-/// The call's project; `NotFound` when there is no such call.
-pub fn project_of(connection: &Connection, id: &str) -> CommandResult<String> {
+/// The call's project (`None` for a call without one); `NotFound` when
+/// there is no such call.
+pub fn project_of(connection: &Connection, id: &str) -> CommandResult<Option<String>> {
     connection
         .query_row("SELECT project_id FROM calls WHERE id = ?1", [id], |row| {
             row.get(0)
@@ -180,7 +184,9 @@ pub fn create(
     connection: &Connection,
     input: CallCreate,
 ) -> CommandResult<(Call, Vec<DataChanged>)> {
-    projects::exists(connection, &input.project_id)?;
+    if let Some(project_id) = &input.project_id {
+        projects::exists(connection, project_id)?;
+    }
     let now = now_ms();
     let started_at = input.started_at.or(Some(now));
     check_times(started_at, input.ended_at)?;
@@ -201,10 +207,15 @@ pub fn create(
         ],
     )?;
     for person_id in input.participant_ids.unwrap_or_default() {
-        insert_participant(connection, &id, &input.project_id, &person_id)?;
+        insert_participant(connection, &id, input.project_id.as_deref(), &person_id)?;
     }
     let call = get(connection, &id)?;
-    let event = DataChanged::new(Entity::Call, &id, Some(&call.project_id), Change::Created);
+    let event = DataChanged::new(
+        Entity::Call,
+        &id,
+        call.project_id.as_deref(),
+        Change::Created,
+    );
     Ok((call, vec![event]))
 }
 
@@ -235,7 +246,12 @@ pub fn update(
         ],
     )?;
     let call = get(connection, id)?;
-    let event = DataChanged::new(Entity::Call, id, Some(&call.project_id), Change::Updated);
+    let event = DataChanged::new(
+        Entity::Call,
+        id,
+        call.project_id.as_deref(),
+        Change::Updated,
+    );
     Ok((call, vec![event]))
 }
 
@@ -257,7 +273,12 @@ pub fn patch_summary(
         params![id, summary.map(Json), now_ms()],
     )?;
     let call = get(connection, id)?;
-    let event = DataChanged::new(Entity::Call, id, Some(&call.project_id), Change::Updated);
+    let event = DataChanged::new(
+        Entity::Call,
+        id,
+        call.project_id.as_deref(),
+        Change::Updated,
+    );
     Ok((call, vec![event]))
 }
 
@@ -265,17 +286,23 @@ pub fn patch_summary(
 pub fn delete(connection: &Connection, id: &str) -> CommandResult<((), Vec<DataChanged>)> {
     let project_id = project_of(connection, id)?;
     connection.execute("DELETE FROM calls WHERE id = ?1", [id])?;
-    let event = DataChanged::new(Entity::Call, id, Some(&project_id), Change::Deleted);
+    let event = DataChanged::new(Entity::Call, id, project_id.as_deref(), Change::Deleted);
     Ok(((), vec![event]))
 }
 
 fn insert_participant(
     connection: &Connection,
     call_id: &str,
-    project_id: &str,
+    project_id: Option<&str>,
     person_id: &str,
 ) -> CommandResult<()> {
     let person = people::get(connection, person_id)?;
+    let Some(project_id) = project_id else {
+        return Err(CommandError::invalid(format!(
+            "У звонка без проекта нет участников: {} не может быть в нём",
+            person.name
+        )));
+    };
     if person.project_id != project_id {
         return Err(CommandError::invalid(format!(
             "{} из другого проекта и не может быть участником этого звонка",
@@ -316,10 +343,15 @@ pub fn add_participant(
     person_id: &str,
 ) -> CommandResult<(Call, Vec<DataChanged>)> {
     let project_id = project_of(connection, call_id)?;
-    insert_participant(connection, call_id, &project_id, person_id)?;
+    insert_participant(connection, call_id, project_id.as_deref(), person_id)?;
     touch(connection, call_id)?;
     let call = get(connection, call_id)?;
-    let event = DataChanged::new(Entity::Call, call_id, Some(&project_id), Change::Updated);
+    let event = DataChanged::new(
+        Entity::Call,
+        call_id,
+        project_id.as_deref(),
+        Change::Updated,
+    );
     Ok((call, vec![event]))
 }
 
@@ -340,6 +372,357 @@ pub fn remove_participant(
     }
     touch(connection, call_id)?;
     let call = get(connection, call_id)?;
-    let event = DataChanged::new(Entity::Call, call_id, Some(&project_id), Change::Updated);
+    let event = DataChanged::new(
+        Entity::Call,
+        call_id,
+        project_id.as_deref(),
+        Change::Updated,
+    );
     Ok((call, vec![event]))
+}
+
+/// What a new call starts with when nobody picks (call-lifecycle design.md,
+/// decision 7): the project and the people of the last call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallSetup {
+    pub project_id: Option<String>,
+    pub participant_ids: Vec<String>,
+}
+
+/// The project and participants of the newest call (by its start); none
+/// without calls. A deleted project takes its calls along and a deleted
+/// person leaves the calls' participants, so both still exist.
+pub fn last_setup(connection: &Connection) -> CommandResult<CallSetup> {
+    let last = connection
+        .query_row(
+            &format!(
+                "{SELECT} ORDER BY coalesce(c.started_at, c.created_at) DESC, c.id DESC LIMIT 1"
+            ),
+            [],
+            from_row,
+        )
+        .optional()?;
+    Ok(last.map_or_else(CallSetup::default, |call| CallSetup {
+        project_id: call.project_id,
+        participant_ids: call.participant_ids,
+    }))
+}
+
+/// At start, after the interrupted recordings are marked (decision 9): a
+/// call still `live` or `finishing` was left by a crash or a quit and
+/// becomes `finished`, ending when its last recording ended (at its start
+/// without recordings). Returns the ids it changed.
+pub fn finish_stale(connection: &Connection, now: i64) -> CommandResult<Vec<String>> {
+    let mut statement = connection.prepare(
+        "UPDATE calls
+            SET status = 'finished',
+                ended_at = coalesce(
+                  (SELECT max(r.ended_at) FROM recordings r WHERE r.call_id = calls.id),
+                  started_at, ended_at, created_at),
+                updated_at = MAX(?1, updated_at + 1)
+          WHERE status IN ('live', 'finishing')
+      RETURNING id",
+    )?;
+    let rows = statement.query_map([now], |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite_migration::Migrations;
+
+    use super::*;
+    use crate::storage::{
+        DATABASE_FILE, MIGRATION_LIST, open, open_in_memory,
+        people::PersonCreate,
+        projects::ProjectCreate,
+        recordings::{self, RecordingFiles, RecordingLinks},
+        transcript::{self, SegmentInput, TranscriptChannel},
+    };
+
+    fn files(id: &str) -> RecordingFiles {
+        RecordingFiles {
+            me: format!("recordings/{id}/me.opus"),
+            others: format!("recordings/{id}/others.opus"),
+        }
+    }
+
+    fn project(connection: &Connection, name: &str) -> String {
+        let input = ProjectCreate {
+            name: name.to_owned(),
+            ..ProjectCreate::default()
+        };
+        projects::create(connection, input).unwrap().0.id
+    }
+
+    fn person(connection: &Connection, project_id: &str, name: &str) -> String {
+        let input = PersonCreate {
+            project_id: project_id.to_owned(),
+            name: name.to_owned(),
+            ..PersonCreate::default()
+        };
+        people::create(connection, input).unwrap().0.id
+    }
+
+    fn call(
+        connection: &Connection,
+        project_id: Option<&str>,
+        participants: &[&str],
+        started_at: i64,
+    ) -> String {
+        let input = CallCreate {
+            project_id: project_id.map(str::to_owned),
+            started_at: Some(started_at),
+            participant_ids: Some(participants.iter().map(|id| (*id).to_owned()).collect()),
+            ..CallCreate::default()
+        };
+        create(connection, input).unwrap().0.id
+    }
+
+    fn recording(connection: &Connection, call_id: &str, started_at: i64) -> String {
+        recordings::create(
+            connection,
+            &RecordingLinks::call(call_id),
+            started_at,
+            files,
+        )
+        .unwrap()
+    }
+
+    fn foreign_key_violations(connection: &Connection) -> i64 {
+        connection
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    /// `local-storage`, "Модель данных": rows of a version 5 database stay,
+    /// and every table that refers to `calls` refers to the rebuilt one.
+    #[test]
+    fn migration_0006_keeps_the_calls_of_version_5() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let (acme, igor, call_id, recording_id) = {
+            let v5 = Migrations::from_slice(&MIGRATION_LIST[..5]);
+            let connection = open(&path, &v5).unwrap();
+            let acme = project(&connection, "Acme");
+            let igor = person(&connection, &acme, "Игорь");
+            let call_id = call(&connection, Some(&acme), &[&igor], 1_000);
+            let recording_id = recording(&connection, &call_id, 1_000);
+            recordings::finish(&connection, &recording_id, 5_000).unwrap();
+            let segment = SegmentInput {
+                channel: TranscriptChannel::Others,
+                start_ms: 0,
+                end_ms: 10,
+                text: "Здравствуйте".to_owned(),
+            };
+            transcript::append_live(&connection, &recording_id, segment).unwrap();
+            connection
+                .execute_batch(&format!(
+                    "INSERT INTO topics (id, recording_id, call_id, title, position, created_at, updated_at)
+                     VALUES ('t1', '{recording_id}', '{call_id}', 'Очередь', 0, 0, 0);
+                     INSERT INTO questions (id, recording_id, call_id, topic_id, text, created_at, updated_at)
+                     VALUES ('q1', '{recording_id}', '{call_id}', 't1', 'Сколько звонков?', 0, 0);"
+                ))
+                .unwrap();
+            (acme, igor, call_id, recording_id)
+        };
+
+        let connection = open(&path, &crate::storage::MIGRATIONS).unwrap();
+        assert_eq!(foreign_key_violations(&connection), 0);
+        let migrated = get(&connection, &call_id).unwrap();
+        assert_eq!(migrated.project_id.as_deref(), Some(acme.as_str()));
+        assert_eq!(migrated.participant_ids, vec![igor]);
+        assert_eq!(migrated.started_at, Some(1_000));
+        assert_eq!(migrated.open_questions, 1);
+        assert_eq!(
+            recordings::get(&connection, &recording_id).unwrap().call_id,
+            Some(call_id.clone())
+        );
+        assert_eq!(
+            transcript::for_recording(&connection, &recording_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        for table in [
+            "call_participants",
+            "recordings",
+            "transcript_segments",
+            "topics",
+            "task_cards",
+            "questions",
+        ] {
+            let parent: String = connection
+                .query_row(
+                    "SELECT \"table\" FROM pragma_foreign_key_list(?1) WHERE \"from\" = 'call_id'",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(parent, "calls", "{table}");
+        }
+
+        // The cascades still work on the rebuilt table.
+        projects::delete(&connection, &acme).unwrap();
+        for table in [
+            "calls",
+            "call_participants",
+            "recordings",
+            "questions",
+            "topics",
+        ] {
+            let rows: i64 = connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(rows, 0, "{table}");
+        }
+    }
+
+    /// `local-storage`, "Звонок без проекта".
+    #[test]
+    fn a_call_without_a_project_outlives_every_project() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+        let loose = call(&connection, None, &[], 1_000);
+        let recording_id = recording(&connection, &loose, 1_000);
+        let (created, events) = create(&connection, CallCreate::default()).unwrap();
+        assert_eq!(created.project_id, None);
+        assert_eq!(
+            events,
+            vec![DataChanged::new(
+                Entity::Call,
+                &created.id,
+                None,
+                Change::Created
+            )]
+        );
+
+        projects::delete(&connection, &acme).unwrap();
+        assert_eq!(get(&connection, &loose).unwrap().project_id, None);
+        assert_eq!(
+            recordings::get(&connection, &recording_id).unwrap().call_id,
+            Some(loose.clone())
+        );
+        assert_eq!(list(&connection, None).unwrap().len(), 2);
+        assert_eq!(list(&connection, Some(&acme)).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_call_without_a_project_has_no_participants() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+        let igor = person(&connection, &acme, "Игорь");
+        let input = CallCreate {
+            participant_ids: Some(vec![igor.clone()]),
+            ..CallCreate::default()
+        };
+        let error = create(&connection, input).unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+        let loose = call(&connection, None, &[], 1_000);
+        let error = add_participant(&connection, &loose, &igor).unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn last_setup_is_the_newest_call_with_the_people_that_still_exist() {
+        let connection = open_in_memory().unwrap();
+        assert_eq!(last_setup(&connection).unwrap(), CallSetup::default());
+
+        let exchange = project(&connection, "Обменник");
+        let igor = person(&connection, &exchange, "Игорь");
+        let olga = person(&connection, &exchange, "Ольга");
+        let other = project(&connection, "Телемедиа");
+        call(&connection, Some(&other), &[], 1_000);
+        call(&connection, Some(&exchange), &[&olga, &igor], 2_000);
+        // Created later, but started earlier: not the last call.
+        call(&connection, Some(&other), &[], 1_500);
+
+        assert_eq!(
+            last_setup(&connection).unwrap(),
+            CallSetup {
+                project_id: Some(exchange.clone()),
+                participant_ids: vec![olga.clone(), igor.clone()],
+            }
+        );
+
+        people::delete(&connection, &olga).unwrap();
+        assert_eq!(
+            last_setup(&connection).unwrap(),
+            CallSetup {
+                project_id: Some(exchange.clone()),
+                participant_ids: vec![igor],
+            }
+        );
+
+        // The project is gone with its calls: the last call left is Телемедиа's.
+        projects::delete(&connection, &exchange).unwrap();
+        assert_eq!(
+            last_setup(&connection).unwrap(),
+            CallSetup {
+                project_id: Some(other),
+                participant_ids: Vec::new(),
+            }
+        );
+
+        call(&connection, None, &[], 3_000);
+        assert_eq!(last_setup(&connection).unwrap(), CallSetup::default());
+    }
+
+    #[test]
+    fn finish_stale_ends_calls_at_their_last_recording() {
+        let connection = open_in_memory().unwrap();
+        let acme = project(&connection, "Acme");
+
+        let empty = call(&connection, Some(&acme), &[], 1_000);
+        let two = call(&connection, Some(&acme), &[], 2_000);
+        let first = recording(&connection, &two, 2_000);
+        recordings::finish(&connection, &first, 3_000).unwrap();
+        let second = recording(&connection, &two, 4_000);
+        recordings::mark_interrupted(&connection, &second, 7_000).unwrap();
+        let finishing = call(&connection, None, &[], 10_000);
+        let only = recording(&connection, &finishing, 10_000);
+        recordings::finish(&connection, &only, 12_000).unwrap();
+        update(
+            &connection,
+            &finishing,
+            CallUpdate {
+                status: Some(CallStatus::Finishing),
+                ended_at: Some(Some(12_000)),
+                ..CallUpdate::default()
+            },
+        )
+        .unwrap();
+        let done = call(&connection, Some(&acme), &[], 20_000);
+        update(
+            &connection,
+            &done,
+            CallUpdate {
+                status: Some(CallStatus::Finished),
+                ended_at: Some(Some(25_000)),
+                ..CallUpdate::default()
+            },
+        )
+        .unwrap();
+
+        let mut finished = finish_stale(&connection, 99_000).unwrap();
+        finished.sort();
+        let mut expected = vec![empty.clone(), two.clone(), finishing.clone()];
+        expected.sort();
+        assert_eq!(finished, expected);
+
+        let ended = |id: &str| {
+            let call = get(&connection, id).unwrap();
+            assert_eq!(call.status, CallStatus::Finished, "{id}");
+            call.ended_at
+        };
+        assert_eq!(ended(&empty), Some(1_000), "no recordings: its start");
+        assert_eq!(ended(&two), Some(7_000), "the later of two recordings");
+        assert_eq!(ended(&finishing), Some(12_000));
+        assert_eq!(ended(&done), Some(25_000), "a finished call stays as it is");
+        assert!(finish_stale(&connection, 99_000).unwrap().is_empty());
+    }
 }

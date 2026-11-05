@@ -223,7 +223,7 @@ fn checked_links(
     links: &RecordingLinks,
 ) -> CommandResult<(Option<String>, Vec<String>)> {
     let call_project = match &links.call_id {
-        Some(call_id) => Some(calls::project_of(connection, call_id)?),
+        Some(call_id) => calls::project_of(connection, call_id)?,
         None => None,
     };
     let given = match &links.project_id {
@@ -433,7 +433,7 @@ mod tests {
 
     fn call(connection: &Connection, project_id: &str) -> String {
         let input = CallCreate {
-            project_id: project_id.into(),
+            project_id: Some(project_id.into()),
             ..Default::default()
         };
         calls::create(connection, input).unwrap().0.id
@@ -687,7 +687,7 @@ mod tests {
         );
         assert_eq!(
             calls::get(&connection, &call_id).unwrap().project_id,
-            project_id
+            Some(project_id)
         );
         let id = create(&connection, &RecordingLinks::call(&call_id), 0, files).unwrap();
         assert_eq!(list_ids(&connection).unwrap(), vec![id]);
