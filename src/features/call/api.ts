@@ -100,23 +100,6 @@ export function retryAgentNow(recordingId: string): Promise<string | null> {
 
 /* One-off operations */
 
-/**
- * "Собираю итоги": reports each finished stage, then `onDone`. The first
- * stage (the transcript) is ready right away.
- */
-export function collectSummary(
-  onStage: (stage: number) => void,
-  onDone: () => void
-): () => void {
-  return runCancelable(
-    CallBackend.use((backend) =>
-      Stream.runForEach(backend.collectSummary, (stage) =>
-        Effect.sync(() => onStage(stage))
-      )
-    ).pipe(Effect.andThen(Effect.sync(onDone)))
-  );
-}
-
 function runThen(
   operation: (backend: CallBackend["Service"]) => Effect.Effect<void, unknown>,
   callback: () => void

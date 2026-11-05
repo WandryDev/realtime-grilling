@@ -1,4 +1,4 @@
-import type { AgentStatus, CallState } from "@/bindings";
+import type { AgentStatus, CallState, SummaryProgress } from "@/bindings";
 import { plural } from "@/lib/plural";
 import { routes } from "@/lib/routes";
 
@@ -698,12 +698,23 @@ function releaseMic(
 
 /* Finishing */
 
+/** The stages of the summary build (`SummaryStage`), in their order. */
 const SUMMARY_STEPS: Omit<FinishingStep, "state">[] = [
   { id: "transcript", label: "Расшифровка дописана" },
   { id: "summary", label: "Итоги и короткое резюме по темам" },
-  { id: "open", label: "Незакрытые вопросы" },
-  { id: "brief", label: "Что обновить в брифе и профилях" },
+  { id: "proposals", label: "Что обновить в брифе и профилях" },
+  { id: "saving", label: "Незакрытые вопросы и сохранение" },
 ];
+
+/**
+ * How many stages of «Собираю итоги» are done at `progress`: the
+ * transcript is ready when the card opens.
+ */
+export function finishedStages(progress: SummaryProgress) {
+  const index = SUMMARY_STEPS.findIndex((step) => step.id === progress.stage);
+  const done = progress.state.status === "done" ? index + 1 : index;
+  return Math.max(done, 1);
+}
 
 /** The finishing card after `stage` finished stages. */
 function finishingAt(

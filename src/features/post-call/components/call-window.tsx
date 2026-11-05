@@ -121,6 +121,7 @@ export function CallWindow({
   aside,
   children,
   className,
+  facts = CALL_FACTS,
   overlay,
   panelClassName,
   pendingProposals = 7,
@@ -131,6 +132,8 @@ export function CallWindow({
   aside?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Details under the navigation while the summary is built. */
+  facts?: CallFact[];
   overlay?: ReactNode;
   panelClassName?: string;
   pendingProposals?: number;
@@ -148,7 +151,7 @@ export function CallWindow({
       sidebar={
         <CallSidebar
           active={active}
-          facts={processing ? CALL_FACTS : undefined}
+          facts={processing ? facts : undefined}
           pendingProposals={pendingProposals}
           processing={processing}
           taskCards={taskCards}

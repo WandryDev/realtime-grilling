@@ -5,7 +5,6 @@ import { TestClock } from "effect/testing";
 import {
   CallBackend,
   type FeedUpdate,
-  SUMMARY_STAGES,
   TRANSCRIPT_CATCH_UP_MS,
 } from "@/features/call/backend";
 import {
@@ -55,21 +54,6 @@ describe("CallBackend.layerMock", () => {
       );
       assert.deepStrictEqual(updates.at(-1)?.events, [
         { type: "mic-released" },
-      ]);
-    }).pipe(Effect.provide(CallBackend.layerMock))
-  );
-
-  it.effect("finishes the summary stages after the transcript", () =>
-    Effect.gen(function* () {
-      const backend = yield* CallBackend;
-      const fiber = yield* Effect.forkChild(
-        Stream.runCollect(backend.collectSummary)
-      );
-      yield* TestClock.adjust("5 seconds");
-      assert.deepStrictEqual(Array.from(yield* Fiber.join(fiber)), [
-        2,
-        3,
-        SUMMARY_STAGES,
       ]);
     }).pipe(Effect.provide(CallBackend.layerMock))
   );

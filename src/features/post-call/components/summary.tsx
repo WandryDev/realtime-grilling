@@ -175,9 +175,12 @@ const POINT_TONE = {
 /** Clickable time code: opens the transcript at that moment. */
 export function TimeLink({
   className,
+  moment,
   time,
 }: {
   className?: string;
+  /** The `?moment=` of the link; the time code itself when absent. */
+  moment?: string;
   time: string;
 }) {
   const { Link, transcript } = usePostCallLinks();
@@ -188,7 +191,7 @@ export function TimeLink({
         "text-muted-foreground hover:text-foreground focus-visible:focus-ring w-14 shrink-0 rounded-xs text-right font-mono text-xs leading-6 tabular-nums",
         className
       )}
-      href={transcript(time)}
+      href={transcript(moment ?? time)}
     >
       {time}
     </Link>
@@ -223,7 +226,7 @@ export function SummaryPoints({
                 <p className={cn("text-base", tone?.note)}>{point.note}</p>
               ) : null}
             </div>
-            <TimeLink time={point.time} />
+            <TimeLink moment={point.moment} time={point.time} />
           </li>
         );
       })}

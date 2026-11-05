@@ -16,6 +16,7 @@ import {
 import { NO_PROJECT_CALL } from "@/data/calls";
 import { getProjects, useProject } from "@/data/projects";
 import { autoEndSeconds, useSettings } from "@/data/settings";
+import { buildFinishingSummary, useCallSummary } from "@/data/summaries";
 import { inTauri } from "@/effect/runtime";
 import {
   releaseMicDemo,
@@ -29,7 +30,6 @@ import { useDemoState } from "@/lib/use-demo-state";
 import {
   actOnQuestion,
   type CallAgentUpdate,
-  collectSummary,
   questionsFromBackend,
   reconnectSource,
   requestSystemAudio,
@@ -48,6 +48,7 @@ import {
 import {
   backendCall,
   createLiveCall,
+  finishedStages,
   type LiveCallAction,
   type LiveCallState,
   liveCallReducer,
@@ -67,7 +68,8 @@ import type {
 /*
  * /call: the live call window. The feed from ../api streams the transcript,
  * topics, questions and context; clicks change the questions locally;
- * "Завершить" stops the recording, collects the summary and opens it.
+ * "Завершить" stops the recording; the window shows the summary build's
+ * stages and opens the summary once the build closed the call.
  *
  * In Tauri the transcript is the recognizer's and the questions the
  * backend's: the call state of the session's recording and the agent's
@@ -77,8 +79,8 @@ import type {
  *
  * In Tauri the call is the backend's (`useCallSession`): its project (or
  * «Звонок без проекта»), people and start time. "Завершить" from any
- * window, the tray or the countdown makes it `finishing`, and the window
- * collects the summary; "Отменить завершение" asks the backend to record
+ * window, the tray or the countdown makes it `finishing`, Rust builds the
+ * summary and the window follows it; "Отменить завершение" asks the backend to record
  * on. Without a call the window says so and offers to start one; it never
  * starts the demo.
  *
@@ -221,9 +223,27 @@ function openStartWidget() {
 }
 
 export function CallPage() {
+  const router = useRouter();
   const demo = useDemoState(CALL_DEMO_STATES);
   const session = useCallSession();
   const loaded = useCallSessionLoaded();
+
+  // The summary build closes the finishing call (Rust; the browser's mock
+  // build): the window opens its summary.
+  const finishingCall = useRef<string | null>(null);
+  const { callId, status } = session;
+  useEffect(() => {
+    if (status === "finishing" && callId) {
+      finishingCall.current = callId;
+    } else if (status === "idle" && finishingCall.current) {
+      const closed = finishingCall.current;
+      finishingCall.current = null;
+      router.push(routes.callSummary(closed));
+    } else {
+      finishingCall.current = null;
+    }
+  }, [callId, router, status]);
+
   if (inTauri && demo === undefined) {
     if (!loaded) {
       return <div aria-busy="true" className="bg-surface h-svh" />;
@@ -420,16 +440,20 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     });
   }, []);
 
-  // "Собираю итоги": steps, then the summary of the call
+  // "Собираю итоги": the stages of the summary build (`SummaryProgress`;
+  // Rust builds it, the browser's mock is started here). The build closes
+  // the call, and `CallPage` opens its summary.
+  const { building } = useCallSummary(finishing ? callId : null);
   useEffect(() => {
-    if (!(finishing && callId)) {
-      return;
+    if (finishing && callId) {
+      buildFinishingSummary(callId);
     }
-    return collectSummary(
-      (stage) => dispatch({ stage, type: "finish-stage" }),
-      () => router.push(routes.callSummary(callId))
-    );
-  }, [callId, finishing, router]);
+  }, [callId, finishing]);
+  useEffect(() => {
+    if (finishing && building) {
+      dispatch({ stage: finishedStages(building), type: "finish-stage" });
+    }
+  }, [building, finishing]);
 
   // A lagging transcript catches up by itself
   const lagging = Boolean(state.data.transcript.notice);

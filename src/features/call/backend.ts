@@ -43,9 +43,8 @@ export interface FeedUpdate {
   next?: number;
 }
 
-/** Stages of the summary: transcript, summary, open questions, brief. */
+/** Stages of the summary build (`SummaryStage`): transcript, summary, proposals, saving. */
 export const SUMMARY_STAGES = 4;
-const SUMMARY_STAGE_MS = 1500;
 
 export const AGENT_RETRY_MS = 1500;
 export const SOURCE_RECONNECT_MS = 1500;
@@ -162,20 +161,11 @@ function agentUpdates(
   });
 }
 
-const collectSummary = Stream.range(2, SUMMARY_STAGES).pipe(
-  Stream.mapEffect((stage) => Effect.as(Effect.sleep(SUMMARY_STAGE_MS), stage))
-);
-
 export class CallBackend extends Context.Service<
   CallBackend,
   {
     /** The live call from position `from`, one element per step. */
     readonly feed: (from: number) => Stream.Stream<FeedUpdate>;
-    /**
-     * "Собираю итоги": every finished stage after the transcript, which is
-     * ready right away; the last one is `SUMMARY_STAGES`.
-     */
-    readonly collectSummary: Stream.Stream<number>;
     /**
      * The backend's questions of a recording (Tauri). The mock has none:
      * its questions come with the script's feed.
@@ -209,7 +199,6 @@ export class CallBackend extends Context.Service<
   static readonly layerMock = Layer.succeed(CallBackend, {
     actOnQuestion: () => Effect.void,
     agent: () => Stream.empty,
-    collectSummary,
     feed: (from: number) => playScript(CALL_SCRIPT, from),
     reconnectSource: Effect.sleep(SOURCE_RECONNECT_MS),
     requestSystemAudio: Effect.sleep(SYSTEM_AUDIO_GRANT_MS),
@@ -286,7 +275,6 @@ export class CallBackend extends Context.Service<
         actOnQuestion: (id: string, action: QuestionAction) =>
           call(() => commands.questionsAct(id, action)).pipe(Effect.asVoid),
         agent: agentUpdates,
-        collectSummary,
         feed: (from: number) =>
           Stream.merge(playScript(CONTEXT_SCRIPT, from), live),
         reconnectSource: Effect.sleep(SOURCE_RECONNECT_MS),

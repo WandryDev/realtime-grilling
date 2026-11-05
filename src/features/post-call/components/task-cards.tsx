@@ -142,6 +142,7 @@ export function FactSource({
 /** The phrase a fact was taken from, with listen and open actions. */
 export function FactQuote({
   initial,
+  moment,
   onListen,
   text,
   time,
@@ -177,7 +178,7 @@ export function FactQuote({
         </Button>
         <LinkButton
           className="text-foreground -mx-2 -my-[5px] gap-1.5 px-2"
-          href={links.transcript(time)}
+          href={links.transcript(moment ?? time)}
           size="sm"
           variant="ghost"
         >

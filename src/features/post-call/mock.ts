@@ -90,6 +90,8 @@ export const SUMMARY_TLDR = {
 
 export interface SummaryPointData {
   id: string;
+  /** `?moment=` of the transcript link; the time code when absent. */
+  moment?: string;
   /** Note under the point, colored by the status. */
   note?: string;
   status?: Extract<FactStatus, "assumption" | "contradiction">;
@@ -279,8 +281,11 @@ export type FactSourceKind = "said" | "docs" | "agent" | "none";
 
 export interface TaskFactData {
   id: string;
-  /** The phrase from the transcript the fact was taken from. */
-  quote?: { initial: string; text: string; time: string };
+  /**
+   * The phrase from the transcript the fact was taken from; `moment` is
+   * the `?moment=` of its link, the time code when absent.
+   */
+  quote?: { initial: string; moment?: string; text: string; time: string };
   source: { kind: FactSourceKind; text: string };
   status: FactStatus;
   text: string;

@@ -7,6 +7,8 @@ import type { CallSummary, CallSummaryView, SummaryProgress } from "@/bindings";
 import { appRuntime, inTauri, runCancelable } from "@/effect/runtime";
 import type { BackendError } from "@/effect/tauri";
 
+import { closeCall, currentCallSession } from "./call-session";
+import { setCallPeople } from "./calls";
 import { SummaryData } from "./services/summaries";
 import { createStore } from "./store";
 import {
@@ -88,6 +90,9 @@ const progressStore = createStore<Record<string, SummaryProgress | null>>({});
 let followers = 0;
 let stopFollowing: (() => void) | undefined;
 
+/** Browser: the finishing calls whose mock build closes them when it ends. */
+const finishing = new Map<string, () => void>();
+
 function onProgress(progress: SummaryProgress) {
   const ended = summaryBuildEnded(progress);
   progressStore.set((current) => ({
@@ -96,8 +101,25 @@ function onProgress(progress: SummaryProgress) {
   }));
   if (!inTauri) {
     refreshMockStores();
+    if (ended) {
+      closeFinished(progress.callId);
+    }
   } else if (ended) {
     summaryStore(progress.callId).refresh();
+  }
+}
+
+/** Browser: the build of a finishing call ended, the call closes. */
+function closeFinished(callId: string) {
+  const unfollow = finishing.get(callId);
+  if (!unfollow) {
+    return;
+  }
+  finishing.delete(callId);
+  unfollow();
+  const session = currentCallSession();
+  if (session.status === "finishing" && session.callId === callId) {
+    closeCall(callId);
   }
 }
 
@@ -154,6 +176,31 @@ export async function buildSummary(callId: string) {
     { error: "Не удалось собрать итоги" }
   );
   return started !== undefined;
+}
+
+/**
+ * Browser only: what Rust's `CallManager` does when a call goes
+ * `finishing` (post-call design.md, decision 1). The mock build starts
+ * once, the call takes the project and the people of the call session
+ * (the demo records every call under one id), and the call closes when
+ * the build ends. In Tauri the backend does all of it: nothing here.
+ */
+export function buildFinishingSummary(callId: string) {
+  if (inTauri || finishing.has(callId)) {
+    return;
+  }
+  const session = currentCallSession();
+  if (session.status === "finishing" && session.callId === callId) {
+    setCallPeople(callId, {
+      participants:
+        session.participants.length > 0
+          ? session.participants.join(", ")
+          : undefined,
+      projectId: session.projectId ?? undefined,
+    });
+  }
+  finishing.set(callId, followProgress());
+  buildSummary(callId);
 }
 
 /** «Остановить»: the build stops, nothing is saved. */

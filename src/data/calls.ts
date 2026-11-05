@@ -22,8 +22,8 @@ import { createSyncedStore } from "./synced-store";
  * the history row and the decisions kept here.
  *
  * The call's `summary` JSON (its shape belongs to the frontend) keeps the
- * build state of the screens and the participants' names; dates, duration
- * and the open count come from the record. The summary, proposals, task
+ * participants' names of the call session; dates, duration and the open
+ * count come from the record. The summary, its build, proposals, task
  * cards and recordings Rust keeps are read by `./summaries.ts`,
  * `./proposals.ts` and `./call-records.ts`.
  *
@@ -35,8 +35,6 @@ import { createSyncedStore } from "./synced-store";
 
 /** How the screens name a call without a project. */
 export const NO_PROJECT_CALL = "Звонок без проекта";
-
-export type SummaryStatus = "processing" | "ready";
 
 export type ProposalDecision = "pending" | "accepted" | "rejected";
 
@@ -63,17 +61,6 @@ export interface TaskCardReview {
   title?: string;
 }
 
-/** Where the summary build is: the step index and its percent. */
-export interface SummaryProgress {
-  progress: number;
-  step: number;
-  /**
-   * The second pass didn't refine the transcript for the summary: it
-   * `failed` (the live one stays), or it goes on `later` in the background.
-   */
-  transcript?: "failed" | "later";
-}
-
 export interface CallRecord {
   /** The recording was deleted; transcript and summary stay. */
   audioDeleted: boolean;
@@ -84,6 +71,8 @@ export interface CallRecord {
   /** "19 октября" */
   day: string;
   duration: string;
+  /** When it ended, ms since the epoch; `null` while it goes on. */
+  endedAt: number | null;
   id: string;
   /** Month heading of the history, "Октябрь". */
   month: string;
@@ -96,8 +85,6 @@ export interface CallRecord {
   proposals: Record<string, ProposalReview>;
   /** When it started (its creation without a start), ms since the epoch. */
   startedAt: number;
-  summary: SummaryStatus;
-  summaryProgress?: SummaryProgress;
   tasks: Record<string, TaskCardReview>;
   time: string;
   title: string;
@@ -169,7 +156,6 @@ function formatDuration(ms: number) {
 const CallSummary = Schema.Struct({
   /** Names from the call session, for people the project doesn't have. */
   participants: Schema.optionalKey(Schema.String),
-  summary: Schema.optionalKey(Schema.Literals(["processing", "ready"])),
 });
 const decodeSummary = Schema.decodeUnknownOption(CallSummary);
 
@@ -204,6 +190,7 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
       duration: formatDuration(
         (call.endedAt ?? start.getTime()) - start.getTime()
       ),
+      endedAt: call.endedAt,
       id: call.id,
       month: MONTH_HEADINGS[month] ?? "",
       openCount: call.openQuestions,
@@ -212,7 +199,6 @@ function toCallEntry(call: Call, names: Map<string, string>): CallEntry {
       projectId: call.projectId,
       proposals: {},
       startedAt: start.getTime(),
-      summary: summary.summary ?? "ready",
       tasks: {},
       time,
       title: call.title,
@@ -286,8 +272,7 @@ const callsStore = createSyncedStore({
 });
 
 /*
- * Local to the window: the progress of a summary build, the project the
- * start widget picked for the demo call (the demo records it under
+ * Local to the window: the project the start widget picked for the demo call (the demo records it under
  * Телемедиа; a call record can't change its project), and the decisions
  * of the demo's proposals and cards and the deleted audio, until the pages
  * read the backend's.
@@ -296,7 +281,6 @@ interface LocalCall {
   audioDeleted?: boolean;
   projectId?: string;
   proposals?: Record<string, ProposalReview>;
-  summaryProgress?: SummaryProgress;
   tasks?: Record<string, TaskCardReview>;
 }
 
@@ -341,7 +325,6 @@ function withLocal(entries: CallEntry[], local: Record<string, LocalCall>) {
       audioDeleted: extra.audioDeleted ?? record.audioDeleted,
       projectId: extra.projectId ?? record.projectId,
       proposals: extra.proposals ?? record.proposals,
-      summaryProgress: extra.summaryProgress,
       tasks: extra.tasks ?? record.tasks,
     };
   });
@@ -431,24 +414,23 @@ function setLocal(id: string, next: LocalCall) {
   localStore.set((local) => ({ ...local, [id]: { ...local[id], ...next } }));
 }
 
-/** Summary build of a just-finished call; `undefined` progress = ready. */
-export function setSummaryProgress(
+/**
+ * The people of the call session of a call that just ended: their names
+ * go to the summary JSON, the project stays local (the demo records every
+ * call of the browser under one id). Unchanged names write nothing.
+ */
+export function setCallPeople(
   id: string,
-  progress: SummaryProgress | undefined,
-  patch?: Partial<Pick<CallRecord, "participants" | "projectId">>
+  patch: Partial<Pick<CallRecord, "participants" | "projectId">>
 ) {
-  setLocal(id, {
-    ...(patch?.projectId ? { projectId: patch.projectId } : {}),
-    summaryProgress: progress,
-  });
-  const status: SummaryStatus = progress ? "processing" : "ready";
-  const participants = patch?.participants;
-  // Unchanged values make an empty patch, which writes nothing.
-  updateSummary(id, (summary) => ({
-    ...summary,
-    ...(participants === undefined ? {} : { participants }),
-    summary: status,
-  }));
+  if (patch.projectId) {
+    setLocal(id, { projectId: patch.projectId });
+  }
+  const { participants } = patch;
+  if (participants === undefined) {
+    return Promise.resolve(undefined);
+  }
+  return updateSummary(id, (summary) => ({ ...summary, participants }));
 }
 
 /** The demo's decision on a proposal, local to the window (see above). */

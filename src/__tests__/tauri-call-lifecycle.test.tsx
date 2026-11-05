@@ -92,6 +92,7 @@ const { PrivacySection } = await import(
   "@/features/settings/pages/privacy-section"
 );
 const { toast } = await import("@/components/ui/toast");
+const { routes } = await import("@/lib/routes");
 const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshCalls } = await import("@/data/calls");
@@ -105,8 +106,6 @@ const NATALIA = "019a0000-0000-7000-8000-0000000000a3";
 const NO_PROJECT = "Звонок без проекта";
 const LIVE_RECORDED = /^live:fake-recording-\d+$/u;
 const DEMO_PROJECT = /Телемедиа/u;
-/** The mocked summary steps take a few seconds. */
-const SUMMARY_TIMEOUT = { timeout: 10_000 };
 /** «Удалить всё» waits a moment before it deletes. */
 const DELETE_TIMEOUT = { timeout: 5000 };
 
@@ -633,14 +632,75 @@ describe("the microphone let go", () => {
 });
 
 describe("summary and data", () => {
-  it("closes the call once its summary is built: no call, the call finished", async () => {
-    fake.answers.set("transcript_state", () => "refined");
+  it("«Собираю итоги» in the call window follows the build and opens the summary once Rust closed the call", async () => {
+    await act(() =>
+      fake.invoke("call_start", {
+        input: { participantIds: [OLGA], projectId: TELEMEDIA },
+      })
+    );
+    const callId = fake.session.callId ?? "";
+    fake.answers.set("summary_get", () => ({ building: null, summary: null }));
+    render(
+      <>
+        <CallPage />
+        <SessionProbe />
+      </>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
+    const card = await screen.findByRole("dialog", { name: "Собираю итоги…" });
+
+    act(() =>
+      fake.emit("summary-progress", {
+        callId,
+        counts: null,
+        stage: "proposals",
+        state: { status: "running" },
+      })
+    );
+    await waitFor(() =>
+      expect(
+        within(card)
+          .getByText("Что обновить в брифе и профилях")
+          .closest("li")
+          ?.getAttribute("aria-current")
+      ).toBe("step")
+    );
+    expect(nav.push).not.toHaveBeenCalled();
+
+    // Rust ends the build and closes the call.
+    const call = fake.db.calls.find((item) => item.id === callId);
+    if (call) {
+      call.status = "finished";
+    }
+    act(() => fake.setSession(IDLE_SESSION));
+    await waitFor(() =>
+      expect(nav.push).toHaveBeenCalledWith(routes.callSummary(callId))
+    );
+    expect(invokedWith("call_close")).toEqual([]);
+  });
+
+  it("follows the build Rust runs and shows the summary once Rust closed the call", async () => {
     await act(() =>
       fake.invoke("call_start", {
         input: { participantIds: [IGOR], projectId: EXCHANGE },
       })
     );
     const callId = fake.session.callId ?? "";
+    const building = {
+      callId,
+      counts: null,
+      stage: "summary",
+      state: { status: "running" },
+    };
+    fake.answers.set("summary_get", () => ({ building, summary: null }));
+    fake.answers.set("call_transcript", () => []);
+    fake.answers.set("call_questions", () => []);
+    fake.answers.set("call_cards", () => ({
+      cards: [],
+      next: [],
+      source: "live",
+    }));
+    fake.answers.set("proposals_list", () => []);
     await act(() => fake.invoke("call_finish", { callId }));
     await act(() => refreshCalls());
     nav.search = new URLSearchParams({ id: callId });
@@ -654,18 +714,48 @@ describe("summary and data", () => {
     expect(
       await screen.findByRole("heading", { level: 1, name: "Собираю итоги" })
     ).toBeTruthy();
-    await waitFor(
-      () => expect(invokedWith("call_close")).toEqual([{ callId }]),
-      SUMMARY_TIMEOUT
+    expect(
+      await screen.findByText("в работе:", { exact: false, selector: "span" })
+    ).toBeTruthy();
+
+    // Rust saves the summary, sends the last stage and closes the call.
+    const call = fake.db.calls.find((item) => item.id === callId);
+    fake.answers.set("summary_get", () => ({
+      building: null,
+      summary: {
+        builtAt: 2,
+        callId,
+        content: { cards: [], next: [], topics: [] },
+        createdAt: 1,
+        error: null,
+        state: "ready",
+        title: "Обмен валют",
+        tldr: "Договорились про курсы.",
+        transcriptPass: "refined",
+        updatedAt: 2,
+      },
+    }));
+    act(() =>
+      fake.emit("summary-progress", {
+        ...building,
+        stage: "saving",
+        state: { status: "done" },
+      })
     );
-    await waitFor(() => expect(sessionText()).toBe("idle:—"));
-    expect(fake.db.calls.find((call) => call.id === callId)?.status).toBe(
-      "finished"
-    );
+    if (call) {
+      call.status = "finished";
+    }
+    act(() => fake.setSession(IDLE_SESSION));
+
     expect(
       await screen.findByRole("heading", { level: 1, name: "Итоги звонка" })
     ).toBeTruthy();
-  }, 15_000);
+    expect(screen.getByText("Договорились про курсы.")).toBeTruthy();
+    await waitFor(() => expect(sessionText()).toBe("idle:—"));
+    // The window neither builds nor closes the call itself.
+    expect(invokedWith("call_close")).toEqual([]);
+    expect(invokedWith("summary_build")).toEqual([]);
+  });
 
   it("opens the summary of a call without a project without the demo's project", async () => {
     fake.db.calls.push(pastCall("call-alone", null, [], 60));

@@ -36,6 +36,7 @@ const { disconnectIntegration, setIntegration } = await import(
   "@/data/integrations"
 );
 const { toast } = await import("@/components/ui/toast");
+const { SUMMARY_TLDR } = await import("@/features/post-call/mock");
 const { routes } = await import("@/lib/routes");
 
 const FIRST_CALL = /Приём звонков, Интеграция с CRM/u;
@@ -144,7 +145,7 @@ describe("summary", () => {
         .getAttribute("href")
     ).toBe(routes.project("telemedia"));
     expect(linkHref("Открыть расшифровку на 12:04")).toBe(
-      routes.callTranscript(CURRENT_CALL_ID, "12:04")
+      routes.callTranscript(CURRENT_CALL_ID, "t-120415")
     );
   });
 
@@ -163,6 +164,11 @@ describe("summary", () => {
     ).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Карточки задач" })).toBeNull();
 
+    expect(
+      screen.queryByRole("heading", { name: "Ответы для ClickUp" })
+    ).toBeNull();
+    expect(screen.getByText("Собираю итоги и карточки задач")).toBeTruthy();
+
     advance(COLLECT_MS);
     expect(
       screen.getByRole("heading", { level: 1, name: "Итоги звонка" })
@@ -171,6 +177,19 @@ describe("summary", () => {
       expect.objectContaining({ title: "Итоги сохранены" })
     );
     expect(probed?.status).toBe("idle");
+  });
+
+  it("Демо в браузере: the Телемедиа demo summary, without ClickUp", () => {
+    open(CallSummaryPage, { id: CURRENT_CALL_ID });
+
+    expect(screen.getByText(SUMMARY_TLDR.text)).toBeTruthy();
+    expect(screen.getByText("Приём звонков, Интеграция с CRM")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Интеграция с CRM" })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Ответы для ClickUp" })
+    ).toBeNull();
   });
 
   it("says when the call is unknown", () => {

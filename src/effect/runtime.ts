@@ -57,7 +57,7 @@ export const TauriLayer = Layer.mergeAll(
   CallWidgetBackend.layerMock,
   IntegrationsBackend.layerMock,
   OnboardingBackend.layerTauri,
-  PostCallBackend.layerTauri.pipe(Layer.provide(SpeechBackend.layerTauri)),
+  PostCallBackend.layerTauri,
   ProjectsBackend.layerTauri,
   RecordingBackend.layerTauri,
   SettingsBackend.layerMock,

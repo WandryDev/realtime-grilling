@@ -59,7 +59,7 @@ const { getProjects, updateProject, useProjects } = await import(
 const { usePeople } = await import("@/data/people");
 const { AppFrame } = await import("@/features/shell/app-frame");
 const { toast } = await import("@/components/ui/toast");
-const { setSummaryProgress, useCalls } = await import("@/data/calls");
+const { setCallPeople, useCalls } = await import("@/data/calls");
 
 const CALL_ID = "019a0000-0000-7000-8000-0000000000c1";
 
@@ -69,7 +69,7 @@ function CallsProbe() {
     <ul>
       {calls.map((call) => (
         <li key={call.id}>
-          {call.title}: {call.participants || "—"}, {call.summary}
+          {call.title}: {call.participants || "—"}
         </li>
       ))}
     </ul>
@@ -201,14 +201,10 @@ describe("stores in Tauri", () => {
     });
     await screen.findByText("Созвон:", { exact: false });
 
-    // The build started and ended before the first write came back.
+    // The second write is made before the first came back.
     act(() => {
-      setSummaryProgress(
-        CALL_ID,
-        { progress: 0, step: 0 },
-        { participants: "Ольга" }
-      );
-      setSummaryProgress(CALL_ID, undefined);
+      setCallPeople(CALL_ID, { participants: "Ольга" });
+      setCallPeople(CALL_ID, { participants: "Ольга, Игорь" });
     });
 
     await waitFor(() =>
@@ -220,13 +216,12 @@ describe("stores in Tauri", () => {
       .filter((call) => call.command === "calls_patch_summary")
       .map((call) => call.args?.patch);
     expect(patches).toEqual([
-      { participants: "Ольга", summary: "processing" },
-      { summary: "ready" },
+      { participants: "Ольга" },
+      { participants: "Ольга, Игорь" },
     ]);
     expect(fake.db.calls[0]?.summary).toEqual({
-      participants: "Ольга",
-      summary: "ready",
+      participants: "Ольга, Игорь",
     });
-    expect(await screen.findByText("Созвон: Ольга, ready")).toBeTruthy();
+    expect(await screen.findByText("Созвон: Ольга, Игорь")).toBeTruthy();
   });
 });

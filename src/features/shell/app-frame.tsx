@@ -31,7 +31,7 @@ import { MainWindow } from "./main-window";
  *   (the tray's "Настройки", the call window when a call is finishing). It
  *   is told by its window label, whatever route it shows. While a call is
  *   finishing (after a reload, or a route away), it goes back to the call
- *   window itself, where the summary is built;
+ *   window itself, which shows the summary build Rust runs;
  * - a main-window page waits for the stores' first read and, if the local
  *   database can't be read, the window shows why instead of empty lists.
  *
@@ -74,7 +74,7 @@ const SUMMARY_ROUTES = [routes.call(), "/calls/summary"];
  * Opens the routes Rust (or another window) sends to this window. While a
  * call is finishing the main window stays where its summary is built: a
  * reload, or the tray's «Настройки» meanwhile, brings it back to the call
- * window, so the summary closes the call.
+ * window, which follows the build and opens the summary when it ends.
  */
 function NavigateListener() {
   const router = useRouter();
