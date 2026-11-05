@@ -113,6 +113,10 @@ pub fn builder() -> Builder<tauri::Wry> {
             records::commands::proposals_for_person,
             records::commands::proposal_decide,
             records::commands::proposal_undo,
+            records::commands::call_cards,
+            records::commands::call_card_update,
+            records::commands::call_transcript,
+            records::commands::call_questions,
         ])
         .events(collect_events![
             AgentInstallProgress,

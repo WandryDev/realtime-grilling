@@ -373,6 +373,33 @@ export const commands = {
 	 *  the field changed since; nothing changes then.
 	 */
 	proposalUndo: (id: string) => typedError<Proposal, CommandError>(__TAURI_INVOKE("proposal_undo", { id })),
+	/**
+	 *  The task cards page of a call: the saved summary's cards and its
+	 *  questions for the next call (`source: summary`), or before a summary the
+	 *  fast loop's cards of every recording (`source: live`). `NotFound` for
+	 *  an unknown call.
+	 */
+	callCards: (callId: string) => typedError<CallCards, CommandError>(__TAURI_INVOKE("call_cards", { callId })),
+	/**
+	 *  Accepts, defers, restores or renames a card of `call_cards`; absent
+	 *  fields stay. A fast loop card also sends `CallStateChanged` of its
+	 *  recording. `NotFound` for a card the call doesn't have, `Invalid` for a
+	 *  blank title.
+	 */
+	callCardUpdate: (callId: string, cardId: string, patch: CardPatch) => typedError<SummaryCard, CommandError>(__TAURI_INVOKE("call_card_update", { callId, cardId, patch })),
+	/**
+	 *  The recordings of a call in the order they started, each with its
+	 *  transcript (refined where the second pass is done), times, duration,
+	 *  file sizes and whether its audio was deleted. `NotFound` for an unknown
+	 *  call.
+	 */
+	callTranscript: (callId: string) => typedError<CallRecording[], CommandError>(__TAURI_INVOKE("call_transcript", { callId })),
+	/**
+	 *  The questions of a call's recordings with the moments of their evidence
+	 *  and answer, found for a segment of either pass. `NotFound` for an
+	 *  unknown call.
+	 */
+	callQuestions: (callId: string) => typedError<CallQuestion[], CommandError>(__TAURI_INVOKE("call_questions", { callId })),
 };
 
 /** Events */
@@ -590,6 +617,26 @@ export type CallAutoEnd = {
 	endsAt: number | null,
 };
 
+/**  The task cards page of a call. */
+export type CallCards = {
+	source: CallCardsSource,
+	/**
+	 *  In topic order (`live`: recording after recording). A `live` card
+	 *  has one fact per lens with a value, none for an empty lens; its
+	 *  `topicId` is the fast loop's topic.
+	 */
+	cards: SummaryCard[],
+	/**  The summary's questions for the next call; empty when `live`. */
+	next: NextQuestion[],
+};
+
+/**  Where the cards of a call come from. */
+export type CallCardsSource = 
+/**  The saved summary's cards (one per topic, facts with sources). */
+"summary" | 
+/**  No summary saved yet: the fast loop's cards of every recording. */
+"live";
+
 export type CallCreate = {
 	/**  A call without a project when absent; it has no participants then. */
 	projectId?: string | null,
@@ -614,6 +661,68 @@ export type CallEvidence = {
 	/**  From the start of the recording. */
 	startMs: number,
 	quote: string,
+};
+
+/**  A phrase of the call: where to scroll the transcript and seek the player. */
+export type CallMoment = {
+	recordingId: string,
+	/**
+	 *  The phrase of the shown pass (`call_transcript`) at that time, on
+	 *  the same channel; the segment itself when the shown pass has none.
+	 */
+	segmentId: string,
+	/**  From the start of the recording: when the phrase named was said. */
+	startMs: number,
+};
+
+/**  A question of the call with the moments it rests on. */
+export type CallQuestion = {
+	id: string,
+	recordingId: string,
+	topicId: string | null,
+	cardId: string | null,
+	text: string,
+	description: string,
+	cardField: CardLens | null,
+	gapType: GapType,
+	priority: number,
+	status: QuestionStatus,
+	evidence: Evidence[],
+	answerEvidence: Evidence[] | null,
+	/**
+	 *  The phrase the question rests on; `null` when it rests on the
+	 *  project only.
+	 */
+	moment: CallMoment | null,
+	/**  The client's answer, once answered. */
+	answer: CallMoment | null,
+	createdAt: number,
+	updatedAt: number,
+};
+
+/**  A recording of a call with its transcript. */
+export type CallRecording = {
+	id: string,
+	/**
+	 *  Milliseconds since the Unix epoch: a phrase's wall-clock time is
+	 *  `startedAt + startMs`.
+	 */
+	startedAt: number,
+	/**  `null` while it is being written. */
+	endedAt: number | null,
+	/**  `endedAt − startedAt`; `null` while it is being written. */
+	durationMs: number | null,
+	/**  "Удалить запись" removed its files: no player. */
+	audioDeleted: boolean,
+	/**  Where the second pass is. */
+	transcriptState: TranscriptState,
+	/**  The pass of `segments`: refined once the second pass stored it. */
+	pass: TranscriptPass,
+	/**  Sizes of the channel files in bytes; `null` without the file. */
+	meBytes: number | null,
+	othersBytes: number | null,
+	/**  The shown pass, both channels in time order. */
+	segments: TranscriptSegment[],
 };
 
 /**
@@ -733,6 +842,13 @@ export type CaptureFailure =
 /**  The device exists but could not be opened. */
 "busy";
 
+export type CardFact = {
+	text: string,
+	status: FactStatus,
+	source: FactSource,
+	evidence: CallEvidence[],
+};
+
 /**  A field of a task card with what it is based on. */
 export type CardField = {
 	field: CardLens,
@@ -761,6 +877,12 @@ export type CardLens =
 "constraints" | 
 /**  Критерии готовности. */
 "acceptance";
+
+/**  `call_card_update` (decision 7): absent fields stay as they are. */
+export type CardPatch = {
+	decision?: TaskCardDecision | null,
+	title?: string | null,
+};
 
 export type Change = "created" | "updated" | "deleted";
 
@@ -851,6 +973,17 @@ export type EvidenceSource =
 /**  The project: its description `P1` or a brief item `B1…Bn`. */
 "project";
 
+/**  Where a fact comes from (`call-task-cards`, "Состояние и источник факта"). */
+export type FactSource = 
+/**  "сказал клиент": `evidence` holds the quotes. */
+"client" | 
+/**  "из документов проекта". */
+"project" | 
+/**  "вывод агента", without a quote. */
+"agent";
+
+export type FactStatus = "confirmed" | "assumption" | "contradiction" | "empty";
+
 /**
  *  The final check (decision 8): the most important open questions of all
  *  topics.
@@ -933,6 +1066,15 @@ percent: number; bytesPerSec: number } |
 /**  Tells the main window to open a route, e.g. "Настройки" in the tray menu. */
 export type Navigate = {
 	route: string,
+};
+
+/**  A question to ask on the next call, from a gap of a card. */
+export type NextQuestion = {
+	text: string,
+	/**  A [`SummaryTopic`]. */
+	topicId: string | null,
+	field: CardLens | null,
+	gap: GapType,
 };
 
 export type PermissionKind = 
@@ -1318,6 +1460,26 @@ export type SpeechModel = {
  *  4 times a second per model, other changes at once.
  */
 export type SpeechModelChanged = SpeechModel;
+
+/**
+ *  The task card of a summary topic. The manager's decision and title live
+ *  here ([`update_card`]).
+ */
+export type SummaryCard = {
+	/**  UUID v7, issued when the summary is saved. */
+	id: string,
+	/**  The [`SummaryTopic`] it is the card of. */
+	topicId: string,
+	title: string,
+	decision: TaskCardDecision,
+	fields: SummaryCardField[],
+};
+
+/**  A lens of a card with one or more facts. */
+export type SummaryCardField = {
+	field: CardLens,
+	facts: CardFact[],
+};
 
 /**  The task card of a topic (one per topic). */
 export type TaskCard = {

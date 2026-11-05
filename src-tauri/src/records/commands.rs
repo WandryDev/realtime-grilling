@@ -5,13 +5,16 @@
 use tauri::{AppHandle, State};
 
 use crate::{
+    agent::fast_loop::app::call_state_changed,
     error::CommandResult,
     storage::{
         Storage,
+        call_records::{self, CallCards, CallQuestion, CallRecording},
         proposals::{
             self, Proposal,
             apply::{self, ProposalDecide},
         },
+        summaries::{CardPatch, SummaryCard},
     },
 };
 
@@ -69,4 +72,74 @@ pub async fn proposal_undo(
     id: String,
 ) -> CommandResult<Proposal> {
     storage.write(&app, move |db| apply::undo(db, &id)).await
+}
+
+/* Task cards (decision 7) */
+
+/// The task cards page of a call: the saved summary's cards and its
+/// questions for the next call (`source: summary`), or before a summary the
+/// fast loop's cards of every recording (`source: live`). `NotFound` for
+/// an unknown call.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_cards(storage: State<'_, Storage>, call_id: String) -> CommandResult<CallCards> {
+    storage
+        .read(move |db| call_records::cards(db, &call_id))
+        .await
+}
+
+/// Accepts, defers, restores or renames a card of `call_cards`; absent
+/// fields stay. A fast loop card also sends `CallStateChanged` of its
+/// recording. `NotFound` for a card the call doesn't have, `Invalid` for a
+/// blank title.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_card_update(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    call_id: String,
+    card_id: String,
+    patch: CardPatch,
+) -> CommandResult<SummaryCard> {
+    let updated = storage
+        .write(&app, move |db| {
+            call_records::update_card(db, &call_id, &card_id, &patch)
+        })
+        .await?;
+    if let Some(recording_id) = &updated.recording_id {
+        call_state_changed(&app, recording_id);
+    }
+    Ok(updated.card)
+}
+
+/* Transcript and questions (decision 11) */
+
+/// The recordings of a call in the order they started, each with its
+/// transcript (refined where the second pass is done), times, duration,
+/// file sizes and whether its audio was deleted. `NotFound` for an unknown
+/// call.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_transcript(
+    storage: State<'_, Storage>,
+    call_id: String,
+) -> CommandResult<Vec<CallRecording>> {
+    let data_dir = storage.data_dir().map(std::path::Path::to_path_buf);
+    storage
+        .read(move |db| call_records::transcript(db, data_dir.as_deref(), &call_id))
+        .await
+}
+
+/// The questions of a call's recordings with the moments of their evidence
+/// and answer, found for a segment of either pass. `NotFound` for an
+/// unknown call.
+#[tauri::command]
+#[specta::specta]
+pub async fn call_questions(
+    storage: State<'_, Storage>,
+    call_id: String,
+) -> CommandResult<Vec<CallQuestion>> {
+    storage
+        .read(move |db| call_records::questions(db, &call_id))
+        .await
 }

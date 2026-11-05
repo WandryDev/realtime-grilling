@@ -1244,11 +1244,15 @@ mod acl {
 
     /// A finished call's records (post-call tasks 3.1–3.4) are reviewed,
     /// changed and read in the main window only.
-    const RECORDS_COMMANDS: [&str; 4] = [
+    const RECORDS_COMMANDS: [&str; 8] = [
         "proposals_list",
         "proposals_for_person",
         "proposal_decide",
         "proposal_undo",
+        "call_cards",
+        "call_card_update",
+        "call_transcript",
+        "call_questions",
     ];
 
     #[test]
@@ -1447,6 +1451,10 @@ fn capabilities_match_the_command_list() {
         "proposals_for_person",
         "proposal_decide",
         "proposal_undo",
+        "call_cards",
+        "call_card_update",
+        "call_transcript",
+        "call_questions",
     ] {
         assert!(
             !floating.iter().any(|command| command == forbidden),

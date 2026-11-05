@@ -112,16 +112,17 @@ pub struct SegmentInput {
 const COLUMN_PASS: usize = 3;
 const COLUMN_CHANNEL: usize = 4;
 
-const COLUMNS: &str = "s.id, s.recording_id, s.call_id, s.pass, s.channel, s.start_ms, s.end_ms,
+pub(super) const COLUMNS: &str =
+    "s.id, s.recording_id, s.call_id, s.pass, s.channel, s.start_ms, s.end_ms,
        s.text, s.created_at, s.updated_at";
 
 /// The pass a read returns for the recording `s.recording_id`.
-const SHOWN_PASS: &str = "s.pass = CASE WHEN EXISTS (
+pub(super) const SHOWN_PASS: &str = "s.pass = CASE WHEN EXISTS (
          SELECT 1 FROM transcript_segments AS r
           WHERE r.recording_id = s.recording_id AND r.pass = 'refined'
        ) THEN 'refined' ELSE 'live' END";
 
-fn from_row(row: &Row) -> rusqlite::Result<TranscriptSegment> {
+pub(super) fn from_row(row: &Row) -> rusqlite::Result<TranscriptSegment> {
     let pass: String = row.get(COLUMN_PASS)?;
     let channel: String = row.get(COLUMN_CHANNEL)?;
     Ok(TranscriptSegment {

@@ -77,4 +77,8 @@ pub const APP_COMMANDS: &[&str] = &[
     "proposals_for_person",
     "proposal_decide",
     "proposal_undo",
+    "call_cards",
+    "call_card_update",
+    "call_transcript",
+    "call_questions",
 ];
