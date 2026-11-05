@@ -10,6 +10,7 @@ use crate::{
     storage::{
         Storage,
         call_records::{self, CallCards, CallQuestion, CallRecording},
+        call_search::{self, CallSearch},
         proposals::{
             self, Proposal,
             apply::{self, ProposalDecide},
@@ -141,5 +142,21 @@ pub async fn call_questions(
 ) -> CommandResult<Vec<CallQuestion>> {
     storage
         .read(move |db| call_records::questions(db, &call_id))
+        .await
+}
+
+/// Searches the calls' transcripts (shown pass), titles and summaries
+/// (TL;DR, points, card facts) without case and «ё»: at most 200 matches
+/// with ±60 characters around each, and the counts per project. On this
+/// computer only.
+#[tauri::command]
+#[specta::specta]
+pub async fn calls_search(
+    storage: State<'_, Storage>,
+    query: String,
+    project_id: Option<String>,
+) -> CommandResult<CallSearch> {
+    storage
+        .read(move |db| call_search::search(db, &query, project_id.as_deref()))
         .await
 }

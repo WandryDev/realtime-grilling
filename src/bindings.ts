@@ -400,6 +400,13 @@ export const commands = {
 	 *  unknown call.
 	 */
 	callQuestions: (callId: string) => typedError<CallQuestion[], CommandError>(__TAURI_INVOKE("call_questions", { callId })),
+	/**
+	 *  Searches the calls' transcripts (shown pass), titles and summaries
+	 *  (TL;DR, points, card facts) without case and «ё»: at most 200 matches
+	 *  with ±60 characters around each, and the counts per project. On this
+	 *  computer only.
+	 */
+	callsSearch: (query: string, projectId: string | null) => typedError<CallSearch, CommandError>(__TAURI_INVOKE("calls_search", { query, projectId })),
 };
 
 /** Events */
@@ -723,6 +730,45 @@ export type CallRecording = {
 	othersBytes: number | null,
 	/**  The shown pass, both channels in time order. */
 	segments: TranscriptSegment[],
+};
+
+export type CallSearch = {
+	/**
+	 *  Newest call first; within a call the title, the transcript in time
+	 *  order, then the summary. At most [`MAX_MATCHES`].
+	 */
+	matches: CallSearchMatch[],
+	/**  Every match of the searched calls, also those past the limit. */
+	total: number,
+	/**
+	 *  Per project, over every call whatever `projectId` was given (the
+	 *  counts of the history's sidebar); projects without a match are not
+	 *  listed.
+	 */
+	projects: ProjectMatches[],
+};
+
+export type CallSearchMatch = {
+	callId: string,
+	projectId: string | null,
+	source: SearchSource,
+	/**
+	 *  The original text before the match (up to 60 characters), the
+	 *  matched text and the text after it.
+	 */
+	before: string,
+	text: string,
+	after: string,
+	/**  Whose phrase, for a `segment`. */
+	channel: TranscriptChannel | null,
+	/**
+	 *  The phrase to open: the segment itself, or the first quote of a
+	 *  point or a fact; `null` for the title, the TL;DR and a fact without
+	 *  a quote.
+	 */
+	moment: CallMoment | null,
+	/**  Wall-clock time of `moment`, milliseconds since the Unix epoch. */
+	at: number | null,
 };
 
 /**
@@ -1166,6 +1212,14 @@ export type ProjectCreate = {
 	brief?: Value | null,
 };
 
+/**  Matches of the calls of a project (`null`: calls without one). */
+export type ProjectMatches = {
+	projectId: string | null,
+	/**  Calls with at least one match. */
+	calls: number,
+	matches: number,
+};
+
 /**  What the home screen shows about a project. */
 export type ProjectOverview = {
 	projectId: string,
@@ -1379,6 +1433,19 @@ export type RejectReason =
 "tooLarge" | 
 /**  Missing, a folder, or the OS would not let the app read it. */
 "unreadable";
+
+/**  Where a match is. */
+export type SearchSource = 
+/**  The call's title. */
+"title" | 
+/**  A phrase of the transcript: «Вы» or «Клиент» (`channel`) at `at`. */
+"segment" | 
+/**  The summary's TL;DR. */
+"tldr" | 
+/**  A point of a topic of the summary. */
+"point" | 
+/**  A fact of a card of the summary. */
+"fact";
 
 /**  Whether phrases come out of a channel; part of the recording status. */
 export type SegmentationStatus = "ok" | 

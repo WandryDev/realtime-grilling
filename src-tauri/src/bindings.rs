@@ -117,6 +117,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             records::commands::call_card_update,
             records::commands::call_transcript,
             records::commands::call_questions,
+            records::commands::calls_search,
         ])
         .events(collect_events![
             AgentInstallProgress,

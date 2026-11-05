@@ -81,4 +81,5 @@ pub const APP_COMMANDS: &[&str] = &[
     "call_card_update",
     "call_transcript",
     "call_questions",
+    "calls_search",
 ];
