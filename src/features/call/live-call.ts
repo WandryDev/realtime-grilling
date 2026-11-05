@@ -8,7 +8,6 @@ import {
   toAgentStatusView,
   withFooters,
 } from "./agent-state";
-import { SUMMARY_STAGES } from "./backend";
 import { FINAL_CHECK_TOPIC_ID } from "./components/call-questions";
 import { CALL_SCREENS } from "./mock";
 import type {
@@ -114,8 +113,13 @@ export type LiveCallAction =
       type: "mic-released";
     }
   | { type: "mic-continue" }
-  | { project: string; type: "finish-start" }
-  | { stage: number; type: "finish-stage" }
+  | {
+      project: string;
+      type: "finish-start";
+      /** A call without a project has no proposals stage. */
+      withProposals?: boolean;
+    }
+  | { stage: number; type: "finish-stage"; withProposals?: boolean }
   | { type: "finish-cancel" }
   | { type: "agent-retrying" }
   /** The backend refused «Повторить» (the live pass is over, say). */
@@ -706,12 +710,23 @@ const SUMMARY_STEPS: Omit<FinishingStep, "state">[] = [
   { id: "saving", label: "Незакрытые вопросы и сохранение" },
 ];
 
+/** The stages a build runs: a call without a project has no proposals. */
+function summarySteps(withProposals = true) {
+  return SUMMARY_STEPS.filter(
+    (step) => withProposals || step.id !== "proposals"
+  );
+}
+
 /**
  * How many stages of «Собираю итоги» are done at `progress`: the
  * transcript is ready when the card opens.
  */
-export function finishedStages(progress: SummaryProgress) {
-  const index = SUMMARY_STEPS.findIndex((step) => step.id === progress.stage);
+export function finishedStages(
+  progress: SummaryProgress,
+  withProposals = true
+) {
+  const steps = summarySteps(withProposals);
+  const index = steps.findIndex((step) => step.id === progress.stage);
   const done = progress.state.status === "done" ? index + 1 : index;
   return Math.max(done, 1);
 }
@@ -719,12 +734,15 @@ export function finishedStages(progress: SummaryProgress) {
 /** The finishing card after `stage` finished stages. */
 function finishingAt(
   stage: number,
-  base: Pick<FinishingData, "description">
+  base: Pick<FinishingData, "description">,
+  withProposals = true
 ): FinishingData {
+  const steps = summarySteps(withProposals);
   return {
+    cancelDisabled: stage >= steps.length ? true : undefined,
     description: base.description,
-    progress: Math.round((stage / SUMMARY_STAGES) * 100),
-    steps: SUMMARY_STEPS.map((step, index) => {
+    progress: Math.round((Math.min(stage, steps.length) / steps.length) * 100),
+    steps: steps.map((step, index) => {
       let stepState: FinishingStep["state"] = "pending";
       if (index < stage) {
         stepState = "done";
@@ -944,9 +962,11 @@ export function liveCallReducer(
         data: {
           ...data,
           call: { ...data.call, endAction: "hidden", recording: "stopped" },
-          finishing: finishingAt(1, {
-            description: finishDescription(state, action.project),
-          }),
+          finishing: finishingAt(
+            1,
+            { description: finishDescription(state, action.project) },
+            action.withProposals
+          ),
           micReleased: undefined,
         },
         micLeft: null,
@@ -957,10 +977,11 @@ export function liveCallReducer(
             ...state,
             data: {
               ...data,
-              finishing: {
-                ...finishingAt(action.stage, data.finishing),
-                cancelDisabled: action.stage >= SUMMARY_STAGES,
-              },
+              finishing: finishingAt(
+                action.stage,
+                data.finishing,
+                action.withProposals
+              ),
             },
           }
         : state;

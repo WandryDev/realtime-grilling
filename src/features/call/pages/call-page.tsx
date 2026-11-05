@@ -321,6 +321,13 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     project?.name,
     state.data.call.project
   );
+  // A call without a project has no proposals stage; the session keeps
+  // its project until the build closes the call.
+  const withProposalsRef = useRef(session.projectId !== null);
+  if (session.callId !== null) {
+    withProposalsRef.current = session.projectId !== null;
+  }
+  const withProposals = withProposalsRef.current;
 
   // The browser, opened without a call in progress: start the demo call.
   const sessionChecked = useRef<boolean>(false);
@@ -343,11 +350,11 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const sessionStatus = session.status;
   useEffect(() => {
     if (sessionStatus === "finishing" && !latest.current.data.finishing) {
-      dispatch({ project: projectName, type: "finish-start" });
+      dispatch({ project: projectName, type: "finish-start", withProposals });
     } else if (sessionStatus === "live" && latest.current.data.finishing) {
       dispatch({ type: "finish-cancel" });
     }
-  }, [projectName, sessionStatus]);
+  }, [projectName, sessionStatus, withProposals]);
 
   // The clock: call time (in Tauri from the call's start) and countdowns
   useEffect(() => {
@@ -443,17 +450,23 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   // "Собираю итоги": the stages of the summary build (`SummaryProgress`;
   // Rust builds it, the browser's mock is started here). The build closes
   // the call, and `CallPage` opens its summary.
-  const { building } = useCallSummary(finishing ? callId : null);
+  // The build that ended shows its last stage until the call closes.
+  const { building, ended } = useCallSummary(finishing ? callId : null);
   useEffect(() => {
     if (finishing && callId) {
       buildFinishingSummary(callId);
     }
   }, [callId, finishing]);
+  const shown = building ?? ended;
   useEffect(() => {
-    if (finishing && building) {
-      dispatch({ stage: finishedStages(building), type: "finish-stage" });
+    if (finishing && shown) {
+      dispatch({
+        stage: finishedStages(shown, withProposals),
+        type: "finish-stage",
+        withProposals,
+      });
     }
-  }, [building, finishing]);
+  }, [finishing, shown, withProposals]);
 
   // A lagging transcript catches up by itself
   const lagging = Boolean(state.data.transcript.notice);
@@ -469,9 +482,9 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const end = useCallback(() => {
     finishCall();
     if (ownCountdown) {
-      dispatch({ project: projectName, type: "finish-start" });
+      dispatch({ project: projectName, type: "finish-start", withProposals });
     }
-  }, [ownCountdown, projectName]);
+  }, [ownCountdown, projectName, withProposals]);
 
   const retry = useCallback(() => {
     dispatch({ type: "agent-retrying" });
