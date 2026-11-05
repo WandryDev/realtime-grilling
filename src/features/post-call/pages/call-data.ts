@@ -13,6 +13,7 @@ import type {
   SummaryStage,
 } from "@/bindings";
 import { CARD_LENS_LABELS } from "@/lib/card-lens";
+import { clockTime } from "@/lib/clock";
 import { plural } from "@/lib/plural";
 
 import type {
@@ -41,15 +42,6 @@ import { momentParam } from "../moment";
  * segment.
  */
 
-const pad2 = (value: number) => String(value).padStart(2, "0");
-
-/** "12:04", or "12:02:14" with seconds. */
-export function clockOf(ms: number, seconds = false) {
-  const date = new Date(ms);
-  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-  return seconds ? `${time}:${pad2(date.getSeconds())}` : time;
-}
-
 /** A phrase of the call: its recording and when it starts in it. */
 interface At {
   recordingId: string;
@@ -64,7 +56,7 @@ export function wallClock(
   seconds = false
 ) {
   const recording = recordings.find((item) => item.id === at.recordingId);
-  return recording ? clockOf(recording.startedAt + at.startMs, seconds) : "";
+  return recording ? clockTime(recording.startedAt + at.startMs, seconds) : "";
 }
 
 /* ---------------------------------------------------------- Сборка итогов */
@@ -350,6 +342,11 @@ export function speakerOf(participants: readonly string[]) {
     : "клиент";
 }
 
+/** «сказал клиент», «сказал(а) Игорь»: the source of a client's quote. */
+export function saidBy(speaker: string) {
+  return speaker === "клиент" ? "сказал клиент" : `сказал(а) ${speaker}`;
+}
+
 const ORIGIN_LABEL: Record<NextQuestion["origin"], string> = {
   assumption: "проверить допущение",
   contradiction: "из противоречия",
@@ -385,8 +382,7 @@ function sourceOf(
     return { kind: "none", text: "Не обсуждали" };
   }
   if (fact.source === "client") {
-    const said =
-      speaker === "клиент" ? "сказал клиент" : `сказал(а) ${speaker}`;
+    const said = saidBy(speaker);
     return { kind: "said", text: time ? `${said}, ${time}` : said };
   }
   if (fact.source === "project") {

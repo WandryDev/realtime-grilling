@@ -204,11 +204,8 @@ function callsCount(count: number) {
   return `${count} звонков`;
 }
 
-const PENDING_EDIT = "1 правка";
-
 export function toPersonSummary(person: ClientPerson): PersonSummary {
   return {
-    edits: person.suggestion === "pending" ? PENDING_EDIT : undefined,
     howToAsk: person.howToAsk,
     id: person.id,
     initials: person.initials,
@@ -576,20 +573,12 @@ export function toPersonProfile(person: ClientPerson): PersonProfile {
   const isDemo = person.projectId === DEMO_PROJECT_ID && person.id === "olga";
 
   if (isDemo) {
-    const accepted = person.suggestion === "accepted";
+    // Her proposals come from the calls (`call_proposals`), not the demo.
     const base: PersonProfile = {
       ...PERSON,
-      askStyle: accepted ? PERSON.askStyleEdited : PERSON.askStyle,
-      origin: accepted
-        ? "Ваши заметки и 3 звонка. Последняя правка сегодня, принята вами"
-        : PERSON.origin,
-      portrait: PERSON.portrait.map((row) =>
-        accepted && row.edited ? { ...row, value: row.edited } : row
-      ),
       role: PERSON.role,
       scales: personScales(person),
-      suggestion:
-        person.suggestion === "pending" ? PERSON.suggestion : undefined,
+      suggestion: undefined,
     };
     return applyEdits(base, person);
   }
@@ -660,7 +649,6 @@ export function personFromForm(
     portrait: Object.keys(portrait).length > 0 ? portrait : undefined,
     project: values.project,
     role: values.role,
-    suggestion: current?.suggestion,
     tech: values.tech,
   };
 }

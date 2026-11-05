@@ -192,6 +192,23 @@ describe("the transcript of a call", () => {
     expect(marks.length).toBeGreaterThan(1);
   });
 
+  it("finds a word in another form, as the history's search in Rust does", () => {
+    // «бронь» without «ь» finds «броне», marked to the end of the word.
+    expect(matchRanges("Говорили о броне на субботу", "бронь")).toEqual([
+      [11, 16],
+    ]);
+    expect(matchRanges("Брони отменяют", "БРОНЬ")).toEqual([[0, 5]]);
+    // A final vowel or «й» goes too; the rest of the query stays exact.
+    expect(matchRanges("Запись к врачу", "запися")).toEqual([[0, 6]]);
+    expect(matchRanges("Без лишних полей", "без лишний")).toEqual([[0, 10]]);
+    // Three letters or less, or a final consonant: only as written.
+    expect(matchRanges("Это его дом", "эта")).toEqual([]);
+    expect(matchRanges("Касса и кассы", "касс")).toEqual([
+      [0, 4],
+      [8, 12],
+    ]);
+  });
+
   it("deletes the audio: the transcript stays, the player goes", async () => {
     open({ id: DEMO_CALL_ID });
 
