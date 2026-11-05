@@ -266,6 +266,30 @@ export const commands = {
 	 */
 	callDiscard: (callId: string) => typedError<CallSession, CommandError>(__TAURI_INVOKE("call_discard", { callId })),
 	/**
+	 *  The summary of a call and the build running for it. `summary` is
+	 *  `null` while the call is live, or finishing before its build wrote
+	 *  anything; a finished call without one reads `failed` / `interrupted`.
+	 *  `building` is the last `SummaryProgress` of the build running now (a
+	 *  window that opens during it shows that stage), `null` when none runs.
+	 *  `NotFound` for an unknown call.
+	 */
+	summaryGet: (callId: string) => typedError<CallSummaryView, CommandError>(__TAURI_INVOKE("summary_get", { callId })),
+	/**
+	 *  «Собрать итоги»: builds the summary of a finished call again, in the
+	 *  background, and returns at once; `SummaryProgress` follows the stages.
+	 *  The previous summary stays until the new one is saved. While a build
+	 *  of the call runs, does nothing (follow that one). `NotFound` for an
+	 *  unknown call, `Invalid` for a live one.
+	 */
+	summaryBuild: (callId: string) => typedError<null, CommandError>(__TAURI_INVOKE("summary_build", { callId })),
+	/**
+	 *  «Остановить»: the call's build stops (its agent is killed, nothing is
+	 *  saved), its summary is `failed` / `cancelled` and the call `finished`;
+	 *  a previous summary stays. Without a build a finishing call is closed
+	 *  all the same; otherwise nothing changes.
+	 */
+	summaryCancel: (callId: string) => typedError<null, CommandError>(__TAURI_INVOKE("summary_cancel", { callId })),
+	/**
 	 *  Starts recording both channels and returns the recording's id (UUID v7).
 	 *  While a recording runs, returns its id and opens nothing. Without
 	 *  microphone access: `External` with `reason: noAccess`, nothing stored.
@@ -368,6 +392,7 @@ export const events = {
 	recordingLevels: makeEvent<RecordingLevels, RecordingLevels>("recording-levels"),
 	shortcutPressed: makeEvent<ShortcutPressed, ShortcutPressed>("shortcut-pressed"),
 	speechModelChanged: makeEvent<SpeechModelChanged, SpeechModelChanged>("speech-model-changed"),
+	summaryProgress: makeEvent<SummaryProgress, SummaryProgress>("summary-progress"),
 	transcriptDropped: makeEvent<TranscriptDropped, TranscriptDropped>("transcript-dropped"),
 	transcriptLag: makeEvent<TranscriptLag, TranscriptLag>("transcript-lag"),
 	transcriptPending: makeEvent<TranscriptPending, TranscriptPending>("transcript-pending"),
@@ -581,6 +606,19 @@ export type CallCreate = {
 };
 
 /**
+ *  A quote of the client the code found in the transcript, with where it
+ *  is, so the windows need not look the time up by the segment id.
+ */
+export type CallEvidence = {
+	recordingId: string,
+	/**  A segment of the pass the summary was built from. */
+	segmentId: string,
+	/**  From the start of the recording. */
+	startMs: number,
+	quote: string,
+};
+
+/**
  *  The call in progress, as every window shows it. `idle`: no call, every
  *  other field empty.
  */
@@ -671,6 +709,46 @@ export type CallStatus =
 /**  "Завершить" was pressed: the agent collects the summary. */
 "finishing" | "finished";
 
+/**
+ *  The summary of a call. See the module docs for what a failed or
+ *  building one keeps.
+ */
+export type CallSummary = {
+	callId: string,
+	state: SummaryState,
+	/**
+	 *  Why the last build failed; set only when `failed`
+	 *  (`"interrupted"`: the app stopped during it).
+	 */
+	error: string | null,
+	/**  Of the saved summary; `null` without one. */
+	transcriptPass: SummaryTranscriptPass | null,
+	/**  Of the saved summary; empty without one. */
+	title: string,
+	tldr: string,
+	/**  The saved summary; `null` until one is saved. */
+	content: SummaryContent | null,
+	/**  When the saved summary was built; `null` without one. */
+	builtAt: number | null,
+	createdAt: number,
+	updatedAt: number,
+};
+
+/**  What `summary_get` returns. */
+export type CallSummaryView = {
+	/**
+	 *  `null` while the call is live, or finishing before its build wrote
+	 *  anything; a finished call without a row reads as `failed` /
+	 *  `interrupted`.
+	 */
+	summary: CallSummary | null,
+	/**
+	 *  The last progress of the build that runs now; `null` when none runs.
+	 *  A window that opens during a build shows this stage.
+	 */
+	building: SummaryProgress | null,
+};
+
 export type CallUpdate = {
 	title?: string | null,
 	status?: CallStatus | null,
@@ -696,6 +774,13 @@ export type CaptureFailure =
 "noDevice" | 
 /**  The device exists but could not be opened. */
 "busy";
+
+export type CardFact = {
+	text: string,
+	status: FactStatus,
+	source: FactSource,
+	evidence: CallEvidence[],
+};
 
 /**  A field of a task card with what it is based on. */
 export type CardField = {
@@ -815,6 +900,17 @@ export type EvidenceSource =
 /**  The project: its description `P1` or a brief item `B1…Bn`. */
 "project";
 
+/**  Where a fact comes from (`call-task-cards`, "Состояние и источник факта"). */
+export type FactSource = 
+/**  "сказал клиент": `evidence` holds the quotes. */
+"client" | 
+/**  "из документов проекта". */
+"project" | 
+/**  "вывод агента", without a quote. */
+"agent";
+
+export type FactStatus = "confirmed" | "assumption" | "contradiction" | "empty";
+
 /**
  *  The final check (decision 8): the most important open questions of all
  *  topics.
@@ -899,6 +995,15 @@ export type Navigate = {
 	route: string,
 };
 
+/**  A question to ask on the next call, from a gap of a card. */
+export type NextQuestion = {
+	text: string,
+	/**  A [`SummaryTopic`]. */
+	topicId: string | null,
+	field: CardLens | null,
+	gap: GapType,
+};
+
 export type PermissionKind = 
 /**  The user's own voice ("Я"). */
 "microphone" | 
@@ -956,6 +1061,8 @@ export type PersonUpdate = {
 	/**  Replaces the whole profile. */
 	profile?: Value | null,
 };
+
+export type PointStatus = "fact" | "assumption" | "contradiction";
 
 export type Project = {
 	id: string,
@@ -1139,6 +1246,15 @@ export type RejectReason =
 /**  Missing, a folder, or the OS would not let the app read it. */
 "unreadable";
 
+/**  A segment a topic starts or ends at. */
+export type SegmentMoment = {
+	recordingId: string,
+	segmentId: string,
+	/**  From the start of the recording. */
+	startMs: number,
+	endMs: number,
+};
+
 /**  Whether phrases come out of a channel; part of the recording status. */
 export type SegmentationStatus = "ok" | 
 /**
@@ -1219,6 +1335,119 @@ export type SpeechModel = {
  *  4 times a second per model, other changes at once.
  */
 export type SpeechModelChanged = SpeechModel;
+
+/**
+ *  The task card of a summary topic. The manager's decision and title live
+ *  here ([`update_card`]).
+ */
+export type SummaryCard = {
+	/**  UUID v7, issued when the summary is saved. */
+	id: string,
+	/**  The [`SummaryTopic`] it is the card of. */
+	topicId: string,
+	title: string,
+	decision: TaskCardDecision,
+	fields: SummaryCardField[],
+};
+
+/**  A lens of a card with one or more facts. */
+export type SummaryCardField = {
+	field: CardLens,
+	facts: CardFact[],
+};
+
+/**  What `call_summaries.content` holds. */
+export type SummaryContent = {
+	/**  In the order of the call. */
+	topics: SummaryTopic[],
+	/**  In topic order. */
+	cards: SummaryCard[],
+	/**  Up to five. */
+	next: NextQuestion[],
+};
+
+/**  What the stages' descriptions count («N реплик, M тем»), once known. */
+export type SummaryCounts = {
+	/**  Segments of the chosen passes, every recording of the call. */
+	segments: number,
+	/**  The fast loop's topics until `summary` is done, then the summary's. */
+	topics: number,
+	transcriptPass: SummaryTranscriptPass,
+	/**  New proposals, once `proposals` is done. */
+	proposals: number | null,
+};
+
+/**  A point of a topic, with the phrase it rests on. */
+export type SummaryPoint = {
+	text: string,
+	status: PointStatus,
+	evidence: CallEvidence[],
+};
+
+/**
+ *  Where a summary build is (design.md, decisions 1 and 2). Sent to every
+ *  window; each stage goes `running`, then `done` when the next one starts.
+ *  The build ends with `(saving, done)`, or with `failed` or `cancelled` at
+ *  the stage it reached.
+ */
+export type SummaryProgress = {
+	callId: string,
+	stage: SummaryStage,
+	state: SummaryStageState,
+	/**  `null` until the transcript is read. */
+	counts: SummaryCounts | null,
+};
+
+/**  A stage of a build, in their order. */
+export type SummaryStage = 
+/**  Waiting for the second pass, reading the transcript. */
+"transcript" | 
+/**  The agent builds the summary (call A). */
+"summary" | 
+/**
+ *  The agent proposes updates of the brief and the profiles (call B);
+ *  skipped for a call without a project.
+ */
+"proposals" | 
+/**  The checks and the transaction. */
+"saving";
+
+export type SummaryStageState = { status: "running" } | { status: "done" } | 
+/**
+ *  At `summary` or `saving` the build ends here and the previous
+ *  summary stays; at `proposals` it goes on without new proposals.
+ */
+{ status: "failed"; message: string } | 
+/**  Stopped: nothing is saved. */
+{ status: "cancelled" };
+
+/**  Where the last build of a call's summary is. */
+export type SummaryState = "building" | "ready" | 
+/**  `error` says why; the previous summary, if any, stays. */
+"failed";
+
+export type SummaryTopic = {
+	/**  UUID v7, issued when the summary is saved. */
+	id: string,
+	/**
+	 *  The fast loop's topics (`topics.id`) it continues; empty for a topic
+	 *  the summary found itself.
+	 */
+	topicIds: string[],
+	title: string,
+	from: SegmentMoment,
+	to: SegmentMoment,
+	points: SummaryPoint[],
+};
+
+/**  Which transcript a summary was built from (decision 2). */
+export type SummaryTranscriptPass = 
+/**  Every recording's second pass. */
+"refined" | 
+/**  Only the live transcript ("по живой расшифровке"). */
+"live" | 
+/**  Refined for some recordings, live for the others. */
+"mixed";
 
 /**  The task card of a topic (one per topic). */
 export type TaskCard = {

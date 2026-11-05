@@ -50,13 +50,19 @@ use crate::{
     storage::{
         Storage,
         call_state::{self, QuestionAction},
-        calls::{self, Call, CallCreate, CallUpdate},
+        calls::{self, Call, CallCreate, CallStatus, CallUpdate},
         people::{self, Person, PersonCreate, PersonUpdate},
         projects::{self, Project, ProjectCreate, ProjectOverview, ProjectUpdate},
         recordings::{self, RecordingLinks, TranscriptState},
         settings::{self, SettingsMap},
         sources::{self, ProjectSource},
+        summaries,
         transcript::{self, TranscriptSegment},
+    },
+    summary::{
+        CallSummaryView,
+        builds::{Stop, SummaryBuilds},
+        run as summary_run,
     },
 };
 
@@ -115,9 +121,13 @@ pub async fn projects_delete(
     app: AppHandle,
     storage: State<'_, Storage>,
     builds: State<'_, BriefBuilds>,
+    summaries: State<'_, SummaryBuilds>,
     id: String,
 ) -> CommandResult<()> {
-    crate::projects::delete(&storage, &app, &builds, &id).await
+    crate::projects::delete(&storage, &app, &builds, &id).await?;
+    // Its calls went with it: their summary builds stop, saving nothing.
+    summaries.stop_project(&id);
+    Ok(())
 }
 
 /// Per project: open questions of its recordings and when the last one
@@ -342,11 +352,15 @@ pub async fn calls_patch_summary(
 pub async fn calls_delete(
     app: AppHandle,
     storage: State<'_, Storage>,
+    summaries: State<'_, SummaryBuilds>,
     id: String,
 ) -> CommandResult<()> {
+    let call_id = id.clone();
     storage
-        .write(&app, move |db| calls::delete(db, &id))
+        .write(&app, move |db| calls::delete(db, &call_id))
         .await?;
+    // A summary build of it stops: its agent is killed, nothing is saved.
+    summaries.stop(&id, Stop::Aborted);
     // The call's recordings went with it; now their files.
     storage.sweep_recordings().await;
     Ok(())
@@ -996,6 +1010,68 @@ pub async fn call_discard(
     call_id: String,
 ) -> CommandResult<CallSession> {
     calls.discard(&call_id).await
+}
+
+/* Call summary (post-call design.md, decision 1) */
+
+/// The summary of a call and the build running for it. `summary` is
+/// `null` while the call is live, or finishing before its build wrote
+/// anything; a finished call without one reads `failed` / `interrupted`.
+/// `building` is the last `SummaryProgress` of the build running now (a
+/// window that opens during it shows that stage), `null` when none runs.
+/// `NotFound` for an unknown call.
+#[tauri::command]
+#[specta::specta]
+pub async fn summary_get(
+    storage: State<'_, Storage>,
+    builds: State<'_, SummaryBuilds>,
+    call_id: String,
+) -> CommandResult<CallSummaryView> {
+    let id = call_id.clone();
+    let summary = storage.read(move |db| summaries::get(db, &id)).await?;
+    Ok(CallSummaryView {
+        summary,
+        building: builds.progress(&call_id),
+    })
+}
+
+/// «Собрать итоги»: builds the summary of a finished call again, in the
+/// background, and returns at once; `SummaryProgress` follows the stages.
+/// The previous summary stays until the new one is saved. While a build
+/// of the call runs, does nothing (follow that one). `NotFound` for an
+/// unknown call, `Invalid` for a live one.
+#[tauri::command]
+#[specta::specta]
+pub async fn summary_build(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    builds: State<'_, SummaryBuilds>,
+    call_id: String,
+) -> CommandResult<()> {
+    let id = call_id.clone();
+    let call = storage.read(move |db| calls::get(db, &id)).await?;
+    if call.status == CallStatus::Live {
+        return Err(CommandError::invalid(
+            "Итоги собираются после звонка: сначала завершите его",
+        ));
+    }
+    summary_run::start(&Arc::new(app), &builds, &call_id);
+    Ok(())
+}
+
+/// «Остановить»: the call's build stops (its agent is killed, nothing is
+/// saved), its summary is `failed` / `cancelled` and the call `finished`;
+/// a previous summary stays. Without a build a finishing call is closed
+/// all the same; otherwise nothing changes.
+#[tauri::command]
+#[specta::specta]
+pub async fn summary_cancel(
+    app: AppHandle,
+    builds: State<'_, SummaryBuilds>,
+    call_id: String,
+) -> CommandResult<()> {
+    summary_run::stop(&app, &builds, &call_id).await;
+    Ok(())
 }
 
 /* Recording */

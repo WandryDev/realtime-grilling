@@ -131,7 +131,6 @@ impl Refiner {
     }
 
     /// The progress of the pass from now on, as the windows get it.
-    #[allow(dead_code, reason = "the summary build listens (post-call task 2.4)")]
     pub fn subscribe(&self) -> broadcast::Receiver<TranscriptRefine> {
         self.0.news.subscribe()
     }

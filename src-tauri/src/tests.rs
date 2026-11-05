@@ -1186,6 +1186,19 @@ mod acl {
         }
     }
 
+    /// The summary is built again and stopped from the main window; every
+    /// window reads it and its progress ("Собираю итоги" in the call window).
+    #[test]
+    fn floating_windows_only_read_the_summary() {
+        for label in ["overlay", "widget"] {
+            assert!(!denied(&invoke(label, "summary_get")), "{label}");
+            for command in ["summary_build", "summary_cancel"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+        }
+    }
+
     /// The call starts and stops its recording (`CallManager`): no window
     /// may, or a call could go on without one.
     #[test]
@@ -1283,6 +1296,11 @@ mod acl {
             ("overlay", "call_finish"),
             ("overlay", "call_resume"),
             ("overlay", "call_keep"),
+            ("main", "summary_get"),
+            ("main", "summary_build"),
+            ("main", "summary_cancel"),
+            ("overlay", "summary_get"),
+            ("widget", "summary_get"),
             // Every window shows the call's questions, acts on them and
             // retries the agent.
             ("main", "call_state_get"),
@@ -1375,6 +1393,7 @@ fn capabilities_match_the_command_list() {
         "projects_get",
         "projects_overview",
         "brief_prepare",
+        "summary_get",
     ] {
         assert!(
             floating.iter().any(|command| command == needed),
@@ -1384,6 +1403,8 @@ fn capabilities_match_the_command_list() {
     for forbidden in [
         "call_close",
         "call_discard",
+        "summary_build",
+        "summary_cancel",
         "recording_start",
         "recording_stop",
         "brief_build",

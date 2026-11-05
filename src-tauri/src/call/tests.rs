@@ -56,6 +56,8 @@ struct Record {
     clock_start: (i64, tokio::time::Instant),
     /// …and a jump of it, as after the machine slept.
     slept: AtomicI64,
+    /// What the summary builds were told: `("start" | "cancel", call)`.
+    summary: Mutex<Vec<(&'static str, String)>>,
 }
 
 impl Record {
@@ -140,6 +142,22 @@ impl CallHost for FakeHost {
     fn tray(&self, in_call: bool) {
         self.0.seen.lock().unwrap().push(Seen::Tray(in_call));
     }
+
+    fn summary_start(&self, call_id: &str) {
+        self.0
+            .summary
+            .lock()
+            .unwrap()
+            .push(("start", call_id.to_owned()));
+    }
+
+    fn summary_cancel(&self, call_id: &str) {
+        self.0
+            .summary
+            .lock()
+            .unwrap()
+            .push(("cancel", call_id.to_owned()));
+    }
 }
 
 /// Writes recording rows as `RecordingManager` does; no devices, no files.
@@ -216,6 +234,7 @@ impl Fixture {
             running: Mutex::default(),
             clock_start: (now_ms(), tokio::time::Instant::now()),
             slept: AtomicI64::new(0),
+            summary: Mutex::default(),
         });
         let calls = CallManager::new(
             FakeHost(Arc::clone(&record)),
@@ -507,6 +526,44 @@ async fn finish_stops_the_recording_and_close_ends_the_call() {
         "the windows stay: the main window shows the summary"
     );
     assert!(!fx.calls.is_active());
+}
+
+/// Post-call decision 1: «Завершить» starts the summary build;
+/// «Отменить завершение» and «Удалить все данные» stop it; a close (the
+/// build's own, or a window's) does not.
+#[tokio::test]
+async fn finishing_starts_the_summary_and_going_back_stops_it() {
+    let fx = Fixture::new();
+    let summary = || fx.record.summary.lock().unwrap().clone();
+    let first = id(&fx.start(None, &[]).await);
+    assert!(summary().is_empty(), "no summary for a live call");
+
+    fx.calls.finish(&first).await.unwrap();
+    assert_eq!(summary(), vec![("start", first.clone())]);
+    // A second «Завершить» starts nothing.
+    fx.calls.finish(&first).await.unwrap();
+    assert_eq!(summary().len(), 1);
+
+    fx.calls.resume(&first).await.unwrap();
+    fx.calls.finish(&first).await.unwrap();
+    assert_eq!(
+        summary(),
+        vec![
+            ("start", first.clone()),
+            ("cancel", first.clone()),
+            ("start", first.clone()),
+        ]
+    );
+    fx.calls.close(&first).await.unwrap();
+    assert_eq!(summary().len(), 3, "a close stops nothing");
+
+    let second = id(&fx.start(None, &[]).await);
+    fx.calls.finish(&second).await.unwrap();
+    fx.calls.discard(&second).await.unwrap();
+    assert_eq!(
+        summary()[3..],
+        [("start", second.clone()), ("cancel", second.clone())]
+    );
 }
 
 /// Повторное «Завершить» ничего не меняет.

@@ -158,3 +158,7 @@ mod run_tests;
 
 #[cfg(test)]
 mod validate_tests;
+
+/// The build wired to the call's manager, against a fake `claude` script.
+#[cfg(all(test, unix))]
+mod fake_cli_tests;

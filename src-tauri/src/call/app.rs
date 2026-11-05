@@ -1,5 +1,7 @@
 //! The call in the app: its storage, its windows, the tray and the recorder.
 
+use std::sync::Arc;
+
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_specta::Event;
 
@@ -18,6 +20,10 @@ use crate::{
         Storage,
         recordings::RecordingLinks,
         settings::{self, SettingsMap},
+    },
+    summary::{
+        builds::{Stop, SummaryBuilds},
+        run as summary_run,
     },
 };
 
@@ -77,6 +83,18 @@ impl<R: Runtime> CallHost for AppCallHost<R> {
 
     fn tray(&self, in_call: bool) {
         tray::set_in_call(&self.app, in_call);
+    }
+
+    fn summary_start(&self, call_id: &str) {
+        if let Some(builds) = self.app.try_state::<SummaryBuilds>() {
+            summary_run::start(&Arc::new(self.app.clone()), &builds, call_id);
+        }
+    }
+
+    fn summary_cancel(&self, call_id: &str) {
+        if let Some(builds) = self.app.try_state::<SummaryBuilds>() {
+            builds.stop(call_id, Stop::Aborted);
+        }
     }
 }
 

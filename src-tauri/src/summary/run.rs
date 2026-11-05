@@ -144,6 +144,15 @@ pub fn start<H: SummaryHost>(
     }))
 }
 
+/// «Остановить» (`summary_cancel`): the build stops, saves nothing and
+/// closes the call, its summary `failed` / [`CANCELLED`]. Without a build
+/// a call still finishing is closed all the same.
+pub async fn stop<H: SummaryHost>(host: &H, builds: &SummaryBuilds, call_id: &str) {
+    if !builds.stop(call_id, Stop::Stopped) {
+        host.close_call(call_id).await;
+    }
+}
+
 /// How a build ended short of a saved summary.
 #[derive(Debug)]
 enum End {

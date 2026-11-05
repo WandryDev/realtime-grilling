@@ -11,10 +11,6 @@ mod recording;
 mod shell;
 mod speech;
 mod storage;
-#[allow(
-    dead_code,
-    reason = "started by CallManager and the summary_* commands (post-call task 2.4)"
-)]
 mod summary;
 mod vad;
 

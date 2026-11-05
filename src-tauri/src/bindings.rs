@@ -25,6 +25,7 @@ use crate::{
         },
         models::SpeechModelChanged,
     },
+    summary::SummaryProgress,
 };
 
 pub fn builder() -> Builder<tauri::Wry> {
@@ -95,6 +96,9 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::call_close,
             commands::call_keep,
             commands::call_discard,
+            commands::summary_get,
+            commands::summary_build,
+            commands::summary_cancel,
             commands::recording_start,
             commands::recording_stop,
             commands::recording_status,
@@ -123,6 +127,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             RecordingLevels,
             ShortcutPressed,
             SpeechModelChanged,
+            SummaryProgress,
             TranscriptDropped,
             TranscriptLag,
             TranscriptPending,

@@ -122,6 +122,8 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(crate::agent::fast_loop::app::for_app(app.handle()));
     let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer());
     app.manage(recorder.clone());
+    // The calls' summary builds; a finishing call starts one.
+    app.manage(crate::summary::builds::SummaryBuilds::default());
     // The call in progress records through the recorder; none at start
     // (the storage finished the calls a previous run left).
     let calls = crate::call::manager_for_app(app.handle(), recorder.clone(), speech.clone());
@@ -227,6 +229,9 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
                 fast_loop.shutdown();
             }
             if let Some(builds) = app.try_state::<crate::projects::builds::BriefBuilds>() {
+                builds.shutdown();
+            }
+            if let Some(builds) = app.try_state::<crate::summary::builds::SummaryBuilds>() {
                 builds.shutdown();
             }
             crate::recording::stop_on_exit(app);

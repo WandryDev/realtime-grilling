@@ -1,9 +1,10 @@
 //! The call in progress (`specs/call-lifecycle`, design.md decisions 1–9).
 //!
 //! [`CallManager`] (Tauri state) owns it: "Начать" creates the call in the
-//! database and records it, "Завершить" stops the recording and the main
-//! window builds the summary, "Отменить завершение" records the same call
-//! again, `close` ends it. Every change goes to every window
+//! database and records it, "Завершить" stops the recording and starts the
+//! summary build (`summary/`), "Отменить завершение" stops the build and
+//! records the same call again, `close` ends it: the build once it is over
+//! (or a window, before it; the build then still saves). Every change goes to every window
 //! (`CallSessionChanged`, after the call's `DataChanged`), moves the windows
 //! ([`windows`]) and the tray menu.
 //!
@@ -102,6 +103,12 @@ pub trait CallHost: Send + Sync + 'static {
     fn now(&self) -> i64 {
         now_ms()
     }
+    /// The call is finishing: its summary build starts (post-call design.md,
+    /// decision 1). The build closes the call when it ends.
+    fn summary_start(&self, _call_id: &str) {}
+    /// The finishing call goes back to live or away: its build stops and
+    /// saves nothing.
+    fn summary_cancel(&self, _call_id: &str) {}
 }
 
 /// How often a countdown looks at the wall clock: the async timers stop
@@ -353,6 +360,7 @@ impl Shared {
             return Ok(());
         };
         let recording_id = control.session.recording_id.clone();
+        let id = call_id.clone();
         let ended = self
             .blocking(move |shared| {
                 if let Some(id) = &recording_id
@@ -361,7 +369,7 @@ impl Shared {
                     eprintln!("grill: could not stop the recording {id}: {error}");
                 }
                 shared.write(|connection| {
-                    let call = calls::get(connection, &call_id)?;
+                    let call = calls::get(connection, &id)?;
                     let ended_at = call
                         .started_at
                         .map_or(now_ms(), |start| now_ms().max(start));
@@ -370,7 +378,7 @@ impl Shared {
                         ended_at: Some(Some(ended_at)),
                         ..CallUpdate::default()
                     };
-                    calls::update(connection, &call_id, patch)
+                    calls::update(connection, &id, patch)
                 })
             })
             .await
@@ -387,6 +395,7 @@ impl Shared {
         control.session.status = CallSessionStatus::Finishing;
         self.publish(control);
         self.move_windows(windows::finishing());
+        self.host.summary_start(&call_id);
         Ok(())
     }
 
@@ -430,6 +439,8 @@ impl Shared {
         if control.session.status != CallSessionStatus::Finishing {
             return Ok(control.session.clone());
         }
+        // The summary is not built for a call that goes on.
+        self.host.summary_cancel(call_id);
         let id = call_id.to_owned();
         let links = RecordingLinks {
             call_id: Some(id.clone()),
@@ -539,6 +550,7 @@ impl Shared {
         let mut control = self.control.lock().await;
         self.check_current(&control, call_id).await?;
         if is_active(&control.session) {
+            self.host.summary_cancel(call_id);
             self.drop_call(&mut control).await;
         }
         Ok(control.session.clone())

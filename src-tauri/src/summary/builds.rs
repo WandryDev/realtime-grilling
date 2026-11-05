@@ -107,6 +107,7 @@ impl SummaryBuilds {
     }
 
     /// A build of the call runs (also one stopped and winding down).
+    #[cfg(test)]
     pub fn is_building(&self, call_id: &str) -> bool {
         self.state().running.contains_key(call_id)
     }
@@ -244,11 +245,6 @@ impl BuildSlot {
     /// For the agent calls: where their process tree is kept.
     pub fn process(&self) -> TreeSlot {
         self.process.clone()
-    }
-
-    /// Keeps the progress a window opening late reads.
-    pub fn record(&self, progress: &SummaryProgress) {
-        self.builds.record(&self.call_id, self.generation, progress);
     }
 }
 

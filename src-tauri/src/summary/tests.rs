@@ -108,10 +108,6 @@ impl CallData<'_> {
         recordings::mark_audio_deleted(self.connection, recording_id, 5).unwrap();
     }
 
-    pub fn recordings(&self, call_id: &str) -> Vec<Recording> {
-        transcript::recordings_of(self.connection, call_id).unwrap()
-    }
-
     /// The project's notes and its brief, saved fresh.
     pub fn brief(&self, project_id: &str, notes: &str, brief: &serde_json::Value) {
         let patch = projects::ProjectUpdate {
@@ -240,9 +236,9 @@ fn a_stopped_build_gives_its_place_to_a_new_one() {
         state: SummaryStageState::Running,
         counts: None,
     };
-    old.record(&progress);
+    builds.record("a", old.generation(), &progress);
     assert_eq!(builds.progress("a"), None);
-    new.record(&progress);
+    builds.record("a", new.generation(), &progress);
     assert_eq!(builds.progress("a"), Some(progress));
 
     drop(old);

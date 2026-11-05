@@ -870,3 +870,50 @@ fn a_stop_after_the_reply_but_before_the_save_saves_nothing() {
     // «Остановить» closes the call.
     assert_eq!(host.closed(), vec![call.call.clone()]);
 }
+
+/// «Сбой во время сборки»: the app died during a build and starts again;
+/// the call is «завершён» and its summary reads failed / interrupted, with
+/// «Собрать итоги» on the page.
+#[test]
+fn a_crash_during_a_build_leaves_a_finished_call_to_build_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (call, rebuilt) = {
+        let storage = Storage::open_in(dir.path());
+        storage
+            .read_now(|connection| {
+                let data = CallData { connection };
+                let call = data.call(None, &[], CallStatus::Finishing);
+                summaries::start_building(connection, &call)?;
+                // A finished call whose rebuild was running keeps its summary.
+                let rebuilt = data.call(None, &[], CallStatus::Finished);
+                let ready = summaries::ReadySummary {
+                    title: "Прежние итоги".to_owned(),
+                    tldr: String::new(),
+                    transcript_pass: SummaryTranscriptPass::Live,
+                    content: summaries::SummaryContent::default(),
+                };
+                summaries::save_ready(connection, &rebuilt, &ready)?;
+                summaries::start_building(connection, &rebuilt)?;
+                Ok((call, rebuilt))
+            })
+            .unwrap()
+    };
+
+    let storage = Storage::open_in(dir.path());
+    let (call, summary, kept) = storage
+        .read_now(|connection| {
+            Ok((
+                calls::get(connection, &call)?,
+                summaries::get(connection, &call)?.unwrap(),
+                summaries::get(connection, &rebuilt)?.unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(call.status, CallStatus::Finished);
+    assert_eq!(summary.state, SummaryState::Failed);
+    assert_eq!(summary.error.as_deref(), Some(summaries::INTERRUPTED));
+    assert_eq!(summary.content, None);
+    assert_eq!(kept.state, SummaryState::Failed);
+    assert_eq!(kept.title, "Прежние итоги");
+    assert!(kept.content.is_some());
+}
