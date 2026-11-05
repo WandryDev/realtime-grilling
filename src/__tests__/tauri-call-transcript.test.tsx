@@ -46,9 +46,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const { IDLE_RECORDING, fakeProject } = await import("./helpers/fake-tauri");
+const { currentCallSession, followCallSession } = await import(
+  "@/data/call-session"
+);
+const { IDLE_RECORDING, IDLE_SESSION, fakeProject, liveSession } = await import(
+  "./helpers/fake-tauri"
+);
 const { CallPage } = await import("@/features/call/pages/call-page");
-const { resetCall, startCall } = await import("@/data/call-session");
 const { refreshProjects } = await import("@/data/projects");
 const { refreshSettings } = await import("@/data/settings");
 
@@ -120,18 +124,24 @@ beforeEach(async () => {
   fake.answers.set("transcript_for_recording", () => []);
   await act(() => refreshProjects());
   await act(() => refreshSettings());
+  // The backend's call, live with the recording, in this window's session
+  // before the windows open.
+  followCallSession();
   act(() =>
-    startCall({
-      participants: ["Ольга"],
-      projectId: TELEMEDIA,
-      recordingId: RECORDING,
-    })
+    fake.setSession(
+      liveSession({
+        participants: ["Ольга"],
+        projectId: TELEMEDIA,
+        recordingId: RECORDING,
+      })
+    )
   );
+  await waitFor(() => expect(currentCallSession().recordingId).toBe(RECORDING));
   fake.invoked.length = 0;
 });
 
 afterEach(() => {
-  act(() => resetCall());
+  act(() => fake.setSession(IDLE_SESSION));
   fake.recording = IDLE_RECORDING;
 });
 

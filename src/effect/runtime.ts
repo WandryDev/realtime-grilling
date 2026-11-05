@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { type Effect, Fiber, Layer, ManagedRuntime } from "effect";
 
+import { CallSessionBackend } from "@/data/services/call-session";
 import { DataLayerMock, DataLayerTauri } from "@/data/services/layers";
 import { MockDatabase } from "@/data/services/mock-database";
 import { CallBackend } from "@/features/call/backend";
@@ -25,6 +26,12 @@ import { SpeechBackend } from "@/features/speech/backend";
 export const MockLayer = Layer.mergeAll(
   DataLayerMock,
   CallBackend.layerMock,
+  // The one recorder and database of the set: layers are shared by reference.
+  CallSessionBackend.layerMock.pipe(
+    Layer.provide(
+      Layer.mergeAll(RecordingBackend.layerMock, MockDatabase.layer)
+    )
+  ),
   CallWidgetBackend.layerMock,
   IntegrationsBackend.layerMock,
   OnboardingBackend.layerMock,
@@ -46,6 +53,7 @@ const TauriDevices = Layer.mergeAll(
 export const TauriLayer = Layer.mergeAll(
   DataLayerTauri,
   CallBackend.layerTauri.pipe(Layer.provide(TauriDevices)),
+  CallSessionBackend.layerTauri,
   CallWidgetBackend.layerMock,
   IntegrationsBackend.layerMock,
   OnboardingBackend.layerTauri,

@@ -1,5 +1,6 @@
 import type {
   Call,
+  CallSession,
   CommandError,
   DataChanged,
   MicActivityChanged,
@@ -18,7 +19,10 @@ import { mergePatch } from "@/lib/merge-patch";
  * remembers the handlers so a test can play an event Rust would send to
  * every window (a write made in another window, a tray click). The
  * recorder starts one recording at a time (`recording`), and Zoom holds
- * the microphone (`micActivity`) until a test says otherwise.
+ * the microphone (`micActivity`) until a test says otherwise. The call
+ * commands play the backend's `CallManager` (`session`): `call_start`
+ * stores the call and records it, each change sends `DataChanged` of the
+ * call, then `CallSessionChanged`.
  *
  * Use with `vi.hoisted` + `vi.mock` of `@tauri-apps/api/core`,
  * `@tauri-apps/api/event` and `@tauri-apps/api/window`, and
@@ -53,9 +57,50 @@ export interface FakeTauri {
   listen: (event: string, handler: Handler) => Promise<() => void>;
   /** What `mic_activity_get` answers. */
   micActivity: MicActivityChanged;
+  /**
+   * What the recording of a call fails with (`call_start`, `call_resume`);
+   * null: it starts.
+   */
+  recordFailure: CommandError | null;
   /** What `recording_status` answers; `recording_start` and `_stop` set it. */
   recording: RecordingStatus;
+  /** The backend's call in progress, as `call_current` answers it. */
+  session: CallSession;
+  /** Sets the call in progress and sends it to every window. */
+  setSession: (session: CallSession) => void;
 }
+
+/** A live call of the backend, started now unless said otherwise. */
+export function liveSession(session: Partial<CallSession> = {}): CallSession {
+  return {
+    ...IDLE_SESSION,
+    callId: "fake-call-live",
+    startedAt: Date.now(),
+    status: "live",
+    ...session,
+  };
+}
+
+/** The commands of the `CallManager`. */
+const CALL_COMMANDS = new Set([
+  "call_current",
+  "call_start",
+  "call_finish",
+  "call_resume",
+  "call_close",
+  "call_keep",
+]);
+
+export const IDLE_SESSION: CallSession = {
+  autoEnd: null,
+  callId: null,
+  participantIds: [],
+  participants: [],
+  projectId: null,
+  recordingId: null,
+  startedAt: null,
+  status: "idle",
+};
 
 let created = Date.UTC(2026, 9, 1);
 
@@ -114,7 +159,11 @@ export function fakePerson(
   };
 }
 
-export function fakeCall(id: string, projectId: string, title: string): Call {
+export function fakeCall(
+  id: string,
+  projectId: string | null,
+  title: string
+): Call {
   created += 1;
   return {
     createdAt: created,
@@ -168,6 +217,130 @@ export function createFakeTauri(): FakeTauri {
     queueMicrotask(() =>
       emit("data-changed", { change, entity, id, projectId })
     );
+  };
+
+  /** The next recording of the fake recorder. */
+  const record = () => {
+    const id = `${FAKE_RECORDING_PREFIX}${recordings.length + 1}`;
+    recordings.push(id);
+    fake.recording = { ...IDLE_RECORDING, id, startedAt: Date.now() };
+    return id;
+  };
+
+  /** A change of the call in progress: `DataChanged` first, as Rust sends. */
+  const sessionChanged = (session: CallSession) => {
+    fake.session = session;
+    const call = db.calls.find((item) => item.id === session.callId);
+    if (call) {
+      changed("call", call.id, call.projectId, "updated");
+    }
+    queueMicrotask(() => emit("call-session-changed", { session }));
+    return session;
+  };
+
+  const commandError = (kind: CommandError["kind"], message: string) => {
+    const error: CommandError = { kind, message };
+    return error;
+  };
+
+  /** `call_*` of the `CallManager`; a failure rejects with its `CommandError`. */
+  const callCommand = (
+    command: string,
+    args: Record<string, unknown>
+  ): CallSession => {
+    const { session } = fake;
+    if (command === "call_current") {
+      return session;
+    }
+    if (command === "call_start") {
+      if (session.status !== "idle") {
+        return session;
+      }
+      if (fake.recordFailure) {
+        throw fake.recordFailure;
+      }
+      const input = args.input as {
+        participantIds?: string[] | null;
+        projectId?: string | null;
+      };
+      const participantIds = input.participantIds ?? [];
+      const projectId = input.projectId ?? null;
+      created += 1;
+      const now = Date.now();
+      const call: Call = {
+        ...fakeCall(`fake-call-${created}`, projectId, ""),
+        endedAt: null,
+        participantIds,
+        startedAt: now,
+        status: "live",
+      };
+      db.calls.push(call);
+      changed("call", call.id, projectId, "created");
+      return sessionChanged({
+        autoEnd: null,
+        callId: call.id,
+        participantIds,
+        participants: participantIds.map(
+          (id) => db.people.find((person) => person.id === id)?.name ?? id
+        ),
+        projectId,
+        recordingId: record(),
+        startedAt: now,
+        status: "live",
+      });
+    }
+    const callId = String(args.callId);
+    // A session a test set may have no row: it is the current call anyway.
+    const call = db.calls.find((item) => item.id === callId) ?? {
+      endedAt: null,
+      status: session.status,
+    };
+    if (session.callId !== callId) {
+      throw db.calls.some((item) => item.id === callId)
+        ? commandError("Invalid", `Звонок ${callId} сейчас не идёт`)
+        : commandError("NotFound", `Звонок ${callId} не найден`);
+    }
+    switch (command) {
+      case "call_finish":
+        if (session.status !== "live") {
+          return session;
+        }
+        fake.recording = IDLE_RECORDING;
+        call.status = "finishing";
+        call.endedAt = Date.now();
+        return sessionChanged({
+          ...session,
+          autoEnd: null,
+          status: "finishing",
+        });
+      case "call_resume": {
+        if (session.status !== "finishing") {
+          return session;
+        }
+        call.status = "live";
+        call.endedAt = null;
+        const failure = fake.recordFailure;
+        sessionChanged({
+          ...session,
+          recordingId: failure ? null : record(),
+          status: "live",
+        });
+        if (failure) {
+          throw failure;
+        }
+        return fake.session;
+      }
+      case "call_close":
+        if (session.status !== "finishing") {
+          return session;
+        }
+        call.status = "finished";
+        return sessionChanged(IDLE_SESSION);
+      case "call_keep":
+        return sessionChanged({ ...session, autoEnd: null });
+      default:
+        throw new Error(`Нет команды ${command} в фейке`);
+    }
   };
 
   const answer = (command: string, args: Record<string, unknown>): unknown => {
@@ -318,6 +491,14 @@ export function createFakeTauri(): FakeTauri {
           settings: db.settings,
           shortcutErrors: [],
         };
+      case "calls_delete": {
+        const index = db.calls.findIndex((item) => item.id === args.id);
+        const [removed] = db.calls.splice(index, 1);
+        if (removed) {
+          changed("call", removed.id, removed.projectId, "deleted");
+        }
+        return null;
+      }
       case "calls_patch_summary": {
         const call = db.calls.find((item) => item.id === args.id);
         if (!call) {
@@ -333,15 +514,8 @@ export function createFakeTauri(): FakeTauri {
         return fake.micActivity;
       case "recording_status":
         return fake.recording;
-      case "recording_start": {
-        if (fake.recording.id) {
-          return fake.recording.id;
-        }
-        const id = `${FAKE_RECORDING_PREFIX}${recordings.length + 1}`;
-        recordings.push(id);
-        fake.recording = { ...IDLE_RECORDING, id, startedAt: Date.now() };
-        return id;
-      }
+      case "recording_start":
+        return fake.recording.id ?? record();
       case "recording_stop":
         if (fake.recording.id === args.id) {
           fake.recording = IDLE_RECORDING;
@@ -378,6 +552,13 @@ export function createFakeTauri(): FakeTauri {
         };
         return Promise.reject(unknown);
       }
+      if (CALL_COMMANDS.has(command)) {
+        try {
+          return Promise.resolve(structuredClone(callCommand(command, args)));
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      }
       const custom = answers.get(command);
       if (custom) {
         const result = custom(args);
@@ -412,7 +593,13 @@ export function createFakeTauri(): FakeTauri {
       });
     },
     micActivity: { app: "Zoom", busy: true, since: created },
+    recordFailure: null,
     recording: IDLE_RECORDING,
+    session: IDLE_SESSION,
+    setSession: (session) => {
+      fake.session = session;
+      emit("call-session-changed", { session });
+    },
   };
   return fake;
 }

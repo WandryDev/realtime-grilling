@@ -1,6 +1,5 @@
 import { Layer } from "effect";
 
-import { CallSessionEvents } from "./call-session";
 import { CallsData } from "./calls";
 import { DataEvents } from "./data-events";
 import { MockDatabase } from "./mock-database";
@@ -16,7 +15,6 @@ import { ProjectSourcesData } from "./sources";
  */
 
 export const DataLayerTauri = Layer.mergeAll(
-  CallSessionEvents.layerTauri,
   CallsData.layerTauri,
   DataEvents.layerTauri,
   PeopleData.layerTauri,
@@ -26,7 +24,6 @@ export const DataLayerTauri = Layer.mergeAll(
 );
 
 export const DataLayerMock = Layer.mergeAll(
-  CallSessionEvents.layerMock,
   CallsData.layerMock,
   DataEvents.layerMock,
   PeopleData.layerMock,

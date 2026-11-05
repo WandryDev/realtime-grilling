@@ -3,20 +3,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { type CallStartFailure, startCall } from "@/data/call-session";
+import { NO_PROJECT_CALL, useCalls } from "@/data/calls";
 import { usePeople } from "@/data/people";
 import { useProjects } from "@/data/projects";
 import { useSettings } from "@/data/settings";
 import { inTauri } from "@/effect/runtime";
 import { prepareBrief, useBriefProgress } from "@/features/projects/api";
-import { type RecordingStart, useMicApp } from "@/features/recording/api";
+import { useMicApp } from "@/features/recording/api";
 import { hideWindow, useOpenRoute } from "@/features/shell/api";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 import {
   buildBrief,
-  getLastCallParticipantIds,
-  startRecording,
+  lastCallParticipantIds,
+  lastCallProjectId,
   toParticipant,
   toPickerProject,
 } from "../api";
@@ -25,12 +27,7 @@ import { DesktopStage } from "../components/desktop-stage";
 import { FloatingLink } from "../components/floating-link";
 import { FloatingSurface } from "../components/floating-surface";
 import type { StartError } from "../components/start-prompt-card";
-import {
-  LAST_CALL_PROJECT_ID,
-  LAUNCH,
-  MEETING_APP,
-  type Participant,
-} from "../mock";
+import { LAUNCH, MEETING_APP, type Participant } from "../mock";
 import { joinNames } from "../names";
 import { StartWidget, type StartWidgetLaunch } from "../screens/start-widget";
 import { useCallTime } from "../use-call-clock";
@@ -43,14 +40,16 @@ import { useCallTime } from "../use-call-clock";
  * overlay is off in Settings).
  *
  * In Tauri the widget is its own window and never shows the call itself:
- * "Начать" starts the call (shared with every window), hides the widget and
- * shows the overlay, which takes the call over, or the main window on the
- * call window. The pill's × hides the window.
+ * "Начать" asks the backend to start the call, and the backend hides the
+ * widget and shows the overlay, or the main window on the call window. The
+ * pill's × hides the window.
  *
- * The project and the people come from the live lists: the choice is kept
- * only while its project exists, otherwise the widget falls back to the
- * default. Nothing from the prerendered demo data sticks. The meeting app
- * is the one holding the microphone (the browser demo's is Zoom).
+ * The project and the people are the last call's (spec «Виджет по
+ * последнему звонку»; the demo's in the browser), from the live lists: the
+ * choice is kept only while its project exists, otherwise the widget falls
+ * back to the default. Nothing from the prerendered demo data sticks. The
+ * meeting app is the one holding the microphone (the browser demo's is
+ * Zoom).
  *
  * "Начать" starts the recording first; without microphone access the call
  * doesn't start and the prompt says so, with the way to the access step.
@@ -74,7 +73,8 @@ interface Choice {
  */
 function resolveProjectId(
   projects: { id: string }[],
-  picked: string | null | undefined
+  picked: string | null | undefined,
+  offered: string | null
 ): string | null {
   if (
     picked === null ||
@@ -82,10 +82,7 @@ function resolveProjectId(
   ) {
     return picked;
   }
-  const last = inTauri
-    ? undefined
-    : projects.find((project) => project.id === LAST_CALL_PROJECT_ID);
-  return last?.id ?? projects[0]?.id ?? null;
+  return offered;
 }
 
 /** Pause on the finished brief before the widget hands over. */
@@ -104,7 +101,7 @@ function launchDescription(
 }
 
 function startError(
-  failure: Extract<RecordingStart, { ok: false }>,
+  failure: CallStartFailure,
   openSettings: () => void
 ): StartError {
   if (failure.reason === "noAccess") {
@@ -143,6 +140,7 @@ function HiddenNotice({ onShow }: { onShow: () => void }) {
 function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
   const openRoute = useOpenRoute();
   const projects = useProjects();
+  const calls = useCalls();
   const { compactOverlay } = useSettings();
 
   const pickerProjects = useMemo(
@@ -151,12 +149,16 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
   );
   const [phase, setPhase] = useState<Phase>(initialPhase);
   const [choice, setChoice] = useState<Choice>({});
-  const projectId = resolveProjectId(projects, choice.projectId);
+  const projectId = resolveProjectId(
+    projects,
+    choice.projectId,
+    lastCallProjectId(calls, projects)
+  );
   const pickedPeople =
     choice.projectId === projectId ? choice.selectedIds : undefined;
   const selectedIds = useMemo(
-    () => pickedPeople ?? getLastCallParticipantIds(projectId),
-    [pickedPeople, projectId]
+    () => pickedPeople ?? lastCallParticipantIds(calls, projectId),
+    [calls, pickedPeople, projectId]
   );
   const [brief, setBrief] = useState<BriefProgress | null>(null);
 
@@ -178,7 +180,7 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
     [clientPeople, selectedIds]
   );
   const project = projects.find((item) => item.id === projectId);
-  const projectName = project?.name ?? "Звонок без проекта";
+  const projectName = project?.name ?? NO_PROJECT_CALL;
 
   // Shown for a project: Rust refreshes its brief if it is outdated. The
   // call doesn't wait; the fast loop takes the last brief that is ready.
@@ -251,7 +253,10 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
   const start = useCallback(async () => {
     setStarting(true);
     setError(null);
-    const started = await startRecording({ participants, projectId });
+    const started = await startCall({
+      participantIds: participants.map((person) => person.id),
+      projectId,
+    });
     setStarting(false);
     if (!started.ok) {
       setError(startError(started, openSettings));
@@ -259,8 +264,8 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
       return;
     }
     if (inTauri) {
-      // The overlay (or the call window) takes the call over.
-      openRoute(afterStartHref);
+      // The backend hid this window and showed the overlay (or the call
+      // window); the next call is offered from this one.
       setChoice({});
       setPhase("prompt");
       return;
@@ -268,7 +273,7 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
     setCallPeople(participants);
     setBrief(null);
     setPhase("launching");
-  }, [afterStartHref, openRoute, openSettings, participants, projectId]);
+  }, [openSettings, participants, projectId]);
   const collapse = useCallback(() => setPhase("collapsed"), []);
   const expand = useCallback(() => setPhase("prompt"), []);
   const hide = useCallback(() => {

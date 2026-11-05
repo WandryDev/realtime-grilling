@@ -2,18 +2,13 @@
 
 import { Effect, Stream } from "effect";
 
-import { startCall } from "@/data/call-session";
+import type { CallRecord } from "@/data/calls";
 import type { ClientPerson } from "@/data/people";
-import { runCancelable } from "@/effect/runtime";
+import { inTauri, runCancelable } from "@/effect/runtime";
 import {
   levelLabel,
   TECH_LEVEL_LABELS,
 } from "@/features/projects/project-data";
-import {
-  beginRecording,
-  finishRecordedCall,
-  type RecordingStart,
-} from "@/features/recording/api";
 
 import {
   type AgentEvent,
@@ -22,6 +17,7 @@ import {
 } from "./backend";
 import {
   LAST_CALL_PARTICIPANTS,
+  LAST_CALL_PROJECT_ID,
   NAME_FORMS,
   type Participant,
   PICKER_PROJECTS,
@@ -30,9 +26,9 @@ import {
 
 /*
  * React-facing side of the floating widgets:
- * - getLastCallParticipantIds / toPickerProject: who was on the project's
- *   last call (mock data until the calls store reads the backend)
- * - startRecording / endCall: start and stop the recorder with the call
+ * - lastCallProjectId / lastCallParticipantIds: what the start widget
+ *   offers, from the last call (in the browser, the demo's)
+ * - toPickerProject: the project rows of the picker
  * - buildBrief / subscribeToAgent: run the CallWidgetBackend Effect service
  *   (`./backend.ts`) and return a cancel function; call it on unmount.
  */
@@ -54,9 +50,61 @@ export function toParticipant(person: ClientPerson): Participant {
   };
 }
 
-/** Ids of the people preselected for a project: those of its last call. */
-export function getLastCallParticipantIds(projectId: string | null): string[] {
-  return projectId ? (LAST_CALL_PARTICIPANTS[projectId] ?? []) : [];
+/** The newest of `calls` by start (its creation without a start). */
+function newestCall(calls: readonly CallRecord[]): CallRecord | undefined {
+  let newest: CallRecord | undefined;
+  for (const call of calls) {
+    if (!newest || call.startedAt > newest.startedAt) {
+      newest = call;
+    }
+  }
+  return newest;
+}
+
+/**
+ * The project the start widget offers (spec «Виджет по последнему
+ * звонку»): the last call's while it exists (none for a call without a
+ * project), else the first project. The browser offers the demo's.
+ */
+export function lastCallProjectId(
+  calls: readonly CallRecord[],
+  projects: readonly { id: string }[]
+): string | null {
+  const first = projects[0]?.id ?? null;
+  if (!inTauri) {
+    const demo = projects.find(
+      (project) => project.id === LAST_CALL_PROJECT_ID
+    );
+    return demo?.id ?? first;
+  }
+  const last = newestCall(calls);
+  if (!last) {
+    return first;
+  }
+  if (last.projectId === null) {
+    return null;
+  }
+  const known = projects.some((project) => project.id === last.projectId);
+  return known ? last.projectId : first;
+}
+
+/**
+ * Ids of the people preselected for a project: those of its last call.
+ * People deleted since then drop out where the ids meet the project's
+ * people.
+ */
+export function lastCallParticipantIds(
+  calls: readonly CallRecord[],
+  projectId: string | null
+): string[] {
+  if (projectId === null) {
+    return [];
+  }
+  if (!inTauri) {
+    return LAST_CALL_PARTICIPANTS[projectId] ?? [];
+  }
+  const last = newestCall(calls.filter((call) => call.projectId === projectId));
+  return last?.participantIds ?? [];
 }
 
 /**
@@ -74,35 +122,6 @@ export function toPickerProject(project: {
     lastCall: known?.lastCall,
     name: project.name,
   };
-}
-
-/* ------------------------------------------------------------- Recording */
-
-/**
- * "Начать": starts recording, then the call with it. A failed start (no
- * microphone access) leaves the call as it was and says why.
- */
-export async function startRecording(input: {
-  participants: Participant[];
-  projectId: string | null;
-}): Promise<RecordingStart> {
-  const started = await beginRecording({
-    participantIds: input.participants.map((person) => person.id),
-    projectId: input.projectId,
-  });
-  if (started.ok) {
-    startCall({
-      participants: input.participants.map((person) => person.name),
-      projectId: input.projectId,
-      recordingId: started.id,
-    });
-  }
-  return started;
-}
-
-/** "Завершить": recording stops, the agent collects the summary. */
-export function endCall() {
-  finishRecordedCall();
 }
 
 /* ----------------------------------------------------------------- Brief */

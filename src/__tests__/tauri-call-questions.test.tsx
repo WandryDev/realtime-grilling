@@ -70,12 +70,14 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const { IDLE_RECORDING, fakeProject } = await import("./helpers/fake-tauri");
+const { IDLE_RECORDING, IDLE_SESSION, fakeProject, liveSession } = await import(
+  "./helpers/fake-tauri"
+);
 const { CallPage } = await import("@/features/call/pages/call-page");
 const { OverlayPage } = await import(
   "@/features/call-widget/pages/overlay-page"
 );
-const { currentCallSession, resetCall, startCall } = await import(
+const { currentCallSession, followCallSession } = await import(
   "@/data/call-session"
 );
 const { refreshProjects } = await import("@/data/projects");
@@ -187,19 +189,25 @@ beforeEach(async () => {
   fake.answers.set("agent_retry", () => null);
   await act(() => refreshProjects());
   await act(() => refreshSettings());
+  // The backend's call, live with the recording, in this window's session
+  // before the windows open.
+  followCallSession();
   act(() =>
-    startCall({
-      participants: ["Ольга"],
-      projectId: TELEMEDIA,
-      recordingId: RECORDING,
-    })
+    fake.setSession(
+      liveSession({
+        participants: ["Ольга"],
+        projectId: TELEMEDIA,
+        recordingId: RECORDING,
+      })
+    )
   );
+  await waitFor(() => expect(currentCallSession().recordingId).toBe(RECORDING));
   fake.invoked.length = 0;
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  act(() => resetCall());
+  act(() => fake.setSession(IDLE_SESSION));
   fake.recording = IDLE_RECORDING;
 });
 
@@ -562,7 +570,8 @@ describe("the agent's status in Tauri", () => {
   });
 
   it("stays calm when the agent thinks longer than usual", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    // The call's time runs from its start on the clock.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     const call = await openCall();
 
     await agentStatus({ kind: "thinking" });

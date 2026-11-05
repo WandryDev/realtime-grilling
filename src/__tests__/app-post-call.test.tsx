@@ -152,7 +152,7 @@ describe("summary", () => {
     vi.useFakeTimers();
     const add = vi.spyOn(toast, "add");
     act(() => {
-      startCall({ participants: ["Ольга Демченко"], projectId: "telemedia" });
+      startCall({ participantIds: ["olga"], projectId: "telemedia" });
       finishCall();
     });
     render(<SessionProbe />);

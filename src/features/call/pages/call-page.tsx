@@ -4,18 +4,25 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import { toast } from "@/components/ui/toast";
-import { startCall, useCallSession } from "@/data/call-session";
-import { useProject } from "@/data/projects";
+import {
+  type CallSession,
+  finishCall,
+  keepCall,
+  resumeCall,
+  startCall,
+  useCallSession,
+  useCallSessionLoaded,
+} from "@/data/call-session";
+import { NO_PROJECT_CALL } from "@/data/calls";
+import { getProjects, useProject } from "@/data/projects";
 import { autoEndSeconds, useSettings } from "@/data/settings";
 import { inTauri } from "@/effect/runtime";
 import {
-  adoptRunningRecording,
-  finishRecordedCall,
   releaseMicDemo,
-  resumeRecordedCall,
   subscribeToMicActivity,
   useRecordingSignal,
 } from "@/features/recording/api";
+import { showFloatingWindow } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
@@ -49,6 +56,7 @@ import {
 } from "../live-call";
 import { CALL_SCREENS } from "../mock";
 import { CallScreen } from "../screens/call-screen";
+import { NoCallScreen } from "../screens/no-call-screen";
 import type {
   CallFeedEvent,
   CallScreenActions,
@@ -67,14 +75,23 @@ import type {
  * «Повторить» go to the backend, which answers with a new state. Only
  * "Вернуться к темам" stays on the screen.
  *
- * "Микрофон освободился" comes from the microphone watch while the call is
- * live: the app's name and the time it let go, the countdown from the
- * "Завершать звонок сам" setting. "Продолжить" (or the app taking the
- * microphone back) hides it until the next release. In the browser the
- * script's last step frees the mock meeting app's microphone.
+ * In Tauri the call is the backend's (`useCallSession`): its project (or
+ * «Звонок без проекта»), people and start time. "Завершить" from any
+ * window, the tray or the countdown makes it `finishing`, and the window
+ * collects the summary; "Отменить завершение" asks the backend to record
+ * on. Without a call the window says so and offers to start one; it never
+ * starts the demo.
  *
- * Opened directly without a call in progress, it starts the demo call of
- * Телемедиа.
+ * "Микрофон освободился": the app's name and the time it let go, the
+ * countdown from the "Завершать звонок сам" setting. In Tauri it is the
+ * backend's countdown (`session.autoEnd`), shared by every window, and
+ * "Продолжить" stops it there. In the browser the window watches the
+ * mock's microphone while the call is live and counts down itself;
+ * "Продолжить" (or the app taking the microphone back) hides it until the
+ * next release, and the script's last step frees the microphone.
+ *
+ * In the browser, opened without a call in progress, it starts the demo
+ * call of Телемедиа.
  */
 
 /** States the dev navigator can force with `?demo=`. */
@@ -122,11 +139,30 @@ function feedStart(demo: CallDemoState | undefined) {
  * The window as it opens. In Tauri the transcript is the recognizer's and
  * the questions the backend's, so the starting call has none of the demo's.
  */
-function initialState(demo: CallDemoState | undefined): LiveCallState {
+function initialState({
+  demo,
+  startedAt,
+}: {
+  demo: CallDemoState | undefined;
+  startedAt: number | undefined;
+}): LiveCallState {
   if (demo) {
     return createLiveCall(CALL_SCREENS[demo]);
   }
-  return questionsFromBackend ? backendCall() : startingCall();
+  if (!questionsFromBackend) {
+    return startingCall();
+  }
+  const call = backendCall();
+  const elapsed = callSeconds(startedAt);
+  return elapsed === undefined ? call : { ...call, elapsed };
+}
+
+/** Tauri: seconds since the backend's call started; the demo counts its own. */
+function callSeconds(startedAt: number | undefined) {
+  if (!inTauri || startedAt === undefined) {
+    return;
+  }
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 }
 
 /** A backend update into the window. */
@@ -156,16 +192,50 @@ function actionFailed(description: string | null) {
   }
 }
 
+/**
+ * The title bar's project: in Tauri the call's, or «Звонок без проекта»;
+ * the browser falls back to the demo's.
+ */
+function projectTitle(
+  session: CallSession,
+  name: string | undefined,
+  demo: string
+) {
+  if (!inTauri) {
+    return name ?? demo;
+  }
+  return session.projectId === null
+    ? NO_PROJECT_CALL
+    : (name ?? NO_PROJECT_CALL);
+}
+
 /** Id of the question pinned in the topic, if any. */
 function pinnedIn(state: LiveCallState, topicId: string) {
   const { current } = state.data.questions;
   return current?.id === topicId ? current.pinned?.id : undefined;
 }
 
+/** «Начать звонок» without a call: the start widget, over the windows. */
+function openStartWidget() {
+  showFloatingWindow(routes.startWidget());
+}
+
 export function CallPage() {
   const demo = useDemoState(CALL_DEMO_STATES);
-  // A forced state starts the window over
-  return <LiveCallWindow demo={demo} key={demo ?? "live"} />;
+  const session = useCallSession();
+  const loaded = useCallSessionLoaded();
+  if (inTauri && demo === undefined) {
+    if (!loaded) {
+      return <div aria-busy="true" className="bg-surface h-svh" />;
+    }
+    if (session.status === "idle") {
+      return <NoCallScreen className="h-svh" onStartCall={openStartWidget} />;
+    }
+  }
+  // A forced state starts the window over, and so does a new call (the
+  // main window stays loaded from one call to the next).
+  const key = inTauri ? `${demo ?? "live"}:${session.callId}` : demo;
+  return <LiveCallWindow demo={demo} key={key ?? "live"} />;
 }
 
 /**
@@ -205,13 +275,19 @@ function usePendingOperations() {
 function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   const router = useRouter();
   const session = useCallSession();
-  const project = useProject(session.projectId ?? DEMO_PROJECT_ID);
-  const [state, dispatch] = useReducer(liveCallReducer, demo, initialState);
+  const project = useProject(
+    inTauri ? session.projectId : (session.projectId ?? DEMO_PROJECT_ID)
+  );
+  const { callId, recordingId, startedAt } = session;
+  const [state, dispatch] = useReducer(
+    liveCallReducer,
+    { demo, startedAt },
+    initialState
+  );
   const track = usePendingOperations();
   const { autoEnd } = useSettings();
   const signal = useRecordingSignal();
 
-  const { callId, recordingId, startedAt } = session;
   const finishing = Boolean(state.data.finishing);
   const fromBackend = state.backend !== null;
 
@@ -220,31 +296,50 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   useEffect(() => {
     latest.current = state;
   }, [state]);
-  const projectName = project?.name ?? state.data.call.project;
+  const projectName = projectTitle(
+    session,
+    project?.name,
+    state.data.call.project
+  );
 
-  // Opened without a call in progress: start the demo call. Either way the
-  // recording running now is the call's, also one this window never heard
-  // of (it opened before the widget's session reached it, or reloaded).
+  // The browser, opened without a call in progress: start the demo call.
   const sessionChecked = useRef<boolean>(false);
   useEffect(() => {
-    if (sessionChecked.current) {
+    if (inTauri || sessionChecked.current) {
       return;
     }
     sessionChecked.current = true;
     if (session.status !== "live") {
-      startCall({ participants: [], projectId: DEMO_PROJECT_ID });
+      const known = getProjects().some((item) => item.id === DEMO_PROJECT_ID);
+      startCall({
+        participantIds: [],
+        projectId: known ? DEMO_PROJECT_ID : null,
+      });
     }
-    adoptRunningRecording();
   }, [session.status]);
 
-  // The clock: call time and countdowns
+  // "Завершить" from another window, the tray or the countdown, and
+  // "Отменить завершение": the window follows the session.
+  const sessionStatus = session.status;
+  useEffect(() => {
+    if (sessionStatus === "finishing" && !latest.current.data.finishing) {
+      dispatch({ project: projectName, type: "finish-start" });
+    } else if (sessionStatus === "live" && latest.current.data.finishing) {
+      dispatch({ type: "finish-cancel" });
+    }
+  }, [projectName, sessionStatus]);
+
+  // The clock: call time (in Tauri from the call's start) and countdowns
   useEffect(() => {
     if (finishing) {
       return;
     }
-    const timer = setInterval(() => dispatch({ type: "tick" }), 1000);
+    const timer = setInterval(
+      () => dispatch({ elapsed: callSeconds(startedAt), type: "tick" }),
+      1000
+    );
     return () => clearInterval(timer);
-  }, [finishing]);
+  }, [finishing, startedAt]);
 
   // The agent and the recorder; pauses while finishing, resumes on cancel
   const feedPosition = useRef(feedStart(demo));
@@ -271,36 +366,58 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     return subscribeToCallAgent(recordingId, agentHandler(dispatch, startedAt));
   }, [fromBackend, recordingId, startedAt]);
 
-  // The meeting app and the microphone: a release while the call is live
-  // offers to end it, the app taking the microphone back hides the offer.
+  // Tauri: the backend's countdown after the meeting app let go; none
+  // means "Продолжить" or the app taking the microphone back.
+  const shared = session.autoEnd;
+  const ownCountdown = !inTauri || demo !== undefined;
+  useEffect(() => {
+    if (ownCountdown) {
+      return;
+    }
+    if (shared === null) {
+      dispatch({ type: "mic-continue" });
+      return;
+    }
+    dispatch({
+      app: shared.app,
+      now: Date.now(),
+      releasedAt: shared.releasedAt,
+      timeout: Math.round((shared.endsAt - shared.releasedAt) / 1000),
+      type: "mic-released",
+    });
+  }, [ownCountdown, shared]);
+
+  // The browser: a release while the call is live offers to end it, the
+  // app taking the microphone back hides the offer.
   const live = session.status === "live";
   const watch = useRef({ live, timeout: autoEndSeconds(autoEnd) });
   useEffect(() => {
     watch.current = { live, timeout: autoEndSeconds(autoEnd) };
   }, [autoEnd, live]);
-  useEffect(
-    () =>
-      subscribeToMicActivity((activity) => {
-        if (activity.busy) {
-          dispatch({ type: "mic-continue" });
-          return;
-        }
-        if (watch.current.live) {
-          dispatch({
-            app: activity.app,
-            now: Date.now(),
-            releasedAt: activity.since,
-            timeout: watch.current.timeout,
-            type: "mic-released",
-          });
-        }
-      }),
-    []
-  );
+  useEffect(() => {
+    if (inTauri) {
+      return;
+    }
+    return subscribeToMicActivity((activity) => {
+      if (activity.busy) {
+        dispatch({ type: "mic-continue" });
+        return;
+      }
+      if (watch.current.live) {
+        dispatch({
+          app: activity.app,
+          now: Date.now(),
+          releasedAt: activity.since,
+          timeout: watch.current.timeout,
+          type: "mic-released",
+        });
+      }
+    });
+  }, []);
 
   // "Собираю итоги": steps, then the summary of the call
   useEffect(() => {
-    if (!finishing) {
+    if (!(finishing && callId)) {
       return;
     }
     return collectSummary(
@@ -319,7 +436,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   }, [lagging]);
 
   const end = useCallback(() => {
-    finishRecordedCall();
+    finishCall();
     dispatch({ project: projectName, type: "finish-start" });
   }, [projectName]);
 
@@ -351,8 +468,9 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     );
   }, [fromBackend, recordingId, track]);
 
-  // Zero on the mic countdown ends the call; zero on the agent's retries
-  const micExpired = state.micLeft === 0;
+  // Zero on the mic countdown ends the call (in Tauri the backend ends it,
+  // also with every window hidden); zero on the agent's retries
+  const micExpired = state.micLeft === 0 && ownCountdown;
   useEffect(() => {
     if (micExpired) {
       end();
@@ -427,13 +545,22 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
   );
 
   const onCancelFinish = useCallback(() => {
-    resumeRecordedCall();
+    resumeCall();
     dispatch({ type: "finish-cancel" });
   }, []);
 
   const onCloseWindow = useCallback(() => {
-    router.push(routes.callSummary(callId));
+    if (callId) {
+      router.push(routes.callSummary(callId));
+    }
   }, [callId, router]);
+
+  const onMicContinue = useCallback(() => {
+    if (inTauri) {
+      keepCall();
+    }
+    dispatch({ type: "mic-continue" });
+  }, []);
 
   const onQuestionAction = useCallback(
     (topicId: string, questionId: string, action: QuestionQuickAction) => {
@@ -489,7 +616,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       onCloseWindow,
       onEnd: end,
       onLeaveFinalCheck: () => dispatch({ type: "leave-final-check" }),
-      onMicContinue: () => dispatch({ type: "mic-continue" }),
+      onMicContinue,
       onQuestionAction,
       onReconnect,
       onRestore,
@@ -502,6 +629,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       onBannerAction,
       onCancelFinish,
       onCloseWindow,
+      onMicContinue,
       onQuestionAction,
       onReconnect,
       onRestore,
@@ -517,7 +645,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
         ...screen.call,
         level: signal.level,
         participants:
-          session.participants.length > 0
+          inTauri || session.participants.length > 0
             ? session.participants.join(", ")
             : screen.call.participants,
         project: projectName,

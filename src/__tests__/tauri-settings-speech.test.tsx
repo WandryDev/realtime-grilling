@@ -49,7 +49,7 @@ vi.mock("next/navigation", () => ({
 const { AudioSection } = await import(
   "@/features/settings/pages/audio-section"
 );
-const { resetCall, startCall } = await import("@/data/call-session");
+const { IDLE_SESSION, liveSession } = await import("./helpers/fake-tauri");
 const { refreshSettings } = await import("@/data/settings");
 const { toast } = await import("@/components/ui/toast");
 
@@ -105,7 +105,7 @@ beforeEach(async () => {
     model("small", { status: "notDownloaded" }),
   ]);
   await act(() => refreshSettings());
-  act(() => resetCall());
+  act(() => fake.setSession(IDLE_SESSION));
   fake.invoked.length = 0;
 });
 
@@ -172,7 +172,7 @@ describe("Звук и распознавание in Tauri", () => {
       model("turbo", READY),
       model("small", READY),
     ]);
-    act(() => startCall({ participants: [], projectId: null }));
+    act(() => fake.setSession(liveSession()));
     render(<AudioSection />);
     await screen.findByText("Whisper small");
 

@@ -103,6 +103,18 @@ describe("/call", () => {
     expect(screen.getByText(AMO_QUESTION)).toBeTruthy();
   });
 
+  it("Демо в браузере: opened without a call, it starts the demo call", () => {
+    openCall();
+
+    const { result, unmount } = renderHook(() => useCallSession());
+    expect(result.current.status).toBe("live");
+    expect(result.current.callId).toBe(CURRENT_CALL_ID);
+    expect(result.current.projectId).toBe("telemedia");
+    unmount();
+    expect(screen.getByText("Телемедиа")).toBeTruthy();
+    expect(screen.getByText("с Ольгой и Игорем")).toBeTruthy();
+  });
+
   it("moves a question to the topic history and back", () => {
     openCall("reference");
 

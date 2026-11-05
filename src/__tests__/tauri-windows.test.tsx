@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * - the hidden main window never leaves for onboarding, and opens the
  *   routes sent to it whatever page it shows;
  * - the start widget and the overlay hand over to other windows instead of
- *   loading their pages, and share the call in progress;
+ *   loading their pages; at the start and the end of a call the backend
+ *   moves the windows, and every window follows its call in progress;
  * - the widget's project comes from the live list.
  */
 
@@ -66,7 +67,9 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.search,
 }));
 
-const { fakeProject } = await import("./helpers/fake-tauri");
+const { IDLE_SESSION, fakeProject, liveSession } = await import(
+  "./helpers/fake-tauri"
+);
 
 const TELEMEDIA = "019a0000-0000-7000-8000-000000000001";
 const LAPA = "019a0000-0000-7000-8000-000000000002";
@@ -79,9 +82,7 @@ const { StartWidgetPage } = await import(
 const { OverlayPage } = await import(
   "@/features/call-widget/pages/overlay-page"
 );
-const { CURRENT_CALL_ID, resetCall, useCallSession } = await import(
-  "@/data/call-session"
-);
+const { useCallSession } = await import("@/data/call-session");
 const { routes } = await import("@/lib/routes");
 const { refreshProjects } = await import("@/data/projects");
 
@@ -119,7 +120,8 @@ beforeEach(async () => {
   // The stores outlive a test: read the reset tables.
   await act(() => refreshProjects());
   fake.invoked.length = 0;
-  act(() => resetCall());
+  fake.db.calls.length = 0;
+  act(() => fake.setSession(IDLE_SESSION));
 });
 
 describe("main window", () => {
@@ -195,39 +197,33 @@ describe("start widget window", () => {
     expect(screen.queryByText("Телемедиа")).toBeNull();
   });
 
-  it("hands the call over to the overlay window on «Начать»", async () => {
+  it("leaves the windows to the backend on «Начать»", async () => {
     win.label = "widget";
     nav.pathname = "/widget";
     render(
       <AppFrame>
         <StartWidgetPage />
+        <SessionProbe />
       </AppFrame>
     );
     await screen.findByText("Телемедиа");
-    const shared = vi.fn();
-    fake.handlers.get("call-session-changed")?.add(shared);
 
     fireEvent.click(screen.getByRole("button", { name: "Начать" }));
 
     await waitFor(() =>
-      expect(invokedWith("windows_show")).toEqual([
-        { label: "overlay", route: null },
-      ])
+      expect(screen.getByRole("status", { name: "Сессия" }).textContent).toBe(
+        "live"
+      )
     );
-    await waitFor(() => expect(win.hide).toHaveBeenCalled());
+    expect(invokedWith("call_start")).toEqual([
+      { input: { participantIds: [], projectId: TELEMEDIA } },
+    ]);
+    // The backend hides the widget and shows the overlay: no window moves
+    // from here, and nothing is sent to the other windows.
+    expect(invokedWith("windows_show")).toEqual([]);
+    expect(win.hide).not.toHaveBeenCalled();
     expect(nav.push).not.toHaveBeenCalled();
-    // The overlay content never shows in the widget window.
     expect(screen.queryByRole("heading", { name: "Готовлю бриф" })).toBeNull();
-    expect(shared).toHaveBeenCalledWith({
-      payload: {
-        session: expect.objectContaining({
-          projectId: TELEMEDIA,
-          status: "live",
-        }),
-        source: "widget",
-      },
-    });
-    fake.handlers.get("call-session-changed")?.delete(shared);
   });
 
   it("hides the window with the pill's ×", async () => {
@@ -249,12 +245,9 @@ describe("start widget window", () => {
 });
 
 describe("overlay window", () => {
-  it("takes over the call another window started and hands over the summary", async () => {
+  it("follows the backend's call and leaves the summary to it", async () => {
     win.label = "overlay";
     nav.pathname = "/overlay";
-    // In Tauri the overlay offers to end the call once the meeting app
-    // lets the microphone go.
-    nav.search = new URLSearchParams({ demo: "mic-released" });
     render(
       <AppFrame>
         <OverlayPage />
@@ -263,17 +256,16 @@ describe("overlay window", () => {
     );
     await waitFor(() => expect(sessionEvents()).toHaveLength(1));
 
+    // The widget started a call; the backend tells every window.
+    const now = Date.now();
     act(() =>
-      fake.emit("call-session-changed", {
-        session: {
-          callId: CURRENT_CALL_ID,
+      fake.setSession(
+        liveSession({
+          autoEnd: { app: "Zoom", endsAt: now + 600_000, releasedAt: now },
           participants: ["Ольга"],
           projectId: LAPA,
-          startedAt: Date.now(),
-          status: "live",
-        },
-        source: "widget",
-      })
+        })
+      )
     );
     expect(await screen.findByText("Ветклиника Лапа")).toBeTruthy();
     expect(screen.getByRole("status", { name: "Сессия" }).textContent).toBe(
@@ -283,16 +275,17 @@ describe("overlay window", () => {
     fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
 
     await waitFor(() =>
-      expect(invokedWith("windows_show")).toEqual([
-        { label: "main", route: routes.callSummary(CURRENT_CALL_ID) },
-      ])
+      expect(invokedWith("call_finish")).toEqual([{ callId: "fake-call-live" }])
     );
-    await waitFor(() => expect(win.hide).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Сессия" }).textContent).toBe(
+        "finishing"
+      )
+    );
+    // The backend hides the overlay and opens the summary in main.
+    expect(invokedWith("windows_show")).toEqual([]);
+    expect(win.hide).not.toHaveBeenCalled();
     expect(nav.push).not.toHaveBeenCalled();
-    // Its own change came back from Rust and is not applied twice.
-    expect(screen.getByRole("status", { name: "Сессия" }).textContent).toBe(
-      "finishing"
-    );
   });
 
   it("opens the call window in the main window", async () => {

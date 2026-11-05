@@ -78,7 +78,8 @@ export interface LiveCallState {
 
 export type LiveCallAction =
   | { event: CallFeedEvent; type: "feed" }
-  | { type: "tick" }
+  /** A second passed; `elapsed`: the call's length from its start. */
+  | { elapsed?: number; type: "tick" }
   | {
       action: QuestionQuickAction;
       questionId: string;
@@ -870,7 +871,9 @@ export function liveCallReducer(
           state.agentRetryIn === null
             ? null
             : Math.max(0, state.agentRetryIn - 1),
-        elapsed: data.finishing ? state.elapsed : state.elapsed + 1,
+        elapsed: data.finishing
+          ? state.elapsed
+          : (action.elapsed ?? state.elapsed + 1),
         micLeft: state.micLeft === null ? null : Math.max(0, state.micLeft - 1),
       };
     case "question":

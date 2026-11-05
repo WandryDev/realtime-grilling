@@ -11,7 +11,14 @@ import {
 
 import type { CallState } from "@/bindings";
 import { toast } from "@/components/ui/toast";
-import { type CallStatus, useCallSession } from "@/data/call-session";
+import {
+  type CallSession,
+  CURRENT_CALL_ID,
+  finishCall,
+  keepCall,
+  useCallSession,
+} from "@/data/call-session";
+import { NO_PROJECT_CALL } from "@/data/calls";
 import { useProject } from "@/data/projects";
 import { autoEndSeconds, useSettings } from "@/data/settings";
 import { inTauri } from "@/effect/runtime";
@@ -37,7 +44,7 @@ import { useOpenRoute } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
-import { endCall, subscribeToAgent } from "../api";
+import { subscribeToAgent } from "../api";
 import type { AgentEvent } from "../backend";
 import { DesktopStage } from "../components/desktop-stage";
 import {
@@ -62,16 +69,19 @@ import {
  * /overlay: the compact overlay over the meeting app during a call. New
  * questions arrive from the agent's feed; collapsed, a new one shows as a
  * card under the pill for 8 seconds. When the meeting app lets the
- * microphone go (`micActivity` free, while the call runs), the offer to end
- * the call replaces the overlay, names the app and the time it left, and
- * counts down to the auto end from Settings. "Продолжить" hides it until
- * the microphone is freed again; the app taking it back hides it too. In
- * the browser "Выйти из встречи" in the stand-in Zoom frees the mock's.
+ * microphone go, the offer to end the call replaces the overlay, names the
+ * app and the time it left, and counts down to the auto end from Settings.
+ * "Продолжить" hides it until the microphone is freed again; the app
+ * taking it back hides it too. In the browser the overlay watches the
+ * mock's microphone ("Выйти из встречи" in the stand-in Zoom frees it) and
+ * counts down itself.
  *
  * In Tauri the overlay is its own window, the only one hidden from screen
- * sharing. It shows the call the start widget started (the session is
- * shared between windows) and starts over with each new call. The call
- * window and the summary open in the main window, and the overlay hides.
+ * sharing. It shows the backend's call (its project, or «Звонок без
+ * проекта») and starts over with each new call. The countdown is the
+ * backend's (`session.autoEnd`), which ends the call when it runs out.
+ * "Завершить" asks the backend, which hides the overlay and opens the
+ * summary in the main window; the call window opens there too.
  * Its questions are the backend's, the same as in the call window: the
  * current topic's main question and two more, or the agent's final check;
  * "Скрыть вопрос" hides one in every window. In the browser they come from
@@ -278,8 +288,22 @@ interface Release {
 function countdown(
   release: Release | null,
   autoEnd: string,
-  now: number | null
+  now: number | null,
+  session: CallSession
 ): { elapsed: number; remaining: number | null } {
+  const shared = session.autoEnd;
+  if (inTauri && shared) {
+    const total = (shared.endsAt - shared.releasedAt) / 1000;
+    // Whole seconds, like the clock the overlay ticks with.
+    const remaining =
+      now === null
+        ? total
+        : Math.max(0, Math.floor(shared.endsAt / 1000) - now);
+    return {
+      elapsed: total > 0 ? ((total - remaining) / total) * 100 : 100,
+      remaining,
+    };
+  }
   const total = autoEndSeconds(autoEnd);
   const at = release?.at ?? null;
   const passed = at !== null && now !== null ? Math.max(0, now - at) : 0;
@@ -289,20 +313,29 @@ function countdown(
   return { elapsed: (passed / total) * 100, remaining: total - passed };
 }
 
+/** The backend's countdown (Tauri): the release it started from. */
+function releaseOf(autoEnd: CallSession["autoEnd"]): Release | null {
+  return autoEnd
+    ? { app: autoEnd.app, at: Math.floor(autoEnd.releasedAt / 1000) }
+    : null;
+}
+
 /**
- * The meeting app and the microphone: a release while the call runs (in
- * Tauri a live session, in the browser the demo call too) offers to end
- * it, the app taking the microphone back withdraws the offer. Returns the
+ * The meeting app and the microphone. In Tauri the backend counts down
+ * (`session.autoEnd`, the same in every window) and "Продолжить" stops it
+ * there. In the browser a release while the call runs offers to end it,
+ * the app taking the microphone back withdraws the offer. Returns the
  * release on screen and "Продолжить", which hides it.
  */
 function useMicRelease(
   demo: boolean,
-  status: CallStatus,
+  session: CallSession,
   now: number | null
 ): [Release | null, () => void] {
   const [release, setRelease] = useState<Release | null>(
     demo ? { app: MEETING_APP, at: null } : null
   );
+  const fromBackend = inTauri && !demo;
 
   // ?demo=mic-released: the microphone went free just now.
   useEffect(() => {
@@ -311,30 +344,39 @@ function useMicRelease(
     }
   }, [now, release]);
 
-  const running = inTauri ? status === "live" : status !== "finishing";
+  const running = inTauri
+    ? session.status === "live"
+    : session.status !== "finishing";
   const runningRef = useRef(running);
   useEffect(() => {
     runningRef.current = running;
   }, [running]);
-  useEffect(
-    () =>
-      subscribeToMicActivity((activity: MicActivity) => {
-        if (activity.busy) {
-          setRelease(null);
-          return;
-        }
-        if (runningRef.current) {
-          setRelease({
-            app: activity.app,
-            at: Math.floor(activity.since / 1000),
-          });
-        }
-      }),
-    []
-  );
+  useEffect(() => {
+    if (fromBackend) {
+      return;
+    }
+    return subscribeToMicActivity((activity: MicActivity) => {
+      if (activity.busy) {
+        setRelease(null);
+        return;
+      }
+      if (runningRef.current) {
+        setRelease({
+          app: activity.app,
+          at: Math.floor(activity.since / 1000),
+        });
+      }
+    });
+  }, [fromBackend]);
 
-  const hide = useCallback(() => setRelease(null), []);
-  return [release, hide];
+  const hide = useCallback(() => {
+    if (fromBackend) {
+      keepCall();
+      return;
+    }
+    setRelease(null);
+  }, [fromBackend]);
+  return [fromBackend ? releaseOf(session.autoEnd) : release, hide];
 }
 
 /** What the overlay draws of the questions and the agent. */
@@ -480,16 +522,17 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
   );
   const [release, keepRecording] = useMicRelease(
     demo === "mic-released",
-    session.status,
+    session,
     now
   );
   const micReleased = release !== null;
   const signal = useRecordingSignal();
 
   const time = useCallTime(finalCheck ? OVERLAY.timeFinalCheck : OVERLAY.time);
-  let projectName = CALL_PROJECT;
+  // The browser shows the demo call until one starts; Tauri never does.
+  let projectName = inTauri ? NO_PROJECT_CALL : CALL_PROJECT;
   if (session.status !== "idle") {
-    projectName = project?.name ?? "Без проекта";
+    projectName = project?.name ?? NO_PROJECT_CALL;
   }
 
   // The new-question card hides itself after 8 seconds.
@@ -501,25 +544,33 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
     return () => clearTimeout(timer);
   }, [incoming]);
 
-  // Ends once: the auto end keeps ticking until the page is gone
+  // Ends once: the auto end keeps ticking until the page is gone. In
+  // Tauri the backend hides the overlay and opens the summary in the main
+  // window.
   const ended = useRef<boolean>(false);
+  const { callId } = session;
   const end = useCallback(() => {
     if (ended.current) {
       return;
     }
     ended.current = true;
-    endCall();
-    openRoute(routes.callSummary(session.callId));
-  }, [openRoute, session.callId]);
+    finishCall();
+    // The browser's overlay without a call is the demo's: its summary.
+    if (!inTauri) {
+      openRoute(routes.callSummary(callId ?? CURRENT_CALL_ID));
+    }
+  }, [callId, openRoute]);
 
-  const { elapsed, remaining } = countdown(release, autoEnd, now);
+  const { elapsed, remaining } = countdown(release, autoEnd, now, session);
 
-  // The countdown ran out: the call ends by itself.
+  // The countdown ran out: the call ends by itself (in Tauri the backend
+  // ends it, also with every window hidden).
+  const ownCountdown = !inTauri || demo !== undefined;
   useEffect(() => {
-    if (micReleased && remaining !== null && remaining <= 0) {
+    if (ownCountdown && micReleased && remaining !== null && remaining <= 0) {
       end();
     }
-  }, [end, micReleased, remaining]);
+  }, [end, micReleased, ownCountdown, remaining]);
 
   const collapse = useCallback(() => {
     setIncoming(null);

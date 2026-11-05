@@ -13,14 +13,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * The recorder and the microphone watch in Tauri mode, over the fake IPC
  * (./helpers/fake-tauri.ts):
  * - RecordingBackend.layerTauri decodes the Rust commands and events;
- * - «Начать» starts the recording before the call, «Завершить» stops it,
- *   no microphone access keeps the call from starting;
+ * - «Начать» asks the backend to start the call (it records it and moves
+ *   the windows), no microphone access keeps the call from starting;
  * - the start widget names the app holding the microphone;
- * - «Микрофон освободился» opens on a release while the call is live;
- * - the recording indicators show the levels and a channel's trouble;
- * - «Отменить завершение» records on, «Завершить» while that recording
- *   starts stops it, and ending from a window that never heard of the
- *   recording stops it too.
+ * - «Микрофон освободился» is the backend's countdown in both windows,
+ *   «Продолжить» stops it there;
+ * - the recording indicators show the levels and a channel's trouble.
  */
 
 const fake = await vi.hoisted(async () => {
@@ -69,9 +67,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.search,
 }));
 
-const { fakeProject, FAKE_RECORDING_PREFIX, IDLE_RECORDING } = await import(
-  "./helpers/fake-tauri"
-);
+const {
+  fakeProject,
+  FAKE_RECORDING_PREFIX,
+  IDLE_RECORDING,
+  IDLE_SESSION,
+  liveSession,
+} = await import("./helpers/fake-tauri");
 const { RecordingBackend } = await import("@/features/recording/backend");
 const { StartWidgetPage } = await import(
   "@/features/call-widget/pages/start-widget-page"
@@ -80,11 +82,7 @@ const { OverlayPage } = await import(
   "@/features/call-widget/pages/overlay-page"
 );
 const { CallPage } = await import("@/features/call/pages/call-page");
-const { resetCall, startCall, useCallSession } = await import(
-  "@/data/call-session"
-);
-const { finishRecordedCall } = await import("@/features/recording/api");
-const { toast } = await import("@/components/ui/toast");
+const { useCallSession } = await import("@/data/call-session");
 const { refreshProjects } = await import("@/data/projects");
 const { refreshSettings } = await import("@/data/settings");
 const { routes } = await import("@/lib/routes");
@@ -93,7 +91,7 @@ const TELEMEDIA = "019a0000-0000-7000-8000-000000000001";
 const FIRST_RECORDING = `${FAKE_RECORDING_PREFIX}1`;
 const MIC_RELEASED = "Микрофон больше не используется. Завершить звонок?";
 const LIVE_RECORDED = /^live:fake-recording-\d+$/u;
-const LIVE = /^live:/u;
+const FINISHING = "Собираю итоги…";
 const NO_OTHERS_ACCESS = /Нет доступа к звуку собеседников/u;
 
 function invokedWith(command: string) {
@@ -132,14 +130,19 @@ function sessionText() {
   return screen.getByRole("status", { name: "Сессия" }).textContent;
 }
 
-function startLiveCall(recordingId?: string) {
+/** The backend's live call of Телемедиа; `autoEnd` once the app let go. */
+function startLiveCall(session: Parameters<typeof liveSession>[0] = {}) {
   act(() =>
-    startCall({
-      participants: ["Ольга"],
-      projectId: TELEMEDIA,
-      ...(recordingId ? { recordingId } : {}),
-    })
+    fake.setSession(
+      liveSession({ participants: ["Ольга"], projectId: TELEMEDIA, ...session })
+    )
   );
+}
+
+/** The backend counts down after `app` let the microphone go. */
+function countdown(app: string, minutes: number) {
+  const now = Date.now();
+  return { app, endsAt: now + minutes * 60_000, releasedAt: now };
 }
 
 beforeEach(async () => {
@@ -150,6 +153,7 @@ beforeEach(async () => {
   fake.failures.clear();
   fake.answers.clear();
   fake.recording = IDLE_RECORDING;
+  fake.recordFailure = null;
   fake.micActivity = { app: "Zoom", busy: true, since: Date.now() };
   fake.db.projects.splice(
     0,
@@ -157,9 +161,10 @@ beforeEach(async () => {
     fakeProject(TELEMEDIA, "Телемедиа")
   );
   fake.db.settings = { onboardingCompleted: true };
+  fake.db.calls.length = 0;
   await act(() => refreshProjects());
   await act(() => refreshSettings());
-  act(() => resetCall());
+  act(() => fake.setSession(IDLE_SESSION));
   fake.invoked.length = 0;
 });
 
@@ -317,7 +322,7 @@ describe("RecordingBackend.layerTauri", () => {
 });
 
 describe("start widget", () => {
-  it("starts the recording, then the call with it; «Завершить» stops it", async () => {
+  it("asks the backend to start the call and leaves the windows to it", async () => {
     render(
       <>
         <StartWidgetPage />
@@ -329,38 +334,43 @@ describe("start widget", () => {
     fireEvent.click(screen.getByRole("button", { name: "Начать" }));
 
     await waitFor(() => expect(sessionText()).toMatch(LIVE_RECORDED));
-    const recordingId = fake.recording.id;
-    expect(sessionText()).toBe(`live:${recordingId}`);
-    // The project goes with it, for the speech model's glossary.
-    expect(invokedWith("recording_start")).toEqual([
-      { input: { callId: null, participantIds: [], projectId: TELEMEDIA } },
+    expect(sessionText()).toBe(`live:${fake.recording.id}`);
+    // The project goes with it: the backend records the call.
+    expect(invokedWith("call_start")).toEqual([
+      { input: { participantIds: [], projectId: TELEMEDIA } },
     ]);
-    await waitFor(() =>
-      expect(invokedWith("windows_show")).toEqual([
-        { label: "overlay", route: null },
-      ])
-    );
+    expect(invokedWith("recording_start")).toEqual([]);
+    // The backend hides the widget and shows the overlay.
+    expect(invokedWith("windows_show")).toEqual([]);
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(nav.push).not.toHaveBeenCalled();
 
     // The overlay window takes the call over; it ends once the meeting
     // app lets the microphone go.
     win.label = "overlay";
     render(<OverlayPage />);
-    await listening("mic-activity-changed");
-    micEvent({ app: "Zoom", busy: false, since: Date.now() });
+    act(() =>
+      fake.setSession({ ...fake.session, autoEnd: countdown("Zoom", 10) })
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Завершить" }));
 
     await waitFor(() =>
-      expect(invokedWith("recording_stop")).toEqual([{ id: recordingId }])
+      expect(invokedWith("call_finish")).toEqual([
+        { callId: fake.session.callId },
+      ])
     );
-    expect(sessionText()).toBe(`finishing:${recordingId}`);
+    await waitFor(() => expect(sessionText()).toMatch("finishing:"));
+    // The backend hides the overlay and opens the summary.
+    expect(invokedWith("windows_show")).toEqual([]);
+    expect(win.hide).not.toHaveBeenCalled();
   });
 
   it("keeps the call from starting without microphone access", async () => {
-    fake.failures.set("recording_start", {
+    fake.recordFailure = {
       kind: "External",
       message: "Нет доступа к микрофону",
       reason: "noAccess",
-    });
+    };
     render(
       <>
         <StartWidgetPage />
@@ -374,6 +384,7 @@ describe("start widget", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Нет доступа к микрофону");
     expect(sessionText()).toBe("idle:—");
+    expect(fake.db.calls).toEqual([]);
     expect(invokedWith("windows_show")).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: "Открыть настройки" }));
@@ -405,12 +416,17 @@ describe("«Микрофон освободился» in the overlay", () => {
     win.label = "overlay";
   });
 
-  it("opens on a release while the call is live; «Продолжить» hides it", async () => {
+  it("shows the backend's countdown; «Продолжить» stops it there", async () => {
     startLiveCall();
     render(<OverlayPage />);
-    await listening("mic-activity-changed");
+    await screen.findByText("Телемедиа");
 
-    micEvent({ app: "Google Chrome", busy: false, since: Date.now() });
+    act(() =>
+      fake.setSession({
+        ...fake.session,
+        autoEnd: countdown("Google Chrome", 10),
+      })
+    );
 
     expect(
       await screen.findByRole("heading", { level: 1, name: MIC_RELEASED })
@@ -418,28 +434,25 @@ describe("«Микрофон освободился» in the overlay", () => {
     expect(
       screen.getByText("Google Chrome отпустил микрофон", { exact: false })
     ).toBeTruthy();
-    // "Завершать звонок сам" is 10 minutes by default.
     expect(screen.getByText("10:00")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
-    expect(
-      screen.queryByRole("heading", { level: 1, name: MIC_RELEASED })
-    ).toBeNull();
-
-    // Only the next busy → free opens it again.
-    micEvent({ app: "Google Chrome", busy: true, since: Date.now() });
-    expect(
-      screen.queryByRole("heading", { level: 1, name: MIC_RELEASED })
-    ).toBeNull();
-    micEvent({ app: "Google Chrome", busy: false, since: Date.now() });
-    expect(
-      await screen.findByRole("heading", { level: 1, name: MIC_RELEASED })
-    ).toBeTruthy();
+    await waitFor(() =>
+      expect(invokedWith("call_keep")).toEqual([
+        { callId: fake.session.callId },
+      ])
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { level: 1, name: MIC_RELEASED })
+      ).toBeNull()
+    );
   });
 
-  it("ignores a release without a live call", async () => {
+  it("leaves the microphone to the backend: a release alone opens nothing", async () => {
+    startLiveCall();
     render(<OverlayPage />);
-    await listening("mic-activity-changed");
+    await screen.findByText("Телемедиа");
 
     micEvent({ app: "Zoom", busy: false, since: Date.now() });
 
@@ -447,6 +460,7 @@ describe("«Микрофон освободился» in the overlay", () => {
     expect(
       screen.queryByRole("heading", { level: 1, name: MIC_RELEASED })
     ).toBeNull();
+    expect(listeners("mic-activity-changed")).toBe(0);
   });
 
   it("shows the levels and a channel without access on the indicator", async () => {
@@ -457,7 +471,7 @@ describe("«Микрофон освободился» in the overlay", () => {
       startedAt: Date.now(),
       transcription: { state: "ok" },
     };
-    startLiveCall(FIRST_RECORDING);
+    startLiveCall({ recordingId: FIRST_RECORDING });
     render(<OverlayPage />);
 
     expect(
@@ -482,14 +496,17 @@ describe("«Микрофон освободился» in the call window", () =>
     win.label = "main";
   });
 
-  it("opens with the app and the countdown from Settings", async () => {
-    fake.db.settings = { autoEnd: "5", onboardingCompleted: true };
-    await act(() => refreshSettings());
+  it("shows the app and the backend's countdown; «Продолжить» stops it", async () => {
     startLiveCall();
     render(<CallPage />);
-    await listening("mic-activity-changed");
+    await screen.findByText("Телемедиа");
 
-    micEvent({ app: "Google Chrome", busy: false, since: Date.now() });
+    act(() =>
+      fake.setSession({
+        ...fake.session,
+        autoEnd: countdown("Google Chrome", 5),
+      })
+    );
 
     const panel = await screen.findByRole("region", { name: MIC_RELEASED });
     expect(panel.textContent).toContain("Google Chrome отпустил микрофон");
@@ -498,181 +515,27 @@ describe("«Микрофон освободился» in the call window", () =>
 
     fireEvent.click(screen.getByRole("button", { name: "Продолжить" }));
     expect(screen.queryByRole("region", { name: MIC_RELEASED })).toBeNull();
+    await waitFor(() =>
+      expect(invokedWith("call_keep")).toEqual([
+        { callId: fake.session.callId },
+      ])
+    );
   });
 
-  it("ignores a release once the call is finishing", async () => {
-    startLiveCall();
+  it("collects the summary when the call is finished elsewhere", async () => {
+    startLiveCall({ autoEnd: countdown("Zoom", 5) });
     render(<CallPage />);
-    await listening("mic-activity-changed");
+    expect(
+      await screen.findByRole("region", { name: MIC_RELEASED })
+    ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
-    micEvent({ app: "Zoom", busy: false, since: Date.now() });
+    // The countdown ran out in the backend, or the overlay's «Завершить».
+    act(() =>
+      fake.setSession({ ...fake.session, autoEnd: null, status: "finishing" })
+    );
 
-    await act(() => Promise.resolve());
+    expect(await screen.findByText(FINISHING)).toBeTruthy();
     expect(screen.queryByRole("region", { name: MIC_RELEASED })).toBeNull();
-  });
-});
-
-describe("the call and its recording", () => {
-  beforeEach(() => {
-    win.label = "main";
-  });
-
-  /** Starts a recording in the fake recorder, as the widget's «Начать». */
-  async function runningRecording(): Promise<string> {
-    const id = await fake.invoke("recording_start", {
-      input: { callId: null },
-    });
-    fake.invoked.length = 0;
-    return String(id);
-  }
-
-  /** `recording_start` waits until the returned function gives its id. */
-  function holdStart() {
-    let give: (id: string) => void = () => undefined;
-    fake.answers.set(
-      "recording_start",
-      () =>
-        new Promise<string>((resolve) => {
-          give = (id) => {
-            fake.recording = { ...IDLE_RECORDING, id, startedAt: Date.now() };
-            resolve(id);
-          };
-        })
-    );
-    return (id: string) => give(id);
-  }
-
-  it("«Отменить завершение» records on into a new recording", async () => {
-    const first = await runningRecording();
-    startLiveCall(first);
-    render(
-      <>
-        <CallPage />
-        <SessionProbe />
-      </>
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
-    await waitFor(() =>
-      expect(invokedWith("recording_stop")).toEqual([{ id: first }])
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Отменить завершение" })
-    );
-
-    await waitFor(() => expect(sessionText()).toMatch(LIVE_RECORDED));
-    expect(sessionText()).not.toBe(`live:${first}`);
-    expect(sessionText()).toBe(`live:${fake.recording.id}`);
-  });
-
-  it("stops the new recording when «Завершить» comes while it starts", async () => {
-    const first = await runningRecording();
-    startLiveCall(first);
-    render(
-      <>
-        <CallPage />
-        <SessionProbe />
-      </>
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
-    await waitFor(() =>
-      expect(invokedWith("recording_stop")).toEqual([{ id: first }])
-    );
-
-    const give = holdStart();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Отменить завершение" })
-    );
-    await waitFor(() => expect(invokedWith("recording_start")).toHaveLength(1));
-    // The start takes its time; the call ends again meanwhile.
-    fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
-    await act(async () => {
-      give("late-recording");
-      await Promise.resolve();
-    });
-
-    await waitFor(() =>
-      expect(invokedWith("recording_stop")).toContainEqual({
-        id: "late-recording",
-      })
-    );
-    expect(sessionText()).toBe(`finishing:${first}`);
-  });
-
-  it("says why the recording did not start again", async () => {
-    const add = vi.spyOn(toast, "add");
-    const first = await runningRecording();
-    startLiveCall(first);
-    render(
-      <>
-        <CallPage />
-        <SessionProbe />
-      </>
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Завершить" }));
-    fake.failures.set("recording_start", {
-      kind: "External",
-      message: "Нет доступа к микрофону",
-      reason: "noAccess",
-    });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Отменить завершение" })
-    );
-
-    await waitFor(() =>
-      expect(add).toHaveBeenCalledWith(
-        expect.objectContaining({
-          title: "Нет доступа к микрофону",
-          type: "error",
-        })
-      )
-    );
-    expect(sessionText()).toMatch(LIVE);
-    add.mockRestore();
-  });
-
-  it("says so when a recording does not stop", async () => {
-    const add = vi.spyOn(toast, "add");
-    const first = await runningRecording();
-    startLiveCall(first);
-    fake.failures.set("recording_stop", {
-      kind: "Storage",
-      message: "Диск занят",
-    });
-
-    await act(() => finishRecordedCall());
-
-    expect(add).toHaveBeenCalledWith(
-      expect.objectContaining({
-        description: "Диск занят",
-        title: "Запись не остановилась",
-        type: "error",
-      })
-    );
-    add.mockRestore();
-  });
-
-  it("stops the running recording from a window that never heard of it", async () => {
-    const first = await runningRecording();
-    // This window's session has the call but not its recording.
-    startLiveCall();
-
-    await act(() => finishRecordedCall());
-
-    expect(invokedWith("recording_stop")).toEqual([{ id: first }]);
-    expect(fake.recording.id).toBeUndefined();
-  });
-
-  it("the call window takes over the running recording when it opens", async () => {
-    const first = await runningRecording();
-    render(
-      <>
-        <CallPage />
-        <SessionProbe />
-      </>
-    );
-
-    await waitFor(() => expect(sessionText()).toBe(`live:${first}`));
+    expect(invokedWith("call_finish")).toEqual([]);
   });
 });

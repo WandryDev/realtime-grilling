@@ -1,7 +1,13 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -11,8 +17,13 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { followCallSession } from "@/data/call-session";
+import {
+  followCallSession,
+  useCallSession,
+  useCallSessionLoaded,
+} from "@/data/call-session";
 import { retryDataLoad, useDataLoad } from "@/data/status";
+import { routes } from "@/lib/routes";
 import { useHydrated } from "@/lib/use-hydrated";
 import { currentWindowLabel, MAIN_WINDOW } from "@/lib/window-label";
 
@@ -21,10 +32,12 @@ import { MainWindow } from "./main-window";
 
 /*
  * Around every page of every window:
- * - in Tauri, the call in progress follows the other windows;
+ * - in Tauri, the window follows the backend's call in progress;
  * - the main window opens the routes Rust and the other windows ask for
- *   (the tray's "Настройки", the overlay's summary). It is told by its
- *   window label, whatever route it shows;
+ *   (the tray's "Настройки", the call window when a call is finishing). It
+ *   is told by its window label, whatever route it shows. Loaded while a
+ *   call is finishing (a reload), it opens the call window itself, where
+ *   the summary is built;
  * - a main-window page waits for the stores' first read and, if the local
  *   database can't be read, the window shows why instead of empty lists.
  *
@@ -60,10 +73,27 @@ export function AppFrame({ children }: { children: ReactNode }) {
   );
 }
 
+/** Where the summary of a finishing call is built, or shown. */
+const SUMMARY_ROUTES = [routes.call(), "/calls/summary"];
+
 /** Opens the routes Rust (or another window) sends to this window. */
 function NavigateListener() {
   const router = useRouter();
+  const pathname = usePathname();
   useEffect(() => subscribeToNavigate((route) => router.push(route)), [router]);
+
+  const { status } = useCallSession();
+  const loaded = useCallSessionLoaded();
+  const checked = useRef(false);
+  useEffect(() => {
+    if (!loaded || checked.current) {
+      return;
+    }
+    checked.current = true;
+    if (status === "finishing" && !SUMMARY_ROUTES.includes(pathname)) {
+      router.push(routes.call());
+    }
+  }, [loaded, pathname, router, status]);
   return null;
 }
 
