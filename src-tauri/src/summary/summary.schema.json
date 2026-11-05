@@ -1,0 +1,120 @@
+{
+  "title": "Summary",
+  "description": "The summary of a call from its transcript only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "tldr", "topics", "answered", "next"],
+  "properties": {
+    "title": { "type": "string" },
+    "tldr": { "description": "2-3 sentences.", "type": "string" },
+    "topics": {
+      "description": "In the order of the call, at most 12.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["refs", "title", "from", "to", "points", "card"],
+        "properties": {
+          "refs": {
+            "description": "Fast loop topics it continues; empty for a new one.",
+            "type": "array",
+            "items": { "type": "string", "pattern": "^T[0-9]+$" }
+          },
+          "title": { "type": "string" },
+          "from": { "$ref": "#/$defs/segment" },
+          "to": { "$ref": "#/$defs/segment" },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text", "status", "evidence"],
+              "properties": {
+                "text": { "type": "string" },
+                "status": { "enum": ["fact", "assumption", "contradiction"] },
+                "evidence": { "$ref": "#/$defs/evidence" }
+              }
+            }
+          },
+          "card": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "fields"],
+            "properties": {
+              "title": { "type": "string" },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["field", "facts"],
+                  "properties": {
+                    "field": { "$ref": "#/$defs/lens" },
+                    "facts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["text", "status", "evidence"],
+                        "properties": {
+                          "text": { "type": "string" },
+                          "status": { "enum": ["confirmed", "assumption", "contradiction", "empty"] },
+                          "evidence": { "$ref": "#/$defs/evidence" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "answered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "evidence"],
+        "properties": {
+          "ref": { "type": "string", "pattern": "^Q[0-9]+$" },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "next": {
+      "description": "Questions for the next call, at most 5.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "topic", "field", "gap"],
+        "properties": {
+          "text": { "type": "string" },
+          "topic": { "description": "Position in topics, from 1.", "type": ["integer", "null"] },
+          "field": { "anyOf": [{ "$ref": "#/$defs/lens" }, { "type": "null" }] },
+          "gap": { "enum": ["empty", "assumption", "contradiction"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "segment": { "type": "string", "pattern": "^S[0-9]+$" },
+    "lens": {
+      "enum": ["goal", "users", "scenarios", "edgeCases", "integrations", "constraints", "acceptance"]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "quote"],
+        "properties": {
+          "id": { "description": "S#, P# or B#.", "type": "string", "pattern": "^[SPB][0-9]+$" },
+          "quote": { "description": "Verbatim, 3-15 words.", "type": "string" }
+        }
+      }
+    }
+  }
+}

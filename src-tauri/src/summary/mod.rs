@@ -17,9 +17,11 @@
 //! The windows only show it: a build goes on when they reload or close.
 
 pub mod builds;
+pub mod input;
+pub mod reply;
 pub mod transcript;
 
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -40,6 +42,39 @@ pub const REFINE_SILENCE: Duration = Duration::from_secs(60);
 /// The `error` of a summary whose build was stopped («Остановить», or the
 /// call went back to live or away).
 pub const CANCELLED: &str = "cancelled";
+
+/// The JSON Schema of call A's reply.
+pub const SUMMARY_SCHEMA: &str = include_str!("summary.schema.json");
+/// The JSON Schema of call B's reply.
+pub const PROPOSALS_SCHEMA: &str = include_str!("proposals.schema.json");
+/// The rules of call A, in Russian, like the brief's: its system prompt
+/// file.
+pub const SUMMARY_PROMPT: &str = include_str!("summary_prompt.md");
+/// The rules of call B.
+pub const PROPOSALS_PROMPT: &str = include_str!("proposals_prompt.md");
+/// The last line of call A's message.
+pub const SUMMARY_CLOSING: &str =
+    "Собери итоги звонка по правилам и передай их одним вызовом инструмента StructuredOutput.";
+/// The last line of call B's message.
+pub const PROPOSALS_CLOSING: &str = "Собери предложения по брифу и профилям по правилам и передай \
+их одним вызовом инструмента StructuredOutput.";
+
+/// A schema on one line without spaces, as `--json-schema` takes it: it
+/// stays on the command line, so each is kept under 4 KB.
+fn minified(schema: &str) -> String {
+    let value: serde_json::Value = serde_json::from_str(schema).expect("a schema is valid JSON");
+    value.to_string()
+}
+
+pub fn summary_schema_argument() -> &'static str {
+    static MINIFIED: LazyLock<String> = LazyLock::new(|| minified(SUMMARY_SCHEMA));
+    &MINIFIED
+}
+
+pub fn proposals_schema_argument() -> &'static str {
+    static MINIFIED: LazyLock<String> = LazyLock::new(|| minified(PROPOSALS_SCHEMA));
+    &MINIFIED
+}
 
 /// A stage of a build, in their order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Type)]
@@ -112,3 +147,6 @@ pub struct CallSummaryView {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod input_tests;

@@ -17,6 +17,7 @@ use super::{
 use crate::{
     speech::events::{RefineState, TranscriptRefine},
     storage::{
+        call_state::{self, CardLens, GapType, NewQuestion, ValidatedOp, ValidatedPatch},
         calls::{self, CallCreate, CallStatus},
         open_in_memory, people,
         projects::{self, ProjectCreate},
@@ -109,6 +110,59 @@ impl CallData<'_> {
 
     pub fn recordings(&self, call_id: &str) -> Vec<Recording> {
         transcript::recordings_of(self.connection, call_id).unwrap()
+    }
+
+    /// The project's notes and its brief, saved fresh.
+    pub fn brief(&self, project_id: &str, notes: &str, brief: &serde_json::Value) {
+        let patch = projects::ProjectUpdate {
+            description: Some("Обменник валют для туристов".to_owned()),
+            notes: Some(notes.to_owned()),
+            ..projects::ProjectUpdate::default()
+        };
+        projects::update(self.connection, project_id, patch).unwrap();
+        projects::save_brief(self.connection, project_id, brief, "fingerprint", false).unwrap();
+    }
+
+    pub fn profile(&self, person_id: &str, profile: serde_json::Value) {
+        let patch = people::PersonUpdate {
+            profile: Some(profile),
+            ..people::PersonUpdate::default()
+        };
+        people::update(self.connection, person_id, patch).unwrap();
+    }
+
+    /// A topic of the recording with a card field and a question per text;
+    /// returns the topic and the question ids.
+    pub fn topic(
+        &self,
+        recording_id: &str,
+        title: &str,
+        questions: &[&str],
+    ) -> (String, Vec<String>) {
+        let mut ops = vec![
+            ValidatedOp::CreateTopic {
+                title: title.to_owned(),
+            },
+            ValidatedOp::SetCardField {
+                field: CardLens::Goal,
+                value: "Курс в одном месте".to_owned(),
+                evidence: Vec::new(),
+            },
+        ];
+        ops.extend(questions.iter().map(|text| {
+            ValidatedOp::AddQuestion(NewQuestion {
+                text: (*text).to_owned(),
+                description: String::new(),
+                card_field: CardLens::Acceptance,
+                gap_type: GapType::Empty,
+                priority: 3,
+                evidence: Vec::new(),
+            })
+        }));
+        let applied =
+            call_state::apply_patch(self.connection, recording_id, &ValidatedPatch { ops })
+                .unwrap();
+        (applied.topic_ids[0].clone(), applied.question_ids)
     }
 }
 

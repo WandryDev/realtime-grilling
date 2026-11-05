@@ -1,0 +1,43 @@
+{
+  "title": "Proposals",
+  "description": "Updates of the brief and the client's profiles the call supports.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["proposals"],
+  "properties": {
+    "proposals": {
+      "description": "At most 12.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "field", "after", "kind", "evidence"],
+        "properties": {
+          "target": { "description": "brief or H#.", "type": "string", "pattern": "^(brief|H[0-9]+)$" },
+          "field": {
+            "enum": [
+              "product", "stack", "modules", "glossary",
+              "role", "tech", "project", "howToAsk", "notes",
+              "portrait:Роль в бизнесе", "portrait:Темперамент", "portrait:Характер",
+              "portrait:Чего ждёт от проекта"
+            ]
+          },
+          "after": { "type": "string" },
+          "kind": { "enum": ["said", "inferred"] },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "quote"],
+              "properties": {
+                "id": { "description": "S#, P# or B#.", "type": "string", "pattern": "^[SPB][0-9]+$" },
+                "quote": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

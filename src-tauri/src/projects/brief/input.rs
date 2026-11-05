@@ -233,6 +233,11 @@ fn section(out: &mut String, title: &str, tag: &str, body: &str, nonce: &str) {
 /// `‹tag`: a material can't open or close a frame, even a guessed one. The
 /// length in characters stays the same.
 pub fn neutralize(text: &str) -> Cow<'_, str> {
+    neutralize_tags(text, &TAGS)
+}
+
+/// [`neutralize`] for the frames of another message (the summary's).
+pub fn neutralize_tags<'a>(text: &'a str, tags: &[&str]) -> Cow<'a, str> {
     if !text.contains('<') {
         return Cow::Borrowed(text);
     }
@@ -241,7 +246,7 @@ pub fn neutralize(text: &str) -> Cow<'_, str> {
         let rest = &text[index + char.len_utf8()..];
         let name = rest.strip_prefix('/').unwrap_or(rest);
         let framing = char == '<'
-            && TAGS.iter().any(|tag| {
+            && tags.iter().any(|tag| {
                 name.get(..tag.len())
                     .is_some_and(|start| start.eq_ignore_ascii_case(tag))
             });
