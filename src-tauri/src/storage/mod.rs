@@ -5,6 +5,8 @@
 //! database can't be opened or migrated the app still starts: the storage is
 //! an `Err` and every data command answers `Storage`.
 
+pub mod call_records;
+pub mod call_search;
 pub mod call_state;
 pub mod calls;
 pub mod json;

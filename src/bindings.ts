@@ -374,6 +374,77 @@ export const commands = {
 	 *  `reason` when the microphone can't be used.
 	 */
 	speechMicCheck: () => typedError<string, CommandError>(__TAURI_INVOKE("speech_mic_check")),
+	/**
+	 *  The proposals of a call, oldest first, with their decisions.
+	 *  `NotFound` for an unknown call.
+	 */
+	proposalsList: (callId: string) => typedError<Proposal[], CommandError>(__TAURI_INVOKE("proposals_list", { callId })),
+	/**
+	 *  A person's pending proposals from every call, newest first (the
+	 *  person's page). `NotFound` for an unknown person.
+	 */
+	proposalsForPerson: (personId: string) => typedError<Proposal[], CommandError>(__TAURI_INVOKE("proposals_for_person", { personId })),
+	/**
+	 *  Accepts a pending proposal and applies it to the profile or the
+	 *  project's notes, or rejects it (nothing changes). `Invalid` with the
+	 *  reason when it can't be applied (notes over the limit, a level that is
+	 *  not 1–5) or is already decided; nothing changes then.
+	 */
+	proposalDecide: (id: string, input: ProposalDecide) => typedError<Proposal, CommandError>(__TAURI_INVOKE("proposal_decide", { id, input })),
+	/**
+	 *  «Отменить» / «Вернуть»: the proposal is pending again, an accepted one
+	 *  with the field put back. `Invalid` «Поле изменили после принятия» when
+	 *  the field changed since; nothing changes then.
+	 */
+	proposalUndo: (id: string) => typedError<Proposal, CommandError>(__TAURI_INVOKE("proposal_undo", { id })),
+	/**
+	 *  The task cards page of a call: the saved summary's cards and its
+	 *  questions for the next call (`source: summary`), or before a summary the
+	 *  fast loop's cards of every recording (`source: live`). `NotFound` for
+	 *  an unknown call.
+	 */
+	callCards: (callId: string) => typedError<CallCards, CommandError>(__TAURI_INVOKE("call_cards", { callId })),
+	/**
+	 *  Accepts, defers, restores or renames a card of `call_cards`; absent
+	 *  fields stay. A fast loop card also sends `CallStateChanged` of its
+	 *  recording. `NotFound` for a card the call doesn't have, `Invalid` for a
+	 *  blank title.
+	 */
+	callCardUpdate: (callId: string, cardId: string, patch: CardPatch) => typedError<SummaryCard, CommandError>(__TAURI_INVOKE("call_card_update", { callId, cardId, patch })),
+	/**
+	 *  The recordings of a call in the order they started, each with its
+	 *  transcript (refined where the second pass is done), times, duration,
+	 *  file sizes and whether its audio was deleted. `NotFound` for an unknown
+	 *  call.
+	 */
+	callTranscript: (callId: string) => typedError<CallRecording[], CommandError>(__TAURI_INVOKE("call_transcript", { callId })),
+	/**
+	 *  The questions of a call's recordings with the moments of their evidence
+	 *  and answer, found for a segment of either pass. `NotFound` for an
+	 *  unknown call.
+	 */
+	callQuestions: (callId: string) => typedError<CallQuestion[], CommandError>(__TAURI_INVOKE("call_questions", { callId })),
+	/**
+	 *  Searches the calls' transcripts (shown pass), titles and summaries
+	 *  (TL;DR, points, card facts) without case and «ё»: at most 200 matches
+	 *  with ±60 characters around each, and the counts per project. On this
+	 *  computer only.
+	 */
+	callsSearch: (query: string, projectId: string | null) => typedError<CallSearch, CommandError>(__TAURI_INVOKE("calls_search", { query, projectId })),
+	/**
+	 *  The waveform of a recording: `bars` (1–2000) peaks per channel over the
+	 *  longer channel. Decoded in Rust once, then cached. `NotFound` for an
+	 *  unknown recording or deleted audio, `Invalid` for a recording being
+	 *  written or a count of bars out of range.
+	 */
+	recordingPeaks: (recordingId: string, bars: number) => typedError<RecordingPeaks, CommandError>(__TAURI_INVOKE("recording_peaks", { recordingId, bars })),
+	/**
+	 *  «Удалить запись»: deletes the audio files of every recording of a
+	 *  finished call, stopping a second pass that runs; the transcript,
+	 *  summary, cards, questions and proposals stay. `Invalid` for a call that
+	 *  isn't finished.
+	 */
+	callAudioDelete: (callId: string) => typedError<null, CommandError>(__TAURI_INVOKE("call_audio_delete", { callId })),
 };
 
 /** Events */
@@ -592,6 +663,26 @@ export type CallAutoEnd = {
 	endsAt: number | null,
 };
 
+/**  The task cards page of a call. */
+export type CallCards = {
+	source: CallCardsSource,
+	/**
+	 *  In topic order (`live`: recording after recording). A `live` card
+	 *  has one fact per lens with a value, none for an empty lens; its
+	 *  `topicId` is the fast loop's topic.
+	 */
+	cards: SummaryCard[],
+	/**  The summary's questions for the next call; empty when `live`. */
+	next: NextQuestion[],
+};
+
+/**  Where the cards of a call come from. */
+export type CallCardsSource = 
+/**  The saved summary's cards (one per topic, facts with sources). */
+"summary" | 
+/**  No summary saved yet: the fast loop's cards of every recording. */
+"live";
+
 export type CallCreate = {
 	/**  A call without a project when absent; it has no participants then. */
 	projectId?: string | null,
@@ -616,6 +707,107 @@ export type CallEvidence = {
 	/**  From the start of the recording. */
 	startMs: number,
 	quote: string,
+};
+
+/**  A phrase of the call: where to scroll the transcript and seek the player. */
+export type CallMoment = {
+	recordingId: string,
+	/**
+	 *  The phrase of the shown pass (`call_transcript`) at that time, on
+	 *  the same channel; the segment itself when the shown pass has none.
+	 */
+	segmentId: string,
+	/**  From the start of the recording: when the phrase named was said. */
+	startMs: number,
+};
+
+/**  A question of the call with the moments it rests on. */
+export type CallQuestion = {
+	id: string,
+	recordingId: string,
+	topicId: string | null,
+	cardId: string | null,
+	text: string,
+	description: string,
+	cardField: CardLens | null,
+	gapType: GapType,
+	priority: number,
+	status: QuestionStatus,
+	evidence: Evidence[],
+	answerEvidence: Evidence[] | null,
+	/**
+	 *  The phrase the question rests on; `null` when it rests on the
+	 *  project only.
+	 */
+	moment: CallMoment | null,
+	/**  The client's answer, once answered. */
+	answer: CallMoment | null,
+	createdAt: number,
+	updatedAt: number,
+};
+
+/**  A recording of a call with its transcript. */
+export type CallRecording = {
+	id: string,
+	/**
+	 *  Milliseconds since the Unix epoch: a phrase's wall-clock time is
+	 *  `startedAt + startMs`.
+	 */
+	startedAt: number,
+	/**  `null` while it is being written. */
+	endedAt: number | null,
+	/**  `endedAt − startedAt`; `null` while it is being written. */
+	durationMs: number | null,
+	/**  "Удалить запись" removed its files: no player. */
+	audioDeleted: boolean,
+	/**  Where the second pass is. */
+	transcriptState: TranscriptState,
+	/**  The pass of `segments`: refined once the second pass stored it. */
+	pass: TranscriptPass,
+	/**  Sizes of the channel files in bytes; `null` without the file. */
+	meBytes: number | null,
+	othersBytes: number | null,
+	/**  The shown pass, both channels in time order. */
+	segments: TranscriptSegment[],
+};
+
+export type CallSearch = {
+	/**
+	 *  Newest call first; within a call the title, the transcript in time
+	 *  order, then the summary. At most [`MAX_MATCHES`].
+	 */
+	matches: CallSearchMatch[],
+	/**  Every match of the searched calls, also those past the limit. */
+	total: number,
+	/**
+	 *  Per project, over every call whatever `projectId` was given (the
+	 *  counts of the history's sidebar); projects without a match are not
+	 *  listed.
+	 */
+	projects: ProjectMatches[],
+};
+
+export type CallSearchMatch = {
+	callId: string,
+	projectId: string | null,
+	source: SearchSource,
+	/**
+	 *  The original text before the match (up to 60 characters), the
+	 *  matched text and the text after it.
+	 */
+	before: string,
+	text: string,
+	after: string,
+	/**  Whose phrase, for a `segment`. */
+	channel: TranscriptChannel | null,
+	/**
+	 *  The phrase to open: the segment itself, or the first quote of a
+	 *  point or a fact; `null` for the title, the TL;DR and a fact without
+	 *  a quote.
+	 */
+	moment: CallMoment | null,
+	/**  Wall-clock time of `moment`, milliseconds since the Unix epoch. */
+	at: number | null,
 };
 
 /**
@@ -810,6 +1002,12 @@ export type CardLens =
 "constraints" | 
 /**  Критерии готовности. */
 "acceptance";
+
+/**  `call_card_update` (decision 7): absent fields stay as they are. */
+export type CardPatch = {
+	decision?: TaskCardDecision | null,
+	title?: string | null,
+};
 
 export type Change = "created" | "updated" | "deleted";
 
@@ -1095,6 +1293,14 @@ export type ProjectCreate = {
 	brief?: Value | null,
 };
 
+/**  Matches of the calls of a project (`null`: calls without one). */
+export type ProjectMatches = {
+	projectId: string | null,
+	/**  Calls with at least one match. */
+	calls: number,
+	matches: number,
+};
+
 /**  What the home screen shows about a project. */
 export type ProjectOverview = {
 	projectId: string,
@@ -1142,6 +1348,69 @@ export type ProjectUpdate = {
 	 */
 	brief?: Value | null,
 };
+
+export type Proposal = {
+	id: string,
+	callId: string,
+	target: ProposalTarget,
+	/**  Set when `target` is `person`. */
+	personId: string | null,
+	field: string,
+	/**
+	 *  The value when the proposal was made, taken from the data; `null`
+	 *  when there was none. Levels 1–5 are text too (`"4"`).
+	 */
+	before: string | null,
+	after: string,
+	kind: ProposalKind,
+	evidence: CallEvidence[],
+	decision: ProposalDecision,
+	/**  The manager's text of "Изменить и принять". */
+	edited: string | null,
+	applied: ProposalApplied | null,
+	/**  When it was accepted or rejected; `null` while pending. */
+	decidedAt: number | null,
+	createdAt: number,
+	updatedAt: number,
+};
+
+/**  What accepting a proposal wrote, for its undo (decision 8). */
+export type ProposalApplied = {
+	/**  The value written (for the notes: the line added). */
+	written: Value,
+	/**  The value before; `null` when there was none (or for the notes). */
+	previous: Value | null,
+};
+
+/**
+ *  `proposal_decide`: accept (with the manager's text of "Изменить и
+ *  принять", if any) or reject.
+ */
+export type ProposalDecide = {
+	/**  `accepted` or `rejected`; `pending` is the undo's. */
+	decision: ProposalDecision,
+	/**  Accepted with this text instead of the proposed one. */
+	edited?: string | null,
+};
+
+export type ProposalDecision = "pending" | "accepted" | "rejected";
+
+/**  What a proposal rests on. */
+export type ProposalKind = 
+/**  The client said it: `evidence` holds the quotes. */
+"said" | 
+/**  "вывод агента". */
+"inferred";
+
+/**  What a proposal updates. */
+export type ProposalTarget = 
+/**  The project's brief: `product`, `stack`, `modules`, `glossary`. */
+"brief" | 
+/**
+ *  A person's profile (`personId`): `role`, `tech`, `project`,
+ *  `howToAsk`, `portrait:<label>`, `notes`.
+ */
+"person";
 
 export type Question = {
 	id: string,
@@ -1207,6 +1476,18 @@ export type RecordingLevels = {
 	others: number,
 };
 
+/**
+ *  The waveform of a recording: the loudest sample of each bar, 0–1, per
+ *  channel. Both channels have `bars` bars over the longer one's length,
+ *  so the bars line up in time.
+ */
+export type RecordingPeaks = {
+	/**  Of the longer channel. */
+	durationMs: number,
+	me: (number | null)[],
+	others: (number | null)[],
+};
+
 export type RecordingStart = {
 	/**  The call being recorded; a recording without a call is fine. */
 	callId?: string | null,
@@ -1245,6 +1526,19 @@ export type RejectReason =
 "tooLarge" | 
 /**  Missing, a folder, or the OS would not let the app read it. */
 "unreadable";
+
+/**  Where a match is. */
+export type SearchSource = 
+/**  The call's title. */
+"title" | 
+/**  A phrase of the transcript: «Вы» or «Клиент» (`channel`) at `at`. */
+"segment" | 
+/**  The summary's TL;DR. */
+"tldr" | 
+/**  A point of a topic of the summary. */
+"point" | 
+/**  A fact of a card of the summary. */
+"fact";
 
 /**  A segment a topic starts or ends at. */
 export type SegmentMoment = {

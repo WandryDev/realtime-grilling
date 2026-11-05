@@ -4,9 +4,8 @@
 //! The build writes them `pending` ([`replace_pending`], inside
 //! `summaries::save_build`); the manager's decision is stored with
 //! [`set_decision`]. Applying a proposal to the brief or a profile, and
-//! undoing it, is the caller's: it changes the data and the decision in one
-//! transaction and sends `DataChanged` of the project or the person. Nothing
-//! here sends it.
+//! undoing it, is [`apply`]'s: it changes the data and the decision in one
+//! transaction and returns the `DataChanged` of the project or the person.
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -21,6 +20,8 @@ use super::{
     summaries::CallEvidence,
 };
 use crate::error::{CommandError, CommandResult};
+
+pub mod apply;
 
 /// What a proposal updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]

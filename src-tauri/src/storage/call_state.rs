@@ -169,6 +169,14 @@ pub enum TaskCardDecision {
 }
 
 impl TaskCardDecision {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Discarded => "discarded",
+        }
+    }
+
     fn parse(text: &str) -> rusqlite::Result<Self> {
         match text {
             "pending" => Ok(Self::Pending),
@@ -512,10 +520,11 @@ pub(super) fn typed<T: serde::de::DeserializeOwned>(
     })
 }
 
-const CARD_COLUMNS: &str = "id, topic_id, recording_id, call_id, title, fields, decision,
+pub(super) const CARD_COLUMNS: &str =
+    "id, topic_id, recording_id, call_id, title, fields, decision,
        created_at, updated_at";
 
-fn card_from_row(row: &Row) -> rusqlite::Result<TaskCard> {
+pub(super) fn card_from_row(row: &Row) -> rusqlite::Result<TaskCard> {
     let Json(fields) = row.get(5)?;
     let decision: String = row.get(6)?;
     Ok(TaskCard {
@@ -552,11 +561,12 @@ fn card_of_topic(connection: &Connection, topic_id: &str) -> CommandResult<Optio
         .optional()?)
 }
 
-const QUESTION_COLUMNS: &str = "id, recording_id, call_id, topic_id, card_id, text, description,
+pub(super) const QUESTION_COLUMNS: &str =
+    "id, recording_id, call_id, topic_id, card_id, text, description,
        card_field, gap_type, priority, evidence, answer_evidence, status, pinned, shown_at,
        created_at, updated_at";
 
-fn question_from_row(row: &Row) -> rusqlite::Result<Question> {
+pub(super) fn question_from_row(row: &Row) -> rusqlite::Result<Question> {
     let gap_type: String = row.get(8)?;
     let Json(evidence) = row.get(10)?;
     let answer_evidence: Option<Json> = row.get(11)?;

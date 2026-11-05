@@ -75,4 +75,16 @@ pub const APP_COMMANDS: &[&str] = &[
     "speech_benchmark",
     "speech_benchmark_cancel",
     "speech_mic_check",
+    // A finished call's records (post-call tasks 3.1–3.4).
+    "proposals_list",
+    "proposals_for_person",
+    "proposal_decide",
+    "proposal_undo",
+    "call_cards",
+    "call_card_update",
+    "call_transcript",
+    "call_questions",
+    "calls_search",
+    "recording_peaks",
+    "call_audio_delete",
 ];

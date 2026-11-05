@@ -18,6 +18,7 @@ use crate::{
     events::{CallSessionChanged, DataChanged, Navigate, ShortcutPressed},
     projects::brief::{Brief, BriefProgress},
     recording::status::{RecordingChanged, RecordingLevels},
+    records,
     speech::{
         events::{
             TranscriptDropped, TranscriptLag, TranscriptPending, TranscriptPhrase,
@@ -111,6 +112,18 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::speech_benchmark,
             commands::speech_benchmark_cancel,
             commands::speech_mic_check,
+            // A finished call's records (post-call tasks 3.1–3.4).
+            records::commands::proposals_list,
+            records::commands::proposals_for_person,
+            records::commands::proposal_decide,
+            records::commands::proposal_undo,
+            records::commands::call_cards,
+            records::commands::call_card_update,
+            records::commands::call_transcript,
+            records::commands::call_questions,
+            records::commands::calls_search,
+            records::commands::recording_peaks,
+            records::commands::call_audio_delete,
         ])
         .events(collect_events![
             AgentInstallProgress,

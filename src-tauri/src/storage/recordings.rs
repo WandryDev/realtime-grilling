@@ -297,6 +297,17 @@ pub fn get(connection: &Connection, id: &str) -> CommandResult<Recording> {
         .ok_or_else(|| not_found(id))
 }
 
+/// The recordings of a call in the order they started. `NotFound` for an
+/// unknown call.
+pub fn for_call(connection: &Connection, call_id: &str) -> CommandResult<Vec<Recording>> {
+    calls::project_of(connection, call_id)?;
+    let mut statement = connection.prepare(&format!(
+        "{SELECT} WHERE call_id = ?1 ORDER BY started_at, id"
+    ))?;
+    let rows = statement.query_map([call_id], from_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Ids of every recording, oldest first.
 pub fn list_ids(connection: &Connection) -> CommandResult<Vec<String>> {
     let mut statement = connection.prepare("SELECT id FROM recordings ORDER BY id")?;

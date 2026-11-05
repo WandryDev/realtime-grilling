@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window and onboarding: all data commands (projects' documents included), settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call in progress (call_*, discarded before «Удалить все данные» with call_discard), the call's summary (read, build again, stop: summary_*), the recording's status (the call starts and stops it; recording_start and recording_stop are no window's), the call's questions and the agent's calls, the speech models, the hardware check and the mic check, the project brief (build, cancel, prepare, export), the open dialog (documents and the export folder), and the OS name (the Windows variant of onboarding).",
+  "description": "Main window and onboarding: all data commands (projects' documents included), settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call in progress (call_*, discarded before «Удалить все данные» with call_discard), the call's summary (read, build again, stop: summary_*), the recording's status (the call starts and stops it; recording_start and recording_stop are no window's), the call's questions and the agent's calls, the speech models, the hardware check and the mic check, the project brief (build, cancel, prepare, export), the open dialog (documents and the export folder), the OS name (the Windows variant of onboarding), and a finished call's records: its proposals and their review (proposals_*, proposal_decide, proposal_undo), its task cards (call_cards, call_card_update), its recordings with the transcript and its questions with their moments (call_transcript, call_questions), the search over the calls (calls_search), and its audio: the waveform (recording_peaks; the files play through the grill-audio scheme, main window only) and «Удалить запись» (call_audio_delete).",
   "windows": ["main", "onboarding"],
   "permissions": [
     "core:default",
@@ -87,6 +87,17 @@
     "allow-speech-model-select",
     "allow-speech-benchmark",
     "allow-speech-benchmark-cancel",
-    "allow-speech-mic-check"
+    "allow-speech-mic-check",
+    "allow-proposals-list",
+    "allow-proposals-for-person",
+    "allow-proposal-decide",
+    "allow-proposal-undo",
+    "allow-call-cards",
+    "allow-call-card-update",
+    "allow-call-transcript",
+    "allow-call-questions",
+    "allow-calls-search",
+    "allow-recording-peaks",
+    "allow-call-audio-delete"
   ]
 }
