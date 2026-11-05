@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from "effect";
 import {
   type Call,
   type CallCreate,
+  type CallOverview,
   type CallSearch,
   type CallUpdate,
   commands,
@@ -17,6 +18,7 @@ import {
   dropCallRecords,
   invalid,
   MockDatabase,
+  type MockTables,
   notFound,
   orCurrent,
 } from "./mock-database";
@@ -34,6 +36,12 @@ import { searchCalls } from "./mock-search";
  * `search` looks through the calls' titles, transcripts (the shown pass)
  * and summaries, without case and «ё»: at most 200 matches with ±60
  * characters around each, and the counts per project over every call.
+ *
+ * `overview` is the history's row of each call in one read (`call-history`,
+ * «Список звонков»): its title (the call's, else the summary's, else the
+ * summary's first topic; Rust also tries the fast loop's first topic), its
+ * pending proposals, its questions not closed and whether all its audio
+ * was deleted.
  *
  * In an update `null` clears a nullable field (`endedAt`, `summary`) and
  * an absent key leaves it. `patchSummary` merges an RFC 7386 patch into
@@ -70,6 +78,10 @@ export class CallsData extends Context.Service<
       callId: string,
       personId: string
     ) => Effect.Effect<Call, BackendError>;
+    /** The history's rows of a project's calls, or of every call; newest first. */
+    readonly overview: (
+      projectId: string | null
+    ) => Effect.Effect<CallOverview[], BackendError>;
     /** Searches the calls of a project, or all of them for `null`. */
     readonly search: (
       query: string,
@@ -83,6 +95,7 @@ export class CallsData extends Context.Service<
     create: (input) => call(() => commands.callsCreate(input)),
     get: (id) => call(() => commands.callsGet(id)),
     list: (projectId) => call(() => commands.callsList(projectId)),
+    overview: (projectId) => call(() => commands.callsOverview(projectId)),
     participants: (callId) => call(() => commands.callParticipantsList(callId)),
     patchSummary: (id, patch) =>
       call(() => commands.callsPatchSummary(id, patch)),
@@ -283,6 +296,10 @@ export class CallsData extends Context.Service<
         create,
         get,
         list: (projectId) => Effect.sync(() => listed(projectId)),
+        overview: (projectId) =>
+          Effect.sync(() =>
+            listed(projectId).map((item) => overviewOf(tables, item))
+          ),
         participants,
         patchSummary,
         remove,
@@ -295,4 +312,46 @@ export class CallsData extends Context.Service<
       });
     })
   );
+}
+
+/** Questions not closed: open, and asked without an answer. */
+const NOT_CLOSED: ReadonlySet<string> = new Set(["open", "asked"]);
+
+/**
+ * What `calls_overview` reads of a call. A seeded call without question
+ * records keeps the count of open questions it was seeded with.
+ */
+function overviewOf(tables: MockTables, item: Call): CallOverview {
+  const recordings = [...tables.recordings.values()].flatMap((stored) =>
+    stored.callId === item.id ? [stored.recording] : []
+  );
+  const recordingIds = new Set(recordings.map((recording) => recording.id));
+  const questions = [...tables.questions.values()].filter((question) =>
+    recordingIds.has(question.recordingId)
+  );
+  const summary = tables.summaries.get(item.id);
+  const titles = [
+    item.title,
+    summary?.title,
+    summary?.content?.topics[0]?.title,
+  ];
+  let pendingProposals = 0;
+  for (const proposal of tables.proposals.values()) {
+    if (proposal.callId === item.id && proposal.decision === "pending") {
+      pendingProposals += 1;
+    }
+  }
+  return {
+    audioDeleted:
+      recordings.length > 0 &&
+      recordings.every((recording) => recording.audioDeleted),
+    callId: item.id,
+    openQuestions:
+      questions.length > 0
+        ? questions.filter((question) => NOT_CLOSED.has(question.status)).length
+        : item.openQuestions,
+    pendingProposals,
+    projectId: item.projectId,
+    title: titles.map((title) => title?.trim() ?? "").find(Boolean) ?? "",
+  };
 }

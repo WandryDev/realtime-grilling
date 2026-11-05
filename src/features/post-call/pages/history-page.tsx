@@ -3,13 +3,12 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
-import type { CallSearchMatch } from "@/bindings";
-import { type CallFacts, useCallsFacts } from "@/data/call-history";
+import type { CallOverview, CallSearchMatch } from "@/bindings";
+import { useCallsOverview } from "@/data/call-history";
 import { useCallSearch } from "@/data/call-records";
 import { type CallRecord, NO_PROJECT_CALL, useCalls } from "@/data/calls";
 import { type ClientPerson, usePeople } from "@/data/people";
 import { type ProjectRecord, useProjects } from "@/data/projects";
-import { usePendingProposalCounts } from "@/data/proposals";
 import { useProjectSources } from "@/data/sources";
 import type { Synced } from "@/data/synced-store";
 import { clockTime } from "@/lib/clock";
@@ -47,7 +46,7 @@ const DEMO_STATES = ["search"] as const;
 const ALL = "all";
 const OPEN = "open";
 
-/** What a row shows of a call: the record, and what its facts add. */
+/** What a row shows of a call: the record, and what its overview adds. */
 interface HistoryEntry {
   audioDeleted: boolean;
   call: CallRecord;
@@ -57,27 +56,21 @@ interface HistoryEntry {
 }
 
 /**
- * The call's title, else its summary's, else the summary's first topic,
- * else the project.
+ * The overview's title (the call's, its summary's, its first topic), else
+ * the project («Звонок без проекта» without one).
  */
 function entryOf(
   call: CallRecord,
-  facts: CallFacts | undefined,
-  pending: number,
+  overview: CallOverview | undefined,
   projectName: (id: string | null) => string
 ): HistoryEntry {
-  const title =
-    call.title.trim() ||
-    facts?.summaryTitle.trim() ||
-    facts?.firstTopic.trim() ||
-    projectName(call.projectId);
   return {
-    audioDeleted: facts?.audioDeleted ?? false,
+    audioDeleted: overview?.audioDeleted ?? false,
     call,
-    // Without questions read, the record's count of the open ones.
-    notClosed: facts?.questions ? facts.notClosed : call.openCount,
-    pending,
-    title,
+    // Before the overview is read, the record's count of the open ones.
+    notClosed: overview?.openQuestions ?? call.openCount,
+    pending: overview?.pendingProposals ?? 0,
+    title: overview?.title || call.title.trim() || projectName(call.projectId),
   };
 }
 
@@ -307,16 +300,11 @@ function History({ projectId }: { projectId: string | null }) {
     [projectId]
   );
 
-  const callIds = useMemo(() => calls.map((call) => call.id), [calls]);
-  const facts = useCallsFacts(callIds);
-  // The app's one count of pending proposals (sidebar, summary, review).
-  const pending = usePendingProposalCounts(callIds);
+  const overview = useCallsOverview();
   const entries = useMemo(
     () =>
-      calls.map((call) =>
-        entryOf(call, facts.get(call.id), pending[call.id] ?? 0, projectName)
-      ),
-    [calls, facts, pending, projectName]
+      calls.map((call) => entryOf(call, overview.get(call.id), projectName)),
+    [calls, overview, projectName]
   );
 
   const sidebarProjects = useMemo(

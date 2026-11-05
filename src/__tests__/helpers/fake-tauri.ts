@@ -1,5 +1,6 @@
 import type {
   Call,
+  CallOverview,
   CallSession,
   CommandError,
   DataChanged,
@@ -496,6 +497,22 @@ export function createFakeTauri(): FakeTauri {
         return db.calls.filter(
           (call) => !args.projectId || call.projectId === args.projectId
         );
+      // The calls' own titles and open counts; a test sets the rest.
+      case "calls_overview":
+        return db.calls
+          .filter(
+            (call) => !args.projectId || call.projectId === args.projectId
+          )
+          .map(
+            (call): CallOverview => ({
+              audioDeleted: false,
+              callId: call.id,
+              openQuestions: call.openQuestions,
+              pendingProposals: 0,
+              projectId: call.projectId,
+              title: call.title,
+            })
+          );
       case "settings_get":
         return db.settings;
       case "settings_update":

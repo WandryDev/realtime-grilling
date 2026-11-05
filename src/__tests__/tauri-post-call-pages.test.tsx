@@ -852,6 +852,19 @@ describe("«Предложения» in Tauri", () => {
     expect(card?.textContent).toContain("3");
     summary.unmount();
 
+    // The history's row: what Rust's overview counts of the same list.
+    fake.answers.set("calls_overview", () => [
+      {
+        audioDeleted: false,
+        callId: CALL,
+        openQuestions: 0,
+        pendingProposals: fiveProposals().filter(
+          (item) => item.decision === "pending"
+        ).length,
+        projectId: EXCHANGE,
+        title: "",
+      },
+    ]);
     nav.search = new URLSearchParams({ project: EXCHANGE });
     render(<HistoryPage />);
     expect(await screen.findByText("3 предложения")).toBeTruthy();

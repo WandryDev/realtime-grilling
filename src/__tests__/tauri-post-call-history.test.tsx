@@ -2,21 +2,16 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  CallQuestion,
-  CallRecording,
-  CallSearch,
-  CallSummaryView,
-  Proposal,
-} from "@/bindings";
+import type { CallOverview, CallSearch } from "@/bindings";
 
 /*
  * «История звонков» in Tauri, over the fake IPC (./helpers/fake-tauri.ts)
  * (`call-history`): the calls by month, newest first by their start, each
- * with its title (or the summary's), the questions not closed, the
- * pending proposals and «аудио удалено»; the filter by a person goes by
- * id; the search is `calls_search`; a project without calls shows its
- * readiness from its data.
+ * with what one `calls_overview` reads of every call: its title (or the
+ * summary's), the questions not closed, the pending proposals and
+ * «аудио удалено»; the filter by a person goes by id; the search is
+ * `calls_search`; a project without calls shows its readiness from its
+ * data.
  */
 
 const fake = await vi.hoisted(async () => {
@@ -116,89 +111,43 @@ fake.db.calls.push(
   }
 );
 
-const view = (title: string, topic?: string): CallSummaryView => ({
-  building: null,
-  summary: {
-    builtAt: 1,
-    callId: "",
-    content: {
-      cards: [],
-      next: [],
-      topics: topic
-        ? [
-            {
-              from: { endMs: 1, recordingId: "", segmentId: "", startMs: 0 },
-              id: "t1",
-              points: [],
-              title: topic,
-              to: { endMs: 1, recordingId: "", segmentId: "", startMs: 0 },
-              topicIds: [],
-            },
-          ]
-        : [],
-    },
-    createdAt: 1,
-    error: null,
-    state: "ready",
-    title,
-    tldr: "",
-    transcriptPass: "refined",
-    updatedAt: 1,
+/** What Rust's `calls_overview` reads of the calls above. */
+const OVERVIEW: CallOverview[] = [
+  {
+    audioDeleted: true,
+    callId: LAST,
+    // Not named yet: the summary's title stands in.
+    openQuestions: 2,
+    pendingProposals: 2,
+    projectId: PROJECT,
+    title: "Онлайн-запись и бронь",
   },
-});
+  {
+    audioDeleted: false,
+    callId: FIRST,
+    openQuestions: 0,
+    pendingProposals: 0,
+    projectId: PROJECT,
+    title: "Старт проекта",
+  },
+  {
+    audioDeleted: false,
+    callId: LOOSE,
+    // No title and no summary title: the summary's first topic.
+    openQuestions: 0,
+    pendingProposals: 0,
+    projectId: null,
+    title: "Тарифы связи",
+  },
+];
 
-const question = (
-  id: string,
-  status: CallQuestion["status"]
-): CallQuestion => ({
-  answer: null,
-  answerEvidence: null,
-  cardField: null,
-  cardId: null,
-  createdAt: 1,
-  description: "",
-  evidence: [],
-  gapType: "empty",
-  id,
-  moment: null,
-  priority: 1,
-  recordingId: LAST_RECORDING,
-  status,
-  text: id,
-  topicId: null,
-  updatedAt: 1,
-});
-
-const pending = (id: string): Proposal => ({
-  after: "",
-  applied: null,
-  before: null,
-  callId: LAST,
-  createdAt: 1,
-  decidedAt: null,
-  decision: "pending",
-  edited: null,
-  evidence: [],
-  field: "notes",
-  id,
-  kind: "said",
-  personId: null,
-  target: "brief",
-  updatedAt: 1,
-});
-
-const deleted: CallRecording = {
-  audioDeleted: true,
-  durationMs: 900_000,
-  endedAt: NOV_5 + 900_000,
-  id: LAST_RECORDING,
-  meBytes: null,
-  othersBytes: null,
-  pass: "refined",
-  segments: [],
-  startedAt: NOV_5,
-  transcriptState: "refined",
-};
+/** Reads of one call each, which the history does not make. */
+const PER_CALL = [
+  "summary_get",
+  "call_transcript",
+  "call_questions",
+  "proposals_list",
+];
 
 const BRON: CallSearch = {
   matches: [
@@ -236,25 +185,8 @@ const BRON: CallSearch = {
 beforeEach(() => {
   fake.invoked.length = 0;
   fake.answers.clear();
-  fake.answers.set("summary_get", ({ callId }) =>
-    callId === LAST
-      ? view("Онлайн-запись и бронь")
-      : view("", callId === LOOSE ? "Тарифы связи" : undefined)
-  );
-  fake.answers.set("proposals_list", ({ callId }) =>
-    callId === LAST ? [pending("p1"), pending("p2")] : []
-  );
-  fake.answers.set("call_questions", ({ callId }) =>
-    callId === LAST
-      ? [
-          question("q-open", "open"),
-          question("q-asked", "asked"),
-          question("q-done", "answered"),
-        ]
-      : []
-  );
-  fake.answers.set("call_transcript", ({ callId }) =>
-    callId === LAST ? [deleted] : []
+  fake.answers.set("calls_overview", ({ projectId }) =>
+    OVERVIEW.filter((row) => !projectId || row.projectId === projectId)
   );
   fake.answers.set("calls_search", () => BRON);
 });
@@ -266,12 +198,41 @@ function open(query: Record<string, string> = {}) {
 
 const rowOf = (name: string | RegExp) => screen.getByRole("link", { name });
 
-const searches = () =>
+const invokedWith = (command: string) =>
   fake.invoked
-    .filter((item) => item.command === "calls_search")
+    .filter((item) => item.command === command)
     .map((item) => item.args);
 
+const searches = () => invokedWith("calls_search");
+
 describe("call history in Tauri", () => {
+  // First, so the overview's first read is this test's.
+  it("reads one overview of every call, and again once per change", async () => {
+    open();
+
+    await screen.findByRole("link", { name: LAST_TITLE });
+    expect(rowOf(LOOSE_TOPIC)).toBeTruthy();
+    expect(invokedWith("calls_overview")).toEqual([{ projectId: null }]);
+    for (const command of PER_CALL) {
+      expect(invokedWith(command)).toEqual([]);
+    }
+
+    // A decision on one call: one overview again, nothing per call.
+    fake.invoked.length = 0;
+    act(() =>
+      fake.dataChanged({
+        change: "updated",
+        entity: "call",
+        id: LAST,
+        projectId: PROJECT,
+      })
+    );
+    await waitFor(() => expect(invokedWith("calls_overview")).toHaveLength(1));
+    for (const command of PER_CALL) {
+      expect(invokedWith(command)).toEqual([]);
+    }
+  });
+
   it("«Два звонка проекта»: by month, newest first, each with its title", async () => {
     open({ project: PROJECT });
 

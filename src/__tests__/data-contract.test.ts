@@ -1334,6 +1334,63 @@ function postCallContract(
       )
     );
 
+    it.effect("reads the history's row of every call in one overview", () =>
+      run(
+        Effect.gen(function* () {
+          const calls = yield* CallsData;
+          const records = yield* CallRecordsData;
+          const proposals = yield* ProposalsData;
+          const summaries = yield* SummaryData;
+          const { call: fresh, project } = yield* finishedCall;
+
+          const everyCall = yield* calls.overview(null);
+          assert.deepStrictEqual(
+            everyCall.map((row) => row.callId),
+            (yield* calls.list(null)).map((item) => item.id)
+          );
+          assert.deepStrictEqual(yield* calls.overview(project.id), [
+            {
+              audioDeleted: false,
+              callId: fresh.id,
+              openQuestions: 0,
+              pendingProposals: 0,
+              projectId: project.id,
+              title: "",
+            },
+          ]);
+          assert.deepStrictEqual(yield* calls.overview("nope"), []);
+
+          // The same counts as the call's proposals and questions.
+          const demo = everyCall.find((row) => row.callId === DEMO_CALL_ID);
+          const pending = (yield* proposals.list(DEMO_CALL_ID)).filter(
+            (item) => item.decision === "pending"
+          );
+          assert.isAbove(pending.length, 0);
+          assert.strictEqual(demo?.pendingProposals, pending.length);
+          const notClosed = (yield* records.questions(DEMO_CALL_ID)).filter(
+            (item) => item.status === "open" || item.status === "asked"
+          );
+          assert.strictEqual(demo?.openQuestions, notClosed.length);
+          assert.strictEqual(demo?.audioDeleted, false);
+
+          yield* proposals.decide(pending[0]?.id ?? "", {
+            decision: "rejected",
+          });
+          yield* records.deleteAudio(DEMO_CALL_ID);
+          // Without its own title, the call is named after its summary.
+          yield* calls.update(DEMO_CALL_ID, { title: "" });
+          const { summary } = yield* summaries.get(DEMO_CALL_ID);
+          const after = (yield* calls.overview(null)).find(
+            (row) => row.callId === DEMO_CALL_ID
+          );
+          assert.strictEqual(after?.pendingProposals, pending.length - 1);
+          assert.strictEqual(after?.audioDeleted, true);
+          assert.isNotEmpty(summary?.title ?? "");
+          assert.strictEqual(after?.title, summary?.title);
+        })
+      )
+    );
+
     it.effect(
       "deletes a call's records with it, a person's proposals with them",
       () =>
