@@ -43,6 +43,7 @@ import {
   useDocumentDrop,
 } from "../api";
 import { BRIEF_BUILD_STAGES } from "../backend";
+import { useProjectCallLines } from "../call-lines";
 import {
   DocumentsBlock,
   SoonIntegrations,
@@ -99,6 +100,7 @@ function ProjectView({ id }: { id: string | null }) {
   const project = useProject(id);
   const people = usePeople(id);
   const documents = useProjectSources(id);
+  const calls = useProjectCallLines(id);
   const build = useBriefBuild(id);
   const progress = useBriefProgress(id);
   const session = useCallSession();
@@ -135,10 +137,11 @@ function ProjectView({ id }: { id: string | null }) {
     () =>
       projectPageData(project ?? { id: id ?? "" }, people, briefState, {
         buildStage,
+        calls,
         documents,
         stages: BRIEF_BUILD_STAGES,
       }),
-    [briefState, buildStage, documents, id, people, project]
+    [briefState, buildStage, calls, documents, id, people, project]
   );
 
   /* -------------------------------------------------- Brief */

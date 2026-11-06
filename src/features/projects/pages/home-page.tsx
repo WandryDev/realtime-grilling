@@ -9,7 +9,8 @@ import { inTauri } from "@/effect/runtime";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
-import { recentCalls, toHomeProject } from "../project-data";
+import { useHomeCallLines } from "../call-lines";
+import { isDemoProject, recentCalls, toHomeProject } from "../project-data";
 import { HomeScreen } from "../screens/home-screen";
 
 /** `?demo=first-run`: home before the first project, even with projects. */
@@ -28,7 +29,12 @@ export function HomePage() {
   const demo = useDemoState(HOME_DEMO_STATES);
   const projects = useProjects();
   const rows = useMemo(() => projects.map(toHomeProject), [projects]);
-  const calls = useMemo(() => recentCalls(projects), [projects]);
+  // The stored calls, then the demo projects' Paper rows.
+  const stored = useHomeCallLines(isDemoProject);
+  const calls = useMemo(
+    () => [...stored, ...recentCalls(projects)],
+    [projects, stored]
+  );
 
   const gated = !(inTauri || demo);
   const needsOnboarding = gated && onboardingDone === false;

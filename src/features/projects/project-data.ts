@@ -3,8 +3,7 @@
  * project screens draw. The demo projects exist only in the mock layer
  * (their ids are readable, never a UUID): they keep the Paper brief, calls
  * and integrations. A project made in the app shows what is stored: its
- * brief with its state, its documents, and empty calls and proposals until
- * those come from the backend (tasks 9 and 10).
+ * brief with its state, its documents and its stored calls.
  */
 
 import type { Brief, ProjectSource } from "@/bindings";
@@ -291,6 +290,11 @@ export function pageBriefState(
 export interface ProjectPageInput {
   /** Finished stages of the build that runs, 0…`stages`. */
   buildStage?: number;
+  /**
+   * The stored calls of a project made in the app (`useProjectCallLines`);
+   * a demo project keeps its Paper calls.
+   */
+  calls?: ProjectCalls;
   /** The documents of the project. */
   documents?: ProjectSource[];
   now?: number;
@@ -300,13 +304,24 @@ export interface ProjectPageInput {
 type PageProject = Pick<MockProject, "id"> &
   Partial<Pick<ProjectRecord, "brief" | "briefBuiltAt" | "briefTruncated">>;
 
-/** Calls of a demo project; a project made in the app has none yet. */
-function demoCalls(projectId: string) {
+/** The rows of «Звонки» and the line under it. */
+export interface ProjectCalls {
+  calls: CallSummary[];
+  summary: typeof PROJECT_CALLS_SUMMARY;
+}
+
+const NO_CALLS: ProjectCalls = {
+  calls: [],
+  summary: { hidden: 0, summary: "пока пусто" },
+};
+
+/** Calls of a demo project; a project made in the app shows the stored. */
+function projectCalls(projectId: string, stored?: ProjectCalls): ProjectCalls {
   if (projectId === DEMO_PROJECT_ID) {
     return { calls: PROJECT_CALLS, summary: PROJECT_CALLS_SUMMARY };
   }
   if (!isDemoProject(projectId)) {
-    return { calls: [], summary: { hidden: 0, summary: "пока пусто" } };
+    return stored ?? NO_CALLS;
   }
   const calls = RECENT_CALLS.filter((call) => call.projectId === projectId).map(
     (call) => ({ ...call, project: undefined })
@@ -404,7 +419,10 @@ export function projectPageData(
   const demo = isDemoProject(project.id);
   const isTelemedia = project.id === DEMO_PROJECT_ID;
   const documents = input.documents ?? [];
-  const { calls, summary: callsSummary } = demoCalls(project.id);
+  const { calls, summary: callsSummary } = projectCalls(
+    project.id,
+    input.calls
+  );
   const totalCalls = calls.length + callsSummary.hidden;
 
   const parts = demo
