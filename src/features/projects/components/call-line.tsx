@@ -17,7 +17,7 @@ import type { CallStatus, CallSummary } from "../mock";
 export function CallLine({
   call,
   className,
-  href = callHref(call),
+  href = call.href ?? callHref(call),
 }: {
   call: CallSummary;
   className?: string;
@@ -35,11 +35,11 @@ export function CallLine({
       <span className="text-muted-foreground w-[120px] shrink-0 font-mono text-xs">
         {call.when}
       </span>
-      {call.project ? (
+      {call.project === undefined ? null : (
         <span className="text-foreground w-40 shrink-0 truncate text-base font-medium">
           {call.project}
         </span>
-      ) : null}
+      )}
       <span className="text-foreground min-w-0 flex-1 truncate text-base">
         {call.topic}
       </span>

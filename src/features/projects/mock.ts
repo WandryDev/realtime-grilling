@@ -83,6 +83,8 @@ export interface CallSummary {
   duration: string;
   /** Unreviewed suggestions: the row is highlighted. */
   highlighted?: boolean;
+  /** Where the row leads instead of `callHref` (a live call: its screen). */
+  href?: string;
   id: string;
   people: string;
   project?: string;

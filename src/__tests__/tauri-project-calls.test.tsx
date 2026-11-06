@@ -61,10 +61,16 @@ const CALLS = [1, 2, 3, 4].map(
 );
 const LOOSE = "019a0000-0000-7000-8000-0000000000c9";
 
-const DAY = 86_400_000;
 const today = new Date();
-today.setHours(12, 37, 0, 0);
-const TODAY = today.getTime();
+/** 12:37 `days` calendar days ago (DST-safe). */
+const daysAgo = (days: number) =>
+  new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - days,
+    12,
+    37
+  ).getTime();
 const NEWEST = /Телеграм-бот/u;
 const LIMITS = /Лимиты на брони/u;
 const RATES = /Курсы валют/u;
@@ -80,14 +86,14 @@ fake.db.calls.push(
   // Oldest first: the page sorts them by their start.
   ...CALLS.map((id, index) => ({
     ...fakeCall(id, PROJECT, ""),
-    endedAt: TODAY - (3 - index) * DAY + 600_000,
+    endedAt: daysAgo(3 - index) + 600_000,
     participantIds: [ANNA],
-    startedAt: TODAY - (3 - index) * DAY,
+    startedAt: daysAgo(3 - index),
   })),
   {
     ...fakeCall(LOOSE, null, ""),
-    endedAt: TODAY - 10 * DAY + 300_000,
-    startedAt: TODAY - 10 * DAY,
+    endedAt: daysAgo(10) + 300_000,
+    startedAt: daysAgo(10),
   }
 );
 

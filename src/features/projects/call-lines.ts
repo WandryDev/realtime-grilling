@@ -7,6 +7,7 @@ import { useCallsOverview } from "@/data/call-history";
 import { type CallRecord, NO_PROJECT_CALL, useCalls } from "@/data/calls";
 import { useProjects } from "@/data/projects";
 import { plural } from "@/lib/plural";
+import { routes } from "@/lib/routes";
 
 import type { CallSummary } from "./mock";
 
@@ -18,31 +19,32 @@ import type { CallSummary } from "./mock";
  * The demo projects keep their Paper rows (`project-data.ts`).
  */
 
+const UNTITLED = "Без названия";
+
 /** Rows of the project page; the rest is under «Показать ещё». */
 export const PROJECT_CALLS_SHOWN = 3;
 /** Rows of home; «Вся история» has the rest. */
 export const HOME_CALLS_SHOWN = 5;
-
-const MS_PER_DAY = 86_400_000;
 
 export interface StoredCall {
   call: CallRecord;
   overview?: CallOverview;
 }
 
-function startOfDay(at: number) {
+/** Midnight `daysBack` days before `at`, by the calendar (DST-safe). */
+function startOfDay(at: number, daysBack = 0) {
   const day = new Date(at);
+  day.setDate(day.getDate() - daysBack);
   day.setHours(0, 0, 0, 0);
   return day.getTime();
 }
 
 /** «сегодня 12:00», «вчера 09:30», «16 окт 12:00», «16 окт 2025». */
 export function callWhen(call: CallRecord, now: number = Date.now()) {
-  const today = startOfDay(now);
-  if (call.startedAt >= today) {
+  if (call.startedAt >= startOfDay(now)) {
     return `сегодня ${call.time}`;
   }
-  if (call.startedAt >= today - MS_PER_DAY) {
+  if (call.startedAt >= startOfDay(now, 1)) {
     return `вчера ${call.time}`;
   }
   const year = new Date(call.startedAt).getFullYear();
@@ -63,14 +65,14 @@ function statusOf(
     const word = plural(pending, "предложение", "предложения", "предложений");
     return {
       kind: "proposals",
-      label: `${pending} ${word} ${pending === 1 ? "ждёт" : "ждут"}`,
+      label: `${pending} ${word} ${plural(pending, "ждёт", "ждут", "ждут")}`,
     };
   }
   if (open > 0) {
     const word = plural(open, "вопрос", "вопроса", "вопросов");
     return {
       kind: "muted",
-      label: `${open} ${word} ${open === 1 ? "открыт" : "открыты"}`,
+      label: `${open} ${word} ${plural(open, "открыт", "открыты", "открыты")}`,
     };
   }
   return { kind: "muted", label: "разобран" };
@@ -78,7 +80,8 @@ function statusOf(
 
 /**
  * One row. The overview's title (the call's, its summary's, its first
- * topic), else the project's name; `project` is set on home only.
+ * topic), else the project's name; on home, where the project has its own
+ * column, «Без названия». A live call opens the call screen.
  */
 export function callLineOf(
   { call, overview }: StoredCall,
@@ -93,15 +96,18 @@ export function callLineOf(
   ]
     .filter(Boolean)
     .join(", ");
+  const live = call.endedAt === null;
+  const untitled = options.withProject ? UNTITLED : projectName;
   return {
     duration: call.duration,
-    highlighted: pending > 0,
+    highlighted: !live && pending > 0,
+    href: live ? routes.call() : undefined,
     id: call.id,
     people,
     project: options.withProject ? projectName : undefined,
     projectId: call.projectId ?? undefined,
     status: statusOf(call, pending, open),
-    topic: overview?.title || call.title.trim() || projectName,
+    topic: overview?.title || call.title.trim() || untitled,
     when: callWhen(call, options.now),
   };
 }
