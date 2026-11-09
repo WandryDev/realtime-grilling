@@ -62,6 +62,7 @@
         "description": { "type": "string" },
         "cardField": { "$ref": "#/$defs/cardLens" },
         "gapType": {
+          "description": "empty: not disclosed, the field is empty OR says it in general words without what an estimate needs (who exactly, how many, on what condition, which system); assumption: someone assumed it, the client did not confirm; contradiction: two phrases, or a phrase and the project, disagree.",
           "type": "string",
           "enum": ["empty", "assumption", "contradiction"]
         },

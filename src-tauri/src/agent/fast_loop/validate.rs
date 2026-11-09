@@ -1268,6 +1268,27 @@ mod tests {
         assert_eq!(validation.patch.ops.len(), 2);
     }
 
+    /// Spec «Поле заполнено общими словами»: `empty` means «не раскрыто», so
+    /// a question about a field the card already has passes.
+    #[test]
+    fn an_empty_gap_on_a_filled_field_passes() {
+        let mut context = context();
+        assert!(context.card_fields["T1"].contains(&CardLens::Users));
+        context.questions.clear();
+        let patch = Patch::from_value(json!({ "ops": [{
+            "op": "question", "title": "Кто из сотрудников работает с бронями?",
+            "description": "В карточке только «клиенты обменника»", "cardField": "users",
+            "gapType": "empty", "priority": 3, "evidence": [segment("S1", "пять операторов в смену")]
+        }] }))
+        .unwrap();
+        let validation = validate(&patch, &context, &TrigramSimilarity::default());
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        assert_eq!(
+            added(&validation),
+            ["Кто из сотрудников работает с бронями?"]
+        );
+    }
+
     /// A contradiction is the client's with themselves: both phrases are
     /// «Остальные».
     #[test]

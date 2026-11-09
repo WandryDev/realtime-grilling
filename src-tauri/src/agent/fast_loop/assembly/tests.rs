@@ -177,6 +177,24 @@ fn the_prefix_with_gaps_is_byte_identical_between_calls() {
     assert_eq!(second, first);
 }
 
+/// The measured variant `--rules spikes/question-quality/rules-full.md` is
+/// the rules the app runs: they don't drift apart.
+#[test]
+fn the_full_rules_variant_is_the_rules() {
+    let full = include_str!("../../../../../spikes/question-quality/rules-full.md");
+    assert_eq!(full, RULES);
+    for rule in [
+        "`G1…Gn`",
+        "Пункт «Неясно до звонка» (`G…`) поднимай вопросом",
+        "пункт `G…` без них не годятся",
+        "не раскрыто: поле пустое ИЛИ записано общими словами",
+        "даже если он не сказал «теперь о другом»",
+        "Первый вопрос темы — сразу.",
+    ] {
+        assert!(RULES.contains(rule), "no «{rule}» in the rules");
+    }
+}
+
 #[test]
 fn without_a_project_the_prefix_says_so() {
     let db = database();
