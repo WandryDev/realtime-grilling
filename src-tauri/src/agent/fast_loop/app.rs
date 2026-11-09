@@ -13,7 +13,7 @@ use super::{
 use crate::{
     agent::{self, AgentState, claude_cli::ClaudeCodeCli, discover::SearchEnv},
     error::{CommandError, CommandResult},
-    storage::{Storage, call_state},
+    storage::{self, Storage, call_state},
 };
 
 /// `app_data_dir()/agent`: the CLI's work dir and the prefix files.
@@ -45,6 +45,10 @@ impl<R: Runtime> LoopHost for AppLoopHost<R> {
         if let Err(error) = status.emit(&self.app) {
             eprintln!("grill: failed to emit agent-status: {error}");
         }
+    }
+
+    fn now_ms(&self) -> i64 {
+        storage::now_ms()
     }
 }
 

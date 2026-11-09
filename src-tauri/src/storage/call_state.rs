@@ -711,10 +711,23 @@ pub(super) fn in_savepoint<T>(
 /// recording; `Invalid` (and nothing applied) when a step does not fit the
 /// stored state: an unknown topic or question, no current topic, a field the
 /// card does not have, an answered question that is neither open nor asked.
+#[cfg(test)]
 pub fn apply_patch(
     connection: &Connection,
     recording_id: &str,
     patch: &ValidatedPatch,
+) -> CommandResult<AppliedPatch> {
+    apply_patch_at(connection, recording_id, patch, now_ms())
+}
+
+/// [`apply_patch`] at `now` (Unix ms) for every time it writes. The fast
+/// loop passes its host's clock, so a replay on a virtual clock stores the
+/// times of the call it replays (question-quality design.md, decision 3).
+pub fn apply_patch_at(
+    connection: &Connection,
+    recording_id: &str,
+    patch: &ValidatedPatch,
+    now: i64,
 ) -> CommandResult<AppliedPatch> {
     let recording = recording_row(connection, recording_id)?;
     if patch.ops.is_empty() {
@@ -725,7 +738,6 @@ pub fn apply_patch(
         let mut applied = AppliedPatch::default();
         let mut current = recording.current_topic_id.clone();
         for op in &patch.ops {
-            let now = now_ms();
             match op {
                 ValidatedOp::CreateTopic { title } => {
                     let id = create_topic(connection, recording_id, &recording, title, now)?;
@@ -777,7 +789,7 @@ pub fn apply_patch(
                 }
             }
         }
-        recompute(connection, recording_id, count, now_ms())?;
+        recompute(connection, recording_id, count, now)?;
         Ok(applied)
     })
 }
@@ -1147,7 +1159,18 @@ fn recompute(
 /// Records an agent call and returns its id (UUID v7). `NotFound` for an
 /// unknown recording, `Invalid` when `rejected` is not a JSON array or the
 /// outcome is missing.
+#[cfg(test)]
 pub fn insert_agent_call(connection: &Connection, call: &AgentCallInput) -> CommandResult<String> {
+    insert_agent_call_at(connection, call, now_ms())
+}
+
+/// [`insert_agent_call`] with `created_at` = `now` (Unix ms): the fast
+/// loop's host clock.
+pub fn insert_agent_call_at(
+    connection: &Connection,
+    call: &AgentCallInput,
+    now: i64,
+) -> CommandResult<String> {
     recording_row(connection, &call.recording_id)?;
     let outcome = call
         .outcome
@@ -1181,7 +1204,7 @@ pub fn insert_agent_call(connection: &Connection, call: &AgentCallInput) -> Comm
             call.utilization,
             Json(rejected),
             call.error,
-            now_ms()
+            now
         ],
     )?;
     Ok(id)

@@ -21,6 +21,7 @@
 //! clock with a fake agent.
 
 use std::{
+    borrow::Cow,
     collections::HashMap,
     path::PathBuf,
     pin::Pin,
@@ -71,6 +72,12 @@ pub trait LoopHost: Send + Sync + 'static {
     fn call_state_changed(&self, recording_id: &str);
     /// `AgentStatus` to every window.
     fn agent_status(&self, status: &AgentStatus);
+    /// The wall clock (Unix ms) of the times the loop writes: when a call
+    /// started and was recorded, when its questions and topics were
+    /// created. The app's is [`now_ms`]; a replay's runs on its virtual
+    /// clock, so its times are those of the call it replays
+    /// (question-quality design.md, decision 3).
+    fn now_ms(&self) -> i64;
 }
 
 pub type ProvideFuture =
@@ -94,6 +101,9 @@ pub struct LoopConfig {
     pub call_timeout: Duration,
     /// How long a cancelled call may take to stop.
     pub cancel_wait: Duration,
+    /// The rules that open the prefix: [`assembly::RULES`] in the app; a
+    /// replay may try another text (`grill-eval replay --rules`).
+    pub rules: Cow<'static, str>,
 }
 
 impl LoopConfig {
@@ -103,6 +113,7 @@ impl LoopConfig {
             retry_after: Duration::from_secs(30),
             call_timeout: claude_cli::TIMEOUT + Duration::from_secs(2),
             cancel_wait: Duration::from_secs(5),
+            rules: Cow::Borrowed(assembly::RULES),
         }
     }
 }
@@ -446,8 +457,9 @@ impl FastLoop {
             retry_at: None,
         };
         let id = recording_id.to_owned();
+        let rules = self.0.config.rules.clone();
         let prefix = database(&self.0.host, move |connection| {
-            assembly::build_prefix(connection, &id)
+            assembly::build_prefix_with_rules(connection, &id, &rules)
         })
         .await
         .map_err(|error| failed(format!("Не удалось собрать контекст звонка: {error}")))?;
@@ -649,9 +661,10 @@ impl Scheduler {
                 self.new_since_last = true;
                 self.retry_at = Some(Instant::now() + retry_after);
                 let retry_ms = i64::try_from(retry_after.as_millis()).unwrap_or(i64::MAX);
+                let now = self.call.fast_loop.0.host.now_ms();
                 self.report(AgentLoopState::Error {
                     message,
-                    retry_at: Some(now_ms().saturating_add(retry_ms)),
+                    retry_at: Some(now.saturating_add(retry_ms)),
                 });
             }
             CallEnd::NotLoggedIn => {
@@ -661,6 +674,8 @@ impl Scheduler {
             }
             CallEnd::RateLimited { resets_at } => {
                 self.new_since_last = true;
+                // The CLI's reset time is on the real wall clock, not the
+                // host's.
                 let until = resets_at.map(|resets_at| {
                     let wait = u64::try_from(resets_at.saturating_sub(now_ms())).unwrap_or(0);
                     Instant::now() + Duration::from_millis(wait)
@@ -694,7 +709,7 @@ async fn run_call(
         },
         _ = &mut stop => return CallEnd::Cancelled,
     };
-    let started_at = now_ms();
+    let started_at = host.now_ms();
     let started = Instant::now();
 
     let (id, prefix) = (call.recording_id.clone(), Arc::clone(&call.prefix));
@@ -810,6 +825,7 @@ async fn run_call(
     // only the steps it made stale.
     let id = call.recording_id.clone();
     let given = assembled.context;
+    let now = host.now_ms();
     let applied = database(host, move |connection| {
         let mut has_ops = false;
         in_savepoint(connection, || {
@@ -825,8 +841,8 @@ async fn run_call(
             } else {
                 AgentCallOutcome::Empty
             });
-            call_state::apply_patch(connection, &id, &validation.patch)?;
-            call_state::insert_agent_call(connection, &record)?;
+            call_state::apply_patch_at(connection, &id, &validation.patch, now)?;
+            call_state::insert_agent_call_at(connection, &record, now)?;
             Ok(())
         })
         .or_else(|error| {
@@ -834,7 +850,7 @@ async fn run_call(
             // recorded.
             record.outcome = Some(AgentCallOutcome::Error);
             record.error = Some(error.to_string());
-            call_state::insert_agent_call(connection, &record)?;
+            call_state::insert_agent_call_at(connection, &record, now)?;
             Err(error)
         })?;
         Ok(has_ops)
@@ -860,8 +876,9 @@ async fn run_call(
 /// Records a call that brought no patch.
 async fn save(host: &Arc<dyn LoopHost>, record: AgentCallInput) {
     let recording_id = record.recording_id.clone();
+    let now = host.now_ms();
     let saved = database(host, move |connection| {
-        call_state::insert_agent_call(connection, &record)
+        call_state::insert_agent_call_at(connection, &record, now)
     })
     .await;
     if let Err(error) = saved {

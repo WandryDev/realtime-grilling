@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicI64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -126,6 +126,8 @@ pub enum Reported {
 pub struct TestHost {
     pub db: Mutex<Connection>,
     pub reported: Mutex<Vec<Reported>>,
+    /// Added to the wall clock the host gives the loop (ms).
+    pub clock_shift: AtomicI64,
 }
 
 impl TestHost {
@@ -133,6 +135,7 @@ impl TestHost {
         Arc::new(Self {
             db: Mutex::new(connection),
             reported: Mutex::new(Vec::new()),
+            clock_shift: AtomicI64::new(0),
         })
     }
 
@@ -183,6 +186,10 @@ impl LoopHost for TestHost {
             .lock()
             .unwrap()
             .push(Reported::Status(status.clone()));
+    }
+
+    fn now_ms(&self) -> i64 {
+        storage::now_ms() + self.clock_shift.load(Ordering::SeqCst)
     }
 }
 

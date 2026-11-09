@@ -119,10 +119,21 @@ pub struct Prefix {
 /// The prefix of `recording_id` from what the storage has now: its project,
 /// the participants (all the project's people when none were picked) and
 /// the glossary. `NotFound` for an unknown recording.
+#[cfg(test)]
 pub fn build_prefix(connection: &Connection, recording_id: &str) -> CommandResult<Prefix> {
+    build_prefix_with_rules(connection, recording_id, RULES)
+}
+
+/// [`build_prefix`] opened by `rules` instead of [`RULES`]: a replay tries
+/// a variant of the rules without a rebuild (`grill-eval replay --rules`).
+pub fn build_prefix_with_rules(
+    connection: &Connection,
+    recording_id: &str,
+    rules: &str,
+) -> CommandResult<Prefix> {
     let recording = recordings::get(connection, recording_id)?;
     let glossary = context::load(connection, recording_id)?.glossary;
-    let mut text = String::from(RULES);
+    let mut text = String::from(rules);
     let mut project_items = Vec::new();
 
     text.push_str("\n# Проект\n\n");

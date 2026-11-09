@@ -667,6 +667,45 @@ async fn a_patch_is_checked_applied_and_reported() {
     );
 }
 
+/// The times the loop writes come from the host's clock, not the system's
+/// (question-quality design.md, decision 3): a host a day behind stores a
+/// day-old call, topic and question.
+#[tokio::test(start_paused = true)]
+async fn the_times_written_follow_the_hosts_clock() {
+    const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+    let rig = Rig::new([]).await;
+    rig.host.clock_shift.store(-DAY_MS, Ordering::SeqCst);
+    let segment = rig.host.db(|db| {
+        say(
+            db,
+            &rig.recording,
+            OTHERS,
+            0,
+            "Если все заняты, тогда уже как получится",
+        )
+    });
+    rig.agent
+        .push(Step::patch(applied_patch(&segment, "если все заняты")));
+    let before = now_ms();
+    rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.until(6).await;
+    let after = now_ms();
+
+    let shifted = |at: i64| (before - DAY_MS..=after - DAY_MS).contains(&at);
+    let state = rig
+        .host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap();
+    let question = &state.questions[0];
+    assert!(shifted(question.created_at), "{}", question.created_at);
+    assert!(shifted(question.shown_at.unwrap()));
+    assert!(shifted(state.topics[0].created_at));
+    assert!(shifted(state.cards[0].updated_at));
+    let call = &rig.calls()[0];
+    assert!(shifted(call.started_at), "{}", call.started_at);
+    assert!(shifted(call.created_at));
+}
+
 /// The client answers Q1; while the call runs the manager hides Q1. The
 /// answer is stale and logged so; the card field and the new question still
 /// apply, and the call is no error.
