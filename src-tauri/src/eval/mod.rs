@@ -11,11 +11,13 @@
 //! - `report`: the raw results of a replay, `report.json`;
 //! - `judge`: the LLM judge's labels of a run, `judge.json`;
 //! - `metrics`: the metrics of a run and `report.md`;
-//! - `compare`: two runs of one corpus side by side, `compare.md`.
+//! - `compare`: two runs of one corpus side by side, `compare.md`;
+//! - `brief`: a corpus's brief rebuilt with the current brief prompt.
 //!
 //! Everything else of the crate stays private: this module reaches it from
 //! inside.
 
+mod brief;
 pub mod cli;
 mod compare;
 mod corpus;

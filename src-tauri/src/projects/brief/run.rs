@@ -38,6 +38,7 @@ use crate::{
             OutputPhase, Usage,
         },
         discover::SearchEnv,
+        process::TreeSlot,
     },
     error::{CommandError, CommandResult},
     events::EventSink,
@@ -263,24 +264,17 @@ async fn attempt<H: BriefHost>(
     let prompt = PromptFile::write(&host.prompt_dir(), slot.project_id())
         .map_err(|error| failed(format!("Не удалось записать промпт брифа: {error}")))?;
     let hook_stages = Arc::clone(stages);
-    let request = AgentRequest {
-        system_prompt_file: prompt.0.clone(),
-        user_message: message.text.clone(),
-        schema: schema_argument().to_owned(),
-        process: slot.process(),
-        options: CallOptions {
-            model: Some(MODEL),
-            effort: Some(EFFORT),
-            timeout: Some(TIMEOUT),
-            output: OutputKind::Object,
-            on_output: Some(OutputHook::new(move |phase| {
-                hook_stages.advance(match phase {
-                    OutputPhase::Reading => 3,
-                    OutputPhase::Writing => 4,
-                });
-            })),
-        },
-    };
+    let request = request(
+        &prompt,
+        &message,
+        slot.process(),
+        Some(OutputHook::new(move |phase| {
+            hook_stages.advance(match phase {
+                OutputPhase::Reading => 3,
+                OutputPhase::Writing => 4,
+            });
+        })),
+    );
     let cancel = slot
         .take_cancel()
         .ok_or_else(|| failed("Сборка брифа уже запускалась"))?;
@@ -296,9 +290,7 @@ async fn attempt<H: BriefHost>(
     unless_cancelled(slot)?;
 
     stages.advance(LAST_STAGE);
-    let mut brief = Brief::from_reply(reply.patch)
-        .map_err(|error| failed(format!("Агент ответил не по схеме брифа: {error}")))?;
-    brief.resolve_documents(&message.documents);
+    let brief = brief_of(reply.patch, &message).map_err(End::Failed)?;
     let id = slot.project_id().to_owned();
     let (fingerprint, truncated) = (inputs.fingerprint, message.truncated);
     let cancelled = slot.cancel_flag();
@@ -310,6 +302,39 @@ async fn attempt<H: BriefHost>(
         .await
         .map_err(|error| failed(error.to_string()))?;
     if saved { Ok(()) } else { Err(End::Cancelled) }
+}
+
+/// The agent call of a build: the rules in `prompt`, `message` on stdin,
+/// the brief's schema, model and effort. `grill-eval brief` makes the same
+/// call for a corpus.
+pub fn request(
+    prompt: &PromptFile,
+    message: &input::BriefMessage,
+    process: TreeSlot,
+    on_output: Option<OutputHook>,
+) -> AgentRequest {
+    AgentRequest {
+        system_prompt_file: prompt.0.clone(),
+        user_message: message.text.clone(),
+        schema: schema_argument().to_owned(),
+        process,
+        options: CallOptions {
+            model: Some(MODEL),
+            effort: Some(EFFORT),
+            timeout: Some(TIMEOUT),
+            output: OutputKind::Object,
+            on_output,
+        },
+    }
+}
+
+/// The agent's reply as a brief, its `F1…` resolved by `message`; `Err`
+/// with what to show when it is not one.
+pub fn brief_of(reply: serde_json::Value, message: &input::BriefMessage) -> Result<Brief, String> {
+    let mut brief = Brief::from_reply(reply)
+        .map_err(|error| format!("Агент ответил не по схеме брифа: {error}"))?;
+    brief.resolve_documents(&message.documents);
+    Ok(brief)
 }
 
 /// Saves the brief under the database lock, unless the build was cancelled
@@ -346,7 +371,7 @@ fn save(
 
 /// The cost and the time of a build, for tuning the budget (design.md,
 /// risks): not in `agent_calls`, which keeps the recordings' calls.
-fn log_cost(project_id: &str, usage: &Usage, message: &input::BriefMessage) {
+pub fn log_cost(project_id: &str, usage: &Usage, message: &input::BriefMessage) {
     let cost = usage
         .cost_usd
         .map_or_else(|| "?".to_owned(), |cost| format!("{cost:.4}"));
@@ -406,10 +431,10 @@ impl Stages {
 
 /// The build's rules as a file for `--system-prompt-file`; removed when
 /// dropped.
-struct PromptFile(PathBuf);
+pub struct PromptFile(PathBuf);
 
 impl PromptFile {
-    fn write(dir: &Path, project_id: &str) -> std::io::Result<Self> {
+    pub fn write(dir: &Path, project_id: &str) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(format!("{project_id}.md"));
         std::fs::write(&path, PROMPT)?;

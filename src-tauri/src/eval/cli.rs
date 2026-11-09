@@ -8,10 +8,11 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 
 use super::{
-    compare,
+    brief, compare,
     corpus::{self, Corpus},
     export, judge, metrics, replay,
     report::{self, Report},
@@ -21,6 +22,7 @@ use crate::{
         self, AgentState,
         claude_cli::{Agent, ClaudeCodeCli},
         discover::{self, SearchEnv},
+        fast_loop::assembly,
     },
     storage,
 };
@@ -37,7 +39,7 @@ grill-eval — прогон записанных звонков через бы�
          --project <описание.md> [--docs <файлы>] [--people <people.json>] [--name N]
       Внешняя запись звонка в набор. Пока не реализовано.
   brief <набор>
-      Пересобрать бриф набора нынешним промптом брифа. Пока не реализовано.
+      Пересобрать бриф набора нынешним промптом брифа; прежний остаётся в briefPrevious.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime] [--baseline-state]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
       .grill-eval/reports/<время>-<L>/report.json и report.md.
@@ -102,6 +104,14 @@ grill-eval compare <отчёт A> <отчёт B>
 Печатает таблицу метрик «A | B | разница» и вопросы, которые появились в B или пропали
 из A (пары — одна тема и похожий текст), и пишет то же в compare.md в папке B. Метки
 судьи берутся из judge.json, если он есть.
+";
+
+const BRIEF_USAGE: &str = "\
+grill-eval brief <набор>
+
+Собирает бриф набора нынешним промптом брифа приложения (тот же вызов Claude Code) из
+описания, заметок, людей и текстов документов набора и записывает его в набор. Прежний
+бриф остаётся в поле briefPrevious.
 ";
 
 /// The arguments after the subcommand.
@@ -193,11 +203,16 @@ pub fn main(args: Vec<String>) -> ExitCode {
             print!("{COMPARE_USAGE}");
             return ExitCode::SUCCESS;
         }
+        "brief" if wants_help(rest) => {
+            print!("{BRIEF_USAGE}");
+            return ExitCode::SUCCESS;
+        }
         "export" => export_command(rest),
         "replay" => replay_command(rest),
         "judge" => judge_command(rest),
         "compare" => compare_command(rest),
-        "import" | "brief" => {
+        "brief" => brief_command(rest),
+        "import" => {
             if wants_help(rest) {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -499,6 +514,39 @@ fn compare_command(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn brief_command(args: &[String]) -> Result<ExitCode, String> {
+    let parsed = parse(args, &[], &[])?;
+    let path = corpus::resolve(&eval_dir()?, &one_positional(&parsed, "набор")?);
+    let mut corpus = Corpus::load(&path)?;
+    // Nothing to build from: an error before the agent is looked for.
+    brief::inputs(&corpus)?;
+
+    let scratch = Scratch::new()?;
+    let cli = ready_cli(&scratch.0)?;
+    let agent: Arc<dyn Agent> = Arc::new(ClaudeCodeCli::new(cli, &scratch.0));
+    let usage = runtime()?.block_on(brief::run(&mut corpus, agent, &scratch.0))?;
+    corpus.save(&path)?;
+
+    let gaps = corpus
+        .project
+        .as_ref()
+        .and_then(|project| project.brief.as_ref())
+        .map(assembly::brief_gaps)
+        .unwrap_or_default();
+    println!(
+        "Бриф набора {} пересобран за {:.0} с, ${:.2}; «Неясно до звонка»: {} → {}",
+        corpus.name,
+        Duration::from_millis(usage.duration_ms).as_secs_f64(),
+        usage.cost_usd.unwrap_or(0.0),
+        gaps.len(),
+        path.display()
+    );
+    for (index, (lens, text)) in gaps.iter().enumerate() {
+        println!("G{} ({}): {text}", index + 1, lens.label());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,7 +585,7 @@ mod tests {
         assert_eq!(main(args(&["what"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["--help"])), ExitCode::SUCCESS);
         assert_eq!(main(args(&["replay", "--help"])), ExitCode::SUCCESS);
-        for command in ["judge", "compare"] {
+        for command in ["judge", "compare", "brief"] {
             assert_eq!(main(args(&[command, "--help"])), ExitCode::SUCCESS);
         }
     }
