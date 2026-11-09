@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 
+import type { CardLens } from "@/bindings";
 import { Badge } from "@/components/ui/badge";
 import { RowStatus } from "@/components/ui/row-status";
+import { CARD_LENS_NAMES } from "@/lib/card-lens";
 import { cn } from "@/lib/utils";
 
 import { ExternalIcon } from "../icons";
@@ -9,7 +11,8 @@ import { type DocumentKind, SourceMark } from "./source-mark";
 
 /*
  * The brief on the project page: the product in a paragraph, modules, the
- * stack, the client's glossary, and the key documents on the right (300).
+ * stack, the client's glossary, «Неясно до звонка», and the key documents
+ * on the right (300).
  * The demo projects draw the Paper brief; a stored brief maps onto the same
  * shape (`project-data.ts`).
  */
@@ -34,7 +37,14 @@ export interface KeyDocument {
   title: string;
 }
 
+export interface BriefGapView {
+  lens: CardLens;
+  text: string;
+}
+
 export interface BriefView {
+  /** «Неясно до звонка»: what the materials lack; none in an old brief. */
+  gaps: BriefGapView[];
   glossary: { definition: string; term: string }[];
   keyDocuments: KeyDocument[];
   keyDocumentsNote: string;
@@ -81,6 +91,7 @@ export function BriefBody({
         {brief.glossary.length > 0 ? (
           <BriefGlossary glossary={brief.glossary} />
         ) : null}
+        {brief.gaps.length > 0 ? <BriefGaps gaps={brief.gaps} /> : null}
       </div>
       <KeyDocuments
         className="w-75 shrink-0"
@@ -193,6 +204,39 @@ export function BriefGlossary({
           </div>
         ))}
       </dl>
+    </section>
+  );
+}
+
+/**
+ * «Неясно до звонка»: what the materials don't say, each under the lens of
+ * the task card it is about. The agent raises them when the call gets there.
+ */
+export function BriefGaps({
+  className,
+  gaps,
+}: {
+  className?: string;
+  gaps: BriefGapView[];
+}) {
+  return (
+    <section className={cn("flex flex-col gap-1", className)}>
+      <BriefLabel className="pb-1.5">Неясно до звонка</BriefLabel>
+      <ul className="flex flex-col gap-1">
+        {gaps.map((gap) => (
+          <li
+            className="border-border flex flex-col gap-0.5 border-b py-2 last:border-b-0"
+            key={`${gap.lens}-${gap.text}`}
+          >
+            <span className="text-muted-foreground text-sm">
+              {CARD_LENS_NAMES[gap.lens]}
+            </span>
+            <span className="text-foreground max-w-[640px] text-base">
+              {gap.text}
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

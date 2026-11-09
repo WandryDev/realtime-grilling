@@ -197,6 +197,54 @@ describe("project page: the brief", () => {
     expect(document.querySelector(`#source-${SOURCE}`)).not.toBeNull();
   });
 
+  it("lists «Неясно до звонка» with the lens of each gap", async () => {
+    Object.assign(fake.db.projects[0] ?? {}, {
+      brief: {
+        ...BRIEF,
+        gaps: [
+          { lens: "users", text: "Не сказано, кто разбирает пропущенные" },
+          { lens: "budget", text: "Линза не из семи" },
+          { lens: "acceptance", text: "Нет критериев готовности очереди" },
+        ],
+      },
+      briefBuiltAt: Date.now() - HOUR_MS,
+      briefState: "fresh",
+    });
+    await reload();
+    openProjectPage();
+
+    const heading = await screen.findByRole("heading", {
+      name: "Неясно до звонка",
+    });
+    const section = heading.closest("section");
+    if (!section) {
+      throw new Error("no section around «Неясно до звонка»");
+    }
+    const items = within(section)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    // A lens the app doesn't know is left out.
+    expect(items).toEqual([
+      "пользователиНе сказано, кто разбирает пропущенные",
+      "критерии готовностиНет критериев готовности очереди",
+    ]);
+  });
+
+  it("shows an old brief without «Неясно до звонка» (Старый бриф)", async () => {
+    // Built before the gaps: the stored JSON has no `gaps` at all.
+    Object.assign(fake.db.projects[0] ?? {}, {
+      brief: BRIEF,
+      briefBuiltAt: Date.now() - HOUR_MS,
+      briefState: "fresh",
+    });
+    await reload();
+    openProjectPage();
+
+    expect(await screen.findByText("Приём звонков сети клиник")).toBeTruthy();
+    expect(screen.getByText("Первичка")).toBeTruthy();
+    expect(screen.queryByText("Неясно до звонка")).toBeNull();
+  });
+
   it("says the brief may be outdated and offers to refresh it", async () => {
     Object.assign(fake.db.projects[0] ?? {}, {
       brief: BRIEF,

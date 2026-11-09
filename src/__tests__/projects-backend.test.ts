@@ -123,6 +123,13 @@ describe("ProjectsBackend.layerMock over the mock database", () => {
         (built.brief as { product: string }).product,
         "собран без агента: описание"
       );
+      // Without people and documents, that is what the materials lack.
+      assert.deepStrictEqual(
+        (built.brief as { gaps: { lens: string }[] }).gaps.map(
+          (gap) => gap.lens
+        ),
+        ["users", "acceptance"]
+      );
       // The name is not what the brief is built from.
       yield* projects.update(project.id, { name: "Ромашка Плюс" });
       assert.strictEqual((yield* projects.get(project.id)).briefState, "fresh");

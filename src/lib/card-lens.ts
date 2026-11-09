@@ -14,3 +14,22 @@ export const CARD_LENS_LABELS: Record<CardLens, string> = {
   scenarios: "Основной сценарий",
   users: "Кто пользуется",
 };
+
+/**
+ * The lenses as the agent's rules and the brief's «Неясно до звонка» name
+ * them (`CardLens::label` in Rust).
+ */
+export const CARD_LENS_NAMES: Record<CardLens, string> = {
+  acceptance: "критерии готовности",
+  constraints: "ограничения",
+  edgeCases: "крайние случаи",
+  goal: "цель",
+  integrations: "интеграции",
+  scenarios: "сценарии",
+  users: "пользователи",
+};
+
+/** Whether `value` is the id of a lens: a stored brief is read loosely. */
+export function isCardLens(value: string): value is CardLens {
+  return Object.hasOwn(CARD_LENS_NAMES, value);
+}

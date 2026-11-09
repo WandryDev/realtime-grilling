@@ -93,6 +93,11 @@ describe("ProjectScreen", () => {
     expect(
       screen.getByText("4 предложения после звонка сегодня в 12:00")
     ).toBeTruthy();
+    // The demo brief lists what the materials lack, each with its lens.
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Неясно до звонка" })
+    ).toBeTruthy();
+    expect(screen.getByText("критерии готовности")).toBeTruthy();
   });
 
   it("shows the refresh in progress", () => {

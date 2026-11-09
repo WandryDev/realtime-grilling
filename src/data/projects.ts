@@ -11,6 +11,7 @@ import type {
 } from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
 import type { MockProject } from "@/features/mock/projects";
+import { isCardLens } from "@/lib/card-lens";
 
 import { mockSeed } from "./services/mock-seed";
 import { ProjectsData } from "./services/projects";
@@ -41,6 +42,10 @@ export interface ProjectRecord extends MockProject {
 }
 
 const BriefSchema = Schema.Struct({
+  // A brief built before the gaps has none; a lens is checked on reading.
+  gaps: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ lens: Schema.String, text: Schema.String }))
+  ),
   glossary: Schema.Array(
     Schema.Struct({ definition: Schema.String, term: Schema.String })
   ),
@@ -64,6 +69,9 @@ function toBrief(value: Value | null): Brief | null {
   return Option.match(decodeBrief(value), {
     onNone: () => null,
     onSome: (brief) => ({
+      gaps: (brief.gaps ?? []).flatMap(({ lens, text }) =>
+        isCardLens(lens) ? [{ lens, text }] : []
+      ),
       glossary: brief.glossary.map((entry) => ({ ...entry })),
       keyDocuments: brief.keyDocuments.map((document) => ({ ...document })),
       modules: brief.modules.map((module) => ({ ...module })),
