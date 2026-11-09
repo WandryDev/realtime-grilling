@@ -149,6 +149,7 @@ impl Queue {
         (batch, self.closed && self.frames.is_empty())
     }
 
+    #[cfg(any(test, feature = "eval"))]
     fn backlog(&self) -> usize {
         self.queued_samples + self.scoring_samples
     }
@@ -345,6 +346,7 @@ impl VadWorker {
     }
 
     /// Audio waiting for the worker or being scored, in milliseconds.
+    #[cfg(any(test, feature = "eval"))]
     pub fn backlog_ms(&self) -> u64 {
         self.shared.lock().backlog() as u64 / SAMPLES_PER_MS
     }

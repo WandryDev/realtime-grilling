@@ -425,6 +425,7 @@ impl AgentCallOutcome {
         }
     }
 
+    #[cfg(any(test, feature = "eval"))]
     fn parse(text: &str) -> rusqlite::Result<Self> {
         match text {
             "ok" => Ok(Self::Ok),
@@ -463,6 +464,7 @@ pub struct AgentCallInput {
 
 /// A recorded agent call (read by the tests and `grill-eval`; the windows
 /// don't need it).
+#[cfg(any(test, feature = "eval"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentCall {
     pub id: String,
@@ -1228,6 +1230,7 @@ pub fn insert_agent_call_at(
 }
 
 /// The agent calls of a recording, oldest first (the tests, `grill-eval`).
+#[cfg(any(test, feature = "eval"))]
 pub fn agent_calls(connection: &Connection, recording_id: &str) -> CommandResult<Vec<AgentCall>> {
     let mut statement = connection.prepare(
         "SELECT id, recording_id, started_at, duration_ms, outcome, input_tokens, output_tokens,

@@ -1,6 +1,6 @@
 # Качество вопросов: прогоны записанных звонков
 
-> Изменение `question-quality` (`openspec/changes/question-quality/`). Инструмент — `grill-eval` в `src-tauri` (`cargo run --bin grill-eval -- --help`).
+> Изменение `question-quality` (`openspec/changes/question-quality/`). Инструмент — `grill-eval`, пример крейта `src-tauri` с фичей `eval` (`bun run eval -- --help`); в бандл приложения он не попадает.
 
 Здесь собраны сводные цифры прогонов записанных звонков через быстрый контур:
 

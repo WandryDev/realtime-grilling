@@ -5,7 +5,9 @@ mod call;
 mod commands;
 mod error;
 /// `grill-eval` (question-quality design.md, decision 1): its only way in
-/// is `eval::cli::main`.
+/// is `eval::cli::main`. Only with the `eval` feature (the example) and in
+/// the tests: the app never has it.
+#[cfg(any(test, feature = "eval"))]
 pub mod eval;
 mod events;
 mod permissions;

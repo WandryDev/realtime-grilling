@@ -31,7 +31,7 @@
 
 ### 1. `grill-eval` — бинарник внутри крейта
 
-В `src-tauri/Cargo.toml` добавляется `[[bin]] name = "grill-eval"`. Код живёт в новом модуле `src-tauri/src/eval/`, библиотека отдаёт его как `pub mod eval` с одной точкой входа `eval::cli::main(args)`. Модули приложения остаются приватными, наружу ничего больше не выходит. Подкоманды:
+В `src-tauri/Cargo.toml` добавляется `[[example]] name = "grill-eval"` с фичей `eval`: пример не попадает в бандл приложения. Код живёт в новом модуле `src-tauri/src/eval/`, библиотека отдаёт его как `pub mod eval` (только с фичей `eval` и в тестах) с одной точкой входа `eval::cli::main(args)`. Запуск — `bun run eval -- <подкоманда>`. Модули приложения остаются приватными, наружу ничего больше не выходит. Подкоманды:
 
 - `export <recording-id> [--name N]` — запись из базы приложения в набор;
 - `import <аудио> [--others <аудио>] [--channels left=me|right=me|mono] --project <описание.md> [--docs <файлы>] [--people <people.json>] [--name N]` — внешняя запись в набор (решение 2а);

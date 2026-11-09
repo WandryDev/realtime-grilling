@@ -4,8 +4,6 @@ version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
-# Two binaries: `cargo run` and `tauri dev` start the app.
-default-run = "realtime-grilling"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -17,10 +15,17 @@ name = "realtime_grilling_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # Replays of recorded calls through the fast loop, a developer's tool
-# (question-quality design.md, decision 1).
-[[bin]]
+# (question-quality design.md, decision 1): an example, so the app's bundle
+# never has it; `bun run eval -- …` runs it.
+[[example]]
 name = "grill-eval"
-path = "src/bin/grill-eval.rs"
+path = "examples/grill-eval.rs"
+required-features = ["eval"]
+
+[features]
+# The `eval` module of `grill-eval`, and tokio's paused clock its replay runs
+# on (question-quality design.md, decision 3). Off in the app.
+eval = ["tokio/test-util"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -41,9 +46,9 @@ specta-typescript = "=0.0.13"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 thiserror = "2"
 # Child processes of the agent CLI (timeouts, stdin), on Tauri's runtime;
-# the speech model files. `test-util`: `grill-eval replay` runs the fast
-# loop on tokio's paused clock (question-quality design.md, decision 3).
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time", "test-util"] }
+# the speech model files. `test-util` (the paused clock of `grill-eval
+# replay`) comes only with the `eval` feature and in the tests.
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 # Microphone level (CoreAudio / WASAPI).
 cpal = "0.18"
 which = "8"

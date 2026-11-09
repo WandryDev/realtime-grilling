@@ -1,6 +1,8 @@
 //! `grill-eval`: replays of recorded calls through the fast loop
 //! (question-quality design.md, decision 1). Everything is in the library's
-//! `eval` module; this only hands it the arguments.
+//! `eval` module; this only hands it the arguments. An example with the
+//! `eval` feature, so the app's bundle never has it:
+//! `bun run eval -- <подкоманда>` from the repository root.
 
 fn main() -> std::process::ExitCode {
     // `import --docs` reads PDF and DOCX as the app does: in a child

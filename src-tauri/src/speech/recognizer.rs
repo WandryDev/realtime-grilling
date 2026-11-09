@@ -419,6 +419,7 @@ impl Recognizer {
     }
 
     /// Queued audio of one priority, in samples, cancelled jobs excluded.
+    #[cfg(any(test, feature = "eval"))]
     pub fn queued_samples(&self, priority: Priority) -> usize {
         self.shared
             .lock()

@@ -35,7 +35,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{Connection, OpenFlags, Transaction};
+use rusqlite::{Connection, Transaction};
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
@@ -74,6 +74,7 @@ const MIGRATION_LIST: &[M<'static>] = &[
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
 
 /// Schema version this build knows.
+#[cfg(any(test, feature = "eval"))]
 pub const SCHEMA_VERSION: usize = MIGRATION_LIST.len();
 
 type Db = Arc<Mutex<Connection>>;
@@ -320,10 +321,11 @@ pub fn open(path: &Path, migrations: &Migrations) -> Result<Connection, String> 
 /// Opens the app's database file only to read it (`grill-eval export`):
 /// SQLite refuses every write, nothing is migrated or backed up. A schema
 /// other than this build's is an error: its queries may not fit it.
+#[cfg(any(test, feature = "eval"))]
 pub fn open_read_only(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|error| format!("Не удалось открыть базу {}: {error}", path.display()))?;
     let version = schema_version(&connection, &MIGRATIONS)?;
@@ -343,6 +345,7 @@ pub fn open_read_only(path: &Path) -> Result<Connection, String> {
 
 /// A migrated database in memory: the tests, and the database of a
 /// `grill-eval` replay.
+#[cfg(any(test, feature = "eval"))]
 pub fn open_in_memory() -> Result<Connection, String> {
     let mut connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
     configure(&connection)?;
