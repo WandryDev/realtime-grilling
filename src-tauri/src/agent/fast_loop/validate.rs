@@ -33,13 +33,25 @@ use crate::storage::{
 pub const MAX_NEW_QUESTIONS: usize = 2;
 
 /// A source the call was given: a transcript segment (`id`: its id, with
-/// its channel) or a project item (`P1`, `B1…Bn`, no channel).
+/// its channel), a project item (`P1`, `B1…Bn`) or a gap of the brief
+/// (`G1…Gn`, «Неясно до звонка»).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceText {
     pub id: String,
     pub text: String,
-    /// Who said it; `None` for a project item.
-    pub channel: Option<TranscriptChannel>,
+    pub kind: SourceKind,
+}
+
+/// What a [`SourceText`] is, and so what it can prove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// A phrase of the transcript; only «Остальные» states facts.
+    Said(TranscriptChannel),
+    /// A fact of the project: its description or the brief.
+    Project,
+    /// What the materials lack (`source: project`): grounds a question, never
+    /// a fact, like a phrase of «Я».
+    Gap,
 }
 
 impl SourceText {
@@ -48,7 +60,15 @@ impl SourceText {
         Self {
             id: id.into(),
             text: text.into(),
-            channel: None,
+            kind: SourceKind::Project,
+        }
+    }
+
+    /// A gap of the brief.
+    pub fn gap(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            kind: SourceKind::Gap,
+            ..Self::new(id, text)
         }
     }
 
@@ -59,9 +79,25 @@ impl SourceText {
         text: impl Into<String>,
     ) -> Self {
         Self {
-            channel: Some(channel),
+            kind: SourceKind::Said(channel),
             ..Self::new(id, text)
         }
+    }
+
+    /// Who said it; `None` for a project item or a gap.
+    pub fn channel(&self) -> Option<TranscriptChannel> {
+        match self.kind {
+            SourceKind::Said(channel) => Some(channel),
+            SourceKind::Project | SourceKind::Gap => None,
+        }
+    }
+
+    /// Whether it states a fact about the task: the client or the project.
+    fn states_a_fact(&self) -> bool {
+        matches!(
+            self.kind,
+            SourceKind::Said(TranscriptChannel::Others) | SourceKind::Project
+        )
     }
 }
 
@@ -78,7 +114,7 @@ pub struct KnownQuestion {
 pub struct CallContext {
     /// The transcript window of this call.
     pub segments: Vec<SourceText>,
-    /// The project items of the stable prefix.
+    /// The project items and the brief's gaps of the stable prefix.
     pub project_items: Vec<SourceText>,
     pub topic_ids: Vec<String>,
     pub current_topic_id: Option<String>,
@@ -160,8 +196,9 @@ pub enum RejectReason {
         quote: String,
     },
     NoEvidence,
-    /// A card field or an answer cites only the manager («Я»), or a
-    /// contradiction cites the manager: facts come from «Остальные».
+    /// A card field or an answer cites only the manager («Я») or gaps of
+    /// the brief, or a contradiction cites the manager: facts come from
+    /// «Остальные» or the project.
     NotFromClient,
     /// A contradiction cites two different segments.
     ContradictionNeedsTwoSegments,
@@ -572,22 +609,22 @@ fn check_evidence(context: &CallContext, evidence: &[Evidence]) -> Result<(), Re
     Ok(())
 }
 
-/// Who said what an item cites: `None` for a project item.
+/// Who said what an item cites: `None` for a project item or a gap.
 fn channel_of(context: &CallContext, item: &Evidence) -> Option<TranscriptChannel> {
     context
         .source(item.source, &item.id)
-        .and_then(|source| source.channel)
+        .and_then(SourceText::channel)
 }
 
 /// A fact (a card field, an answer): the evidence holds, and at least one
-/// item is the client («Остальные») or the project, not only the manager.
+/// item is the client («Остальные») or the project, not only the manager or
+/// a gap of the brief.
 fn check_fact(context: &CallContext, evidence: &[Evidence]) -> Result<(), RejectReason> {
     check_evidence(context, evidence)?;
     let from_client = evidence.iter().any(|item| {
-        matches!(
-            channel_of(context, item),
-            None | Some(TranscriptChannel::Others)
-        )
+        context
+            .source(item.source, &item.id)
+            .is_some_and(SourceText::states_a_fact)
     });
     if from_client {
         Ok(())
@@ -1143,6 +1180,92 @@ mod tests {
         ]));
         assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
         assert_eq!(validation.patch.ops.len(), 4);
+    }
+
+    /// A brief's gap of the prefix, «Неясно до звонка».
+    const G1: &str = "Не сказано, кто из операторов отвечает на ночные звонки";
+
+    /// [`check`] with `G1` among the project items.
+    fn check_with_gap(ops: serde_json::Value) -> Validation {
+        let mut context = context();
+        context.project_items.push(SourceText::gap("G1", G1));
+        let patch = Patch::from_value(json!({ "ops": ops })).unwrap();
+        validate(&patch, &context, &TrigramSimilarity::default())
+    }
+
+    fn gap(quote: &str) -> serde_json::Value {
+        json!({ "source": "project", "id": "G1", "quote": quote })
+    }
+
+    /// Spec «Вопрос по пробелу брифа»: the client touched the gap's lens; the
+    /// question cites the gap and the client's phrase.
+    #[test]
+    fn a_question_on_a_gap_of_the_brief_passes() {
+        let validation = check_with_gap(json!([{
+            "op": "question", "title": "Кто из операторов берёт ночные звонки?",
+            "description": "Без этого не понять смены", "cardField": "users",
+            "gapType": "empty", "priority": 3, "evidence": [
+                gap("кто из операторов отвечает на ночные звонки"),
+                segment("S2", "ночью никто не дежурит")
+            ]
+        }]));
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        assert_eq!(
+            added(&validation),
+            ["Кто из операторов берёт ночные звонки?"]
+        );
+        let ValidatedOp::AddQuestion(added_question) = &validation.patch.ops[0] else {
+            panic!("{:?}", validation.patch.ops);
+        };
+        assert_eq!(added_question.evidence[0].id, "G1");
+        assert_eq!(added_question.evidence[0].source, EvidenceSource::Project);
+
+        // A gap's quote is checked like any other.
+        let validation = check_with_gap(json!([question(
+            "Кто дежурит ночью?",
+            2,
+            json!([gap("в выходные работает автоответчик")])
+        )]));
+        assert!(matches!(
+            reasons(&validation)[..],
+            [RejectReason::QuoteNotFound { .. }]
+        ));
+    }
+
+    /// Spec «Пробел как факт»: a gap is what the materials lack, so on its
+    /// own (or with the manager) it fills no card field and answers nothing.
+    #[test]
+    fn a_gap_of_the_brief_is_no_fact() {
+        let validation = check_with_gap(json!([
+            { "op": "card", "field": "users", "value": "Ночные операторы",
+              "evidence": [gap("кто из операторов отвечает на ночные звонки")] },
+            { "op": "answered", "questionId": "Q1",
+              "evidence": [gap("кто из операторов отвечает на ночные звонки")] },
+            { "op": "answered", "questionId": "Q4",
+              "evidence": [gap("кто из операторов отвечает на ночные звонки"),
+                           segment("S4", "у вас пять операторов в смену")] }
+        ]));
+        assert!(validation.patch.ops.is_empty(), "{:?}", validation.patch);
+        assert_eq!(
+            reasons(&validation),
+            vec![
+                &RejectReason::NotFromClient,
+                &RejectReason::NotFromClient,
+                &RejectReason::NotFromClient
+            ]
+        );
+
+        // With the client's phrase next to it, the fact holds.
+        let validation = check_with_gap(json!([
+            { "op": "card", "field": "users", "value": "Ночью никто",
+              "evidence": [gap("кто из операторов отвечает на ночные звонки"),
+                           segment("S2", "ночью никто не дежурит")] },
+            { "op": "answered", "questionId": "Q1",
+              "evidence": [gap("кто из операторов отвечает на ночные звонки"),
+                           segment("S2", "ночью никто не дежурит")] }
+        ]));
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        assert_eq!(validation.patch.ops.len(), 2);
     }
 
     /// A contradiction is the client's with themselves: both phrases are

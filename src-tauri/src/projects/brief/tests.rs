@@ -245,6 +245,14 @@ fn the_glossary_and_the_fast_loop_read_a_built_brief() {
     );
     let prefix = build_prefix(&db, &recording_id).unwrap();
     assert!(prefix.text.contains("Медэлемент"), "{}", prefix.text);
+    // Spec «Пробел брифа в звонке».
+    assert!(
+        prefix
+            .text
+            .contains("G1 (пользователи): Не сказано, кто из сотрудников работает с очередью"),
+        "{}",
+        prefix.text
+    );
 }
 
 /* The message */
