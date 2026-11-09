@@ -8,11 +8,14 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 
 use super::{
-    corpus::{self, Corpus},
-    export, replay,
+    corpus::{self, Corpus, Layout},
+    export,
+    import::{self, decode::Ffmpeg, passes::Speech},
+    replay,
 };
 use crate::{
     agent::{
@@ -20,7 +23,9 @@ use crate::{
         claude_cli::{Agent, ClaudeCodeCli},
         discover::{self, SearchEnv},
     },
-    storage,
+    speech::recognizer::Recognizer,
+    storage::{self, transcript::TranscriptChannel},
+    vad,
 };
 
 const USAGE: &str = "\
@@ -32,8 +37,10 @@ grill-eval — прогон записанных звонков через бы�
   export <id записи> [--name N] [--db ФАЙЛ]
       Запись из базы приложения (только чтение) в набор .grill-eval/corpus/<N>.json.
   import <аудио> [--others <аудио>] [--channels left=me|right=me|mono]
-         --project <описание.md> [--docs <файлы>] [--people <people.json>] [--name N]
-      Внешняя запись звонка в набор. Пока не реализовано.
+         --project <описание.md> [--docs <файлы>] [--people <people.json>]
+         [--manager ИМЯ] [--name N]
+      Внешняя запись звонка в набор: распознавание моделями приложения, аудио
+      копируется в .grill-eval/audio/<N>/. Нужен ffmpeg.
   brief <набор>
       Пересобрать бриф набора нынешним промптом брифа. Пока не реализовано.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
@@ -59,6 +66,34 @@ grill-eval export <id записи> [--name N] [--db ФАЙЛ]
   --db ФАЙЛ   база приложения (по умолчанию база приложения этого пользователя)
 
 База открывается только на чтение. Запись без живой расшифровки — ошибка, файл не создаётся.
+";
+
+const IMPORT_USAGE: &str = "\
+grill-eval import <аудио> [--others <аудио>] [--channels left=me|right=me|mono]
+                  --project <описание.md> [--docs <файлы>] [--people <people.json>]
+                  [--manager ИМЯ] [--name N]
+
+Распознаёт запись звонка, сделанную вне приложения, моделями приложения (живой
+проход и второй проход) и пишет набор .grill-eval/corpus/<N>.json; аудио
+копируется в .grill-eval/audio/<N>/. Аудио никуда не отправляется.
+
+  <аудио>             запись звонка или дорожка менеджера (с --others); любой
+                      формат, который читает ffmpeg
+  --others ФАЙЛ       дорожка клиента: каналы «Я» и «Остальные» — по файлам
+  --channels К        для одного файла: left=me или right=me (стерео, менеджер
+                      слева или справа), mono (одна дорожка); моно-файл без
+                      флага — mono, у стерео флаг обязателен
+  --project ФАЙЛ      описание проекта в markdown; первый заголовок «# …» —
+                      название проекта (иначе --name или имя файла)
+  --docs ФАЙЛЫ        документы проекта (.md, .txt, .pdf, .docx), все файлы до
+                      следующего флага
+  --people ФАЙЛ       люди клиента: JSON-массив { name, role, profile? }
+  --manager ИМЯ       имя менеджера, подсказка для разметки моно
+  --name N            имя набора (по умолчанию имя аудиофайла без расширения)
+
+Моно-запись делится на «Я» и «Остальные» одним вызовом Claude Code по тексту,
+набор помечается «разделено приблизительно». Нужны ffmpeg и ffprobe в PATH и модель
+распознавания, скачанная в приложении. Бриф набора собирает `grill-eval brief`.
 ";
 
 const REPLAY_USAGE: &str = "\
@@ -158,9 +193,14 @@ pub fn main(args: Vec<String>) -> ExitCode {
             print!("{REPLAY_USAGE}");
             return ExitCode::SUCCESS;
         }
+        "import" if wants_help(rest) => {
+            print!("{IMPORT_USAGE}");
+            return ExitCode::SUCCESS;
+        }
         "export" => export_command(rest),
+        "import" => import_command(rest),
         "replay" => replay_command(rest),
-        "import" | "brief" | "judge" | "compare" => {
+        "brief" | "judge" | "compare" => {
             if wants_help(rest) {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -353,6 +393,129 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
     }
 }
 
+/// `--docs` takes every file up to the next flag; the rest of `args` goes
+/// to [`parse`].
+fn split_docs(args: &[String]) -> (Vec<String>, Vec<PathBuf>) {
+    let mut rest = Vec::new();
+    let mut docs = Vec::new();
+    let mut in_docs = false;
+    for arg in args {
+        if arg == "--docs" {
+            in_docs = true;
+        } else if let Some(file) = arg.strip_prefix("--docs=") {
+            docs.push(PathBuf::from(file));
+            in_docs = true;
+        } else if arg.starts_with("--") {
+            in_docs = false;
+            rest.push(arg.clone());
+        } else if in_docs {
+            docs.push(PathBuf::from(arg));
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (rest, docs)
+}
+
+fn import_command(args: &[String]) -> Result<ExitCode, String> {
+    let (args, docs) = split_docs(args);
+    let parsed = parse(
+        &args,
+        &["others", "channels", "project", "people", "manager", "name"],
+        &[],
+    )?;
+    let path = |name: &str| parsed.values.get(name).map(PathBuf::from);
+    let mut options = import::Options {
+        audio: PathBuf::from(one_positional(&parsed, "аудиофайл")?),
+        others: path("others"),
+        channels: parsed
+            .values
+            .get("channels")
+            .map(|value| import::parse_layout(value))
+            .transpose()?,
+        project: path("project").ok_or("Нужен --project <описание.md>")?,
+        docs,
+        people: path("people"),
+        manager: parsed.values.get("manager").cloned(),
+        name: parsed.values.get("name").cloned(),
+        settings: storage::settings::SettingsMap::new(),
+        progress: true,
+    };
+    let given = [&options.audio, &options.project]
+        .into_iter()
+        .chain(&options.others)
+        .chain(&options.people)
+        .chain(&options.docs);
+    for file in given {
+        if !file.is_file() {
+            return Err(format!("Нет файла {}", file.display()));
+        }
+    }
+    let data = export::app_data_dir().ok_or("Не удалось найти папку данных приложения")?;
+    let (settings, selected) = import::app_settings(&data.join(storage::DATABASE_FILE))?;
+    options.settings = settings;
+    let (model, model_path) = import::installed_model(&data.join("models"), selected)?;
+    let layout = import::layout(&options, &Ffmpeg)?;
+    let scratch = Scratch::new()?;
+    let agent = match layout {
+        Layout::Mono => {
+            Some(Arc::new(ClaudeCodeCli::new(ready_cli(&scratch.0)?, &scratch.0)) as Arc<dyn Agent>)
+        }
+        _ => None,
+    };
+    eprintln!("grill-eval: декодирую ({layout:?}) через ffmpeg…");
+    let tracks = import::decode(&options, layout, &Ffmpeg)?;
+    let speech = Speech {
+        recognizer: Recognizer::whisper(Some(model_path)),
+        model,
+        vad_model: vad::dev_model_path(),
+    };
+    let imported = tauri::async_runtime::block_on(import::run(
+        &options,
+        layout,
+        &tracks,
+        &speech,
+        agent,
+        &eval_dir()?,
+        &scratch.0,
+    ))?;
+
+    let corpus = &imported.corpus;
+    let count = |channel| {
+        corpus
+            .live
+            .iter()
+            .filter(|segment| segment.channel == channel)
+            .count()
+    };
+    println!(
+        "Набор {}: {} живых сегментов (Я {}, Остальные {}), {} уточнённых, {:.1} мин, \
+         каналы {}, модель {} → {}",
+        corpus.name,
+        corpus.live.len(),
+        count(TranscriptChannel::Me),
+        count(TranscriptChannel::Others),
+        corpus.refined.as_ref().map_or(0, Vec::len),
+        minutes(corpus.recording.duration_ms),
+        match corpus.channels {
+            corpus::Channels::Real => "настоящие",
+            corpus::Channels::Approximate => "приблизительные (моно)",
+        },
+        model.as_str(),
+        imported.path.display()
+    );
+    if let Some(usage) = &imported.labeling {
+        println!(
+            "Разметка моно: {:.1} с, ${}",
+            Duration::from_millis(usage.duration_ms).as_secs_f64(),
+            usage
+                .cost_usd
+                .map_or_else(|| "?".to_owned(), |cost| format!("{cost:.4}"))
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +545,26 @@ mod tests {
         assert!(parse(&args(&["--realtime=yes"]), &[], &["realtime"]).is_err());
         let parsed = parse(&args(&["x", "--from", "abc"]), &["from"], &[]).unwrap();
         assert!(minutes_arg(&parsed, "from").is_err());
+    }
+
+    #[test]
+    fn docs_take_the_files_up_to_the_next_flag() {
+        let (rest, docs) = split_docs(&args(&[
+            "call.m4a",
+            "--docs",
+            "tz.pdf",
+            "notes.md",
+            "--project",
+            "p.md",
+            "--docs=brief.docx",
+        ]));
+        assert_eq!(rest, ["call.m4a", "--project", "p.md"]);
+        assert_eq!(
+            docs,
+            ["tz.pdf", "notes.md", "brief.docx"].map(PathBuf::from)
+        );
+        assert_eq!(main(args(&["import", "--help"])), ExitCode::SUCCESS);
+        assert_eq!(main(args(&["import", "a.wav"])), ExitCode::FAILURE);
     }
 
     #[test]

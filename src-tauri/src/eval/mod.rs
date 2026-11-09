@@ -6,6 +6,8 @@
 //! - `corpus`: the corpus of one call, a JSON file in `.grill-eval/corpus/`;
 //! - `export`: a recording of the app's database into a corpus (the
 //!   database is opened read-only);
+//! - `import`: a recording made outside the app into a corpus, through the
+//!   app's recognition;
 //! - `replay`: a corpus through the real `FastLoop` on an in-memory
 //!   database and tokio's paused clock;
 //! - `report`: the raw results of a replay, `report.json`.
@@ -16,5 +18,6 @@
 pub mod cli;
 mod corpus;
 mod export;
+mod import;
 mod replay;
 mod report;

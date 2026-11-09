@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["labels"],
+  "properties": {
+    "labels": {
+      "type": "array",
+      "description": "One label per phrase of the transcript, in its order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "speaker"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The phrase's id, as given."
+          },
+          "speaker": { "type": "string", "enum": ["me", "others"] }
+        }
+      }
+    }
+  }
+}

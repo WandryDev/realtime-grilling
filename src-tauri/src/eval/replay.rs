@@ -130,7 +130,7 @@ fn selected(corpus: &Corpus, from_ms: Option<i64>, to_ms: Option<i64>) -> Vec<&S
 
 /// The corpus's project, people and recording in `connection`. Returns the
 /// recording's id.
-fn seed(connection: &Connection, corpus: &Corpus) -> CommandResult<String> {
+pub(super) fn seed(connection: &Connection, corpus: &Corpus) -> CommandResult<String> {
     settings::put(connection, &corpus.settings)?;
     let mut people_ids: HashMap<&str, String> = HashMap::new();
     let project_id = match &corpus.project {

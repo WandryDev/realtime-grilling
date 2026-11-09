@@ -23,7 +23,7 @@ use crate::{
 const APP_IDENTIFIER: &str = "com.dev-wandry.realtime-grilling";
 
 /// The settings of the fast loop a corpus keeps.
-const LOOP_SETTINGS: [&str; 3] = [
+pub const LOOP_SETTINGS: [&str; 3] = [
     settings::QUESTION_FREQUENCY,
     settings::QUESTION_COUNT,
     settings::CALL_LANGUAGE,
@@ -31,6 +31,11 @@ const LOOP_SETTINGS: [&str; 3] = [
 
 /// Where the app keeps `grill.db`: Tauri's `app_data_dir()` without Tauri.
 pub fn default_database() -> Option<PathBuf> {
+    Some(app_data_dir()?.join(DATABASE_FILE))
+}
+
+/// Tauri's `app_data_dir()` of the app, without Tauri.
+pub fn app_data_dir() -> Option<PathBuf> {
     let data = if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Application Support"))
     } else if cfg!(windows) {
@@ -42,7 +47,7 @@ pub fn default_database() -> Option<PathBuf> {
                 std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
             })
     }?;
-    Some(data.join(APP_IDENTIFIER).join(DATABASE_FILE))
+    Some(data.join(APP_IDENTIFIER))
 }
 
 /// Exports `recording_id` of the database at `database` to the corpus
