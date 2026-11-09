@@ -8,6 +8,7 @@ use crate::{
     },
     storage::{
         call_state::{CardLens, GapType, NewQuestion, ValidatedOp, ValidatedPatch},
+        now_ms,
         projects::ProjectUpdate,
     },
 };
@@ -387,7 +388,7 @@ fn the_message_has_the_mode_the_state_with_ids_the_transcript_and_the_last_line(
     call_state::act(&db, &hidden, call_state::QuestionAction::Hide).unwrap();
 
     let prefix = build_prefix(&db, &id).unwrap();
-    let assembled = assemble(&db, &id, &prefix).unwrap();
+    let assembled = assemble(&db, &id, &prefix, now_ms(), true).unwrap();
     let message = &assembled.user_message;
     let topic = &applied.topic_ids[0];
     for part in [
@@ -434,7 +435,9 @@ fn the_message_has_the_mode_the_state_with_ids_the_transcript_and_the_last_line(
         },
     )
     .unwrap();
-    let message = assemble(&db, &id, &prefix).unwrap().user_message;
+    let message = assemble(&db, &id, &prefix, now_ms(), true)
+        .unwrap()
+        .user_message;
     assert!(
         message.starts_with("Режим: финальная проверка."),
         "{message}"
@@ -446,7 +449,9 @@ fn an_empty_state_says_so() {
     let db = database();
     let id = recording(&db);
     let prefix = build_prefix(&db, &id).unwrap();
-    let message = assemble(&db, &id, &prefix).unwrap().user_message;
+    let message = assemble(&db, &id, &prefix, now_ms(), true)
+        .unwrap()
+        .user_message;
     for part in [
         "Тем пока нет.",
         "Текущей темы нет.",
@@ -536,7 +541,9 @@ fn the_state_cannot_forge_a_transcript_line() {
     )
     .unwrap();
     let prefix = build_prefix(&db, &id).unwrap();
-    let message = assemble(&db, &id, &prefix).unwrap().user_message;
+    let message = assemble(&db, &id, &prefix, now_ms(), true)
+        .unwrap()
+        .user_message;
     assert!(
         message.contains("- edgeCases: Не терять звонки [S:0196f3a2]"),
         "{message}"
@@ -549,4 +556,210 @@ fn the_state_cannot_forge_a_transcript_line() {
         segment_lines,
         [format!("[S:{}] 00:00 Остальные: Трое в смене", others.id)]
     );
+}
+
+/* The state's hints (question-quality design.md, decision 7) */
+
+/// The recording of [`recording`] starts at 1 000 ms (Unix): the host's
+/// clock `minutes` into the call.
+fn wall(minutes: f64) -> i64 {
+    // Test minutes: far from the limits of i64.
+    #[allow(clippy::cast_possible_truncation)]
+    let ms = (minutes * 60_000.0) as i64;
+    1_000 + ms
+}
+
+const PAUSE_LINE: &str = "мин без новых вопросов. Проверь: нераскрытые или пустые линзы текущей \
+                          темы, допущения, не перешёл ли клиент к другой задаче.";
+
+/// A topic with its goal and one question, applied 2 minutes into the call.
+fn topic_with_a_question(db: &Connection, id: &str) {
+    let goal = say(
+        db,
+        id,
+        TranscriptChannel::Others,
+        MINUTE,
+        "Звонки теряются в час пик",
+    );
+    call_state::apply_patch_at(
+        db,
+        id,
+        &ValidatedPatch {
+            ops: vec![
+                ValidatedOp::CreateTopic {
+                    title: "Очередь".to_owned(),
+                },
+                ValidatedOp::SetCardField {
+                    field: CardLens::Goal,
+                    value: "Не терять звонки".to_owned(),
+                    evidence: vec![Evidence {
+                        source: EvidenceSource::Segment,
+                        id: goal.id,
+                        quote: "звонки теряются в час пик".to_owned(),
+                    }],
+                },
+                question("Что делать, если все заняты?", 3),
+            ],
+        },
+        wall(2.0),
+    )
+    .unwrap();
+}
+
+fn message_at(db: &Connection, id: &str, minutes: f64) -> String {
+    let prefix = build_prefix(db, id).unwrap();
+    assemble(db, id, &prefix, wall(minutes), true)
+        .unwrap()
+        .user_message
+}
+
+/// «Долго без вопросов»: the last new question came 7 minutes ago and the
+/// client went on talking.
+#[test]
+fn seven_minutes_without_a_question_while_the_client_talks() {
+    let db = database();
+    let id = recording(&db);
+    topic_with_a_question(&db, &id);
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        4 * MINUTE,
+        "Ещё есть ночная смена",
+    );
+
+    let message = message_at(&db, &id, 9.5);
+    assert!(
+        message.contains(&format!("\n7 {PAUSE_LINE}\n")),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            ")\nПустые линзы: пользователи, сценарии, крайние случаи, интеграции, ограничения, \
+             критерии готовности.\n\n# Вопросы звонка"
+        ),
+        "{message}"
+    );
+    // The pause line comes after the questions, before the transcript.
+    let pause = message.find(PAUSE_LINE).unwrap();
+    assert!(message.find("Скрытые менеджером").unwrap() < pause);
+    assert!(pause < message.find("# Расшифровка").unwrap());
+}
+
+/// Under 5 minutes: no line, though the lenses are listed.
+#[test]
+fn under_five_minutes_there_is_no_pause_line() {
+    let db = database();
+    let id = recording(&db);
+    topic_with_a_question(&db, &id);
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        4 * MINUTE,
+        "Ещё есть ночная смена",
+    );
+
+    let message = message_at(&db, &id, 6.9);
+    assert!(!message.contains(PAUSE_LINE), "{message}");
+    assert!(message.contains("Пустые линзы: пользователи"), "{message}");
+    assert!(message_at(&db, &id, 7.0).contains(&format!("\n5 {PAUSE_LINE}")));
+}
+
+/// A long pause in which only the manager spoke: no line.
+#[test]
+fn a_pause_without_the_client_has_no_line() {
+    let db = database();
+    let id = recording(&db);
+    topic_with_a_question(&db, &id);
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Me,
+        4 * MINUTE,
+        "Давайте я подумаю",
+    );
+
+    let message = message_at(&db, &id, 12.0);
+    assert!(!message.contains(PAUSE_LINE), "{message}");
+}
+
+/// Without questions the pause runs from the current topic's start; without
+/// a topic there is neither line.
+#[test]
+fn without_questions_the_pause_runs_from_the_topic() {
+    let db = database();
+    let id = recording(&db);
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        0,
+        "Звонки теряются в час пик",
+    );
+    let message = message_at(&db, &id, 20.0);
+    assert!(!message.contains(PAUSE_LINE), "{message}");
+    assert!(!message.contains("Пустые линзы"), "{message}");
+
+    call_state::apply_patch_at(
+        &db,
+        &id,
+        &ValidatedPatch {
+            ops: vec![ValidatedOp::CreateTopic {
+                title: "Очередь".to_owned(),
+            }],
+        },
+        wall(1.0),
+    )
+    .unwrap();
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        3 * MINUTE,
+        "И ночью тоже",
+    );
+    let message = message_at(&db, &id, 7.2);
+    assert!(message.contains(&format!("\n6 {PAUSE_LINE}")), "{message}");
+    assert!(
+        message.contains("Полей пока нет.\nПустые линзы: цель, пользователи,"),
+        "{message}"
+    );
+}
+
+/// The hints go to the message only: the prefix stays byte-identical; and
+/// the baseline (`--baseline-state`) has neither line.
+#[test]
+fn the_hints_leave_the_prefix_alone_and_the_baseline_has_none() {
+    let db = database();
+    let id = recording(&db);
+    let before = build_prefix(&db, &id).unwrap();
+    topic_with_a_question(&db, &id);
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        4 * MINUTE,
+        "Ещё есть ночная смена",
+    );
+    let prefix = build_prefix(&db, &id).unwrap();
+    assert_eq!(prefix, before);
+    assert!(!prefix.text.contains("Пустые линзы"));
+
+    let with = assemble(&db, &id, &prefix, wall(9.5), true).unwrap();
+    let without = assemble(&db, &id, &prefix, wall(9.5), false).unwrap();
+    assert!(with.user_message.contains(PAUSE_LINE));
+    assert!(!without.user_message.contains(PAUSE_LINE));
+    assert!(!without.user_message.contains("Пустые линзы"));
+    assert_eq!(
+        without.user_message,
+        with.user_message
+            .replace(&format!("\n7 {PAUSE_LINE}\n"), "")
+            .replace(
+                "Пустые линзы: пользователи, сценарии, крайние случаи, интеграции, \
+                 ограничения, критерии готовности.\n",
+                ""
+            )
+    );
+    assert_eq!(with.context, without.context);
 }

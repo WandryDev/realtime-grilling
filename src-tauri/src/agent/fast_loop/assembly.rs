@@ -6,8 +6,10 @@
 //!    («Неясно до звонка», `G1…Gn`), the client's people with their
 //!    profiles, the glossary. It never changes during the
 //!    recording, so the CLI's prompt cache holds;
-//! 2. the state with ids: the mode, the topics, the current topic's card,
-//!    the questions;
+//! 2. the state with ids: the mode, the topics, the current topic's card
+//!    with its empty lenses, the questions, and how long the call has gone
+//!    without a new question while the client talks (question-quality
+//!    design.md, decision 7);
 //! 3. the last 10 minutes of the live transcript, one line per segment:
 //!    `[S:<id>] mm:ss Остальные|Я: текст`.
 //!
@@ -39,6 +41,13 @@ use crate::{
 
 /// How much of the transcript a call gets.
 pub const TRANSCRIPT_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// From this many minutes without a new question, while the client talks,
+/// the state tells the agent to look for what is left (question-quality
+/// design.md, decision 7; the value is tuned by a replay, task 4.4).
+pub const QUIET_MINUTES: i64 = 5;
+
+const MINUTE_MS: i64 = 60_000;
 
 /// The last line of every user message.
 pub const STRUCTURED_OUTPUT: &str = "Передай патч одним вызовом инструмента StructuredOutput.";
@@ -435,9 +444,77 @@ fn question_line(question: &Question, state: &CallState) -> String {
     line
 }
 
-/// The user message of a call: the mode, the state with ids, the
-/// transcript window, the line about StructuredOutput.
-pub fn user_message(state: &CallState, window: &[&TranscriptSegment]) -> String {
+/// What the state says beyond its records (decision 7). `None` in the
+/// message leaves both lines out: the baseline a replay measures them
+/// against (`grill-eval replay --baseline-state`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Hints {
+    /// Whole minutes without a new question, when at least
+    /// [`QUIET_MINUTES`] and the client spoke meanwhile.
+    pub quiet_minutes: Option<i64>,
+}
+
+impl Hints {
+    /// The hints of a call at `now_ms` (Unix ms, the host's clock): the
+    /// pause runs from the last new question of the call, or from the
+    /// current topic's start while the call has none, and counts only when
+    /// a live phrase of «Остальные» ended after it. `segments` are the
+    /// recording's, their times from `recording_started_at`.
+    pub fn at(
+        state: &CallState,
+        segments: &[TranscriptSegment],
+        recording_started_at: i64,
+        now_ms: i64,
+    ) -> Self {
+        let last_question = state.questions.iter().map(|q| q.created_at).max();
+        let topic_start = || {
+            let current = state.current_topic_id.as_deref()?;
+            let topic = state.topics.iter().find(|topic| topic.id == current)?;
+            Some(topic.created_at)
+        };
+        let Some(since) = last_question.or_else(topic_start) else {
+            return Self::default();
+        };
+        let client_spoke = segments.iter().any(|segment| {
+            segment.pass == TranscriptPass::Live
+                && segment.channel == TranscriptChannel::Others
+                && recording_started_at + segment.end_ms > since
+        });
+        let minutes = (now_ms - since) / MINUTE_MS;
+        Self {
+            quiet_minutes: (client_spoke && minutes >= QUIET_MINUTES).then_some(minutes),
+        }
+    }
+}
+
+/// The lenses of the current topic's card without a value, in the order of
+/// the rules; `None` without a current topic.
+fn empty_lenses(state: &CallState) -> Option<Vec<CardLens>> {
+    state.current_topic_id.as_ref()?;
+    let card = state.current_card();
+    let filled = |lens: CardLens| {
+        card.is_some_and(|card| {
+            card.fields
+                .iter()
+                .any(|field| field.field == lens && !field.value.trim().is_empty())
+        })
+    };
+    Some(
+        CardLens::ALL
+            .into_iter()
+            .filter(|lens| !filled(*lens))
+            .collect(),
+    )
+}
+
+/// The user message of a call: the mode, the state with ids (and the
+/// `hints`, unless `None`), the transcript window, the line about
+/// StructuredOutput.
+pub fn user_message(
+    state: &CallState,
+    window: &[&TranscriptSegment],
+    hints: Option<Hints>,
+) -> String {
     let mut text = String::new();
     if state.final_check.is_some() {
         text.push_str(
@@ -479,6 +556,17 @@ pub fn user_message(state: &CallState, window: &[&TranscriptSegment]) -> String 
         _ if state.current_topic_id.is_none() => text.push_str("Текущей темы нет.\n"),
         _ => text.push_str("Полей пока нет.\n"),
     }
+    if hints.is_some()
+        && let Some(lenses) = empty_lenses(state)
+    {
+        let names: Vec<&str> = lenses.into_iter().map(CardLens::label).collect();
+        let names = if names.is_empty() {
+            "нет".to_owned()
+        } else {
+            names.join(", ")
+        };
+        text.push_str(&format!("Пустые линзы: {names}.\n"));
+    }
 
     text.push_str("\n# Вопросы звонка\n");
     for (status, title) in [
@@ -503,6 +591,12 @@ pub fn user_message(state: &CallState, window: &[&TranscriptSegment]) -> String 
             text.push_str(&question_line(question, state));
         }
     }
+    if let Some(minutes) = hints.and_then(|hints| hints.quiet_minutes) {
+        text.push_str(&format!(
+            "\n{minutes} мин без новых вопросов. Проверь: нераскрытые или пустые линзы текущей \
+             темы, допущения, не перешёл ли клиент к другой задаче.\n"
+        ));
+    }
 
     text.push_str("\n# Расшифровка за последние 10 минут\n\n");
     if window.is_empty() {
@@ -525,16 +619,25 @@ pub struct Assembled {
 }
 
 /// Reads the state and the transcript of `recording_id` and assembles a
-/// call with `prefix`.
+/// call with `prefix` at `now_ms` (Unix ms, the host's clock). Without
+/// `hints` the state leaves out the lines of decision 7.
 pub fn assemble(
     connection: &Connection,
     recording_id: &str,
     prefix: &Prefix,
+    now_ms: i64,
+    hints: bool,
 ) -> CommandResult<Assembled> {
     let state = call_state::get(connection, recording_id)?;
     let segments = transcript::for_recording(connection, recording_id)?;
+    let hints = if hints {
+        let started_at = recordings::get(connection, recording_id)?.started_at;
+        Some(Hints::at(&state, &segments, started_at, now_ms))
+    } else {
+        None
+    };
     let window = transcript_window(&segments, TRANSCRIPT_WINDOW);
-    let user_message = user_message(&state, &window);
+    let user_message = user_message(&state, &window, hints);
     let sources = window
         .iter()
         .map(|segment| SourceText::said(segment.id.clone(), segment.channel, segment.text.clone()))

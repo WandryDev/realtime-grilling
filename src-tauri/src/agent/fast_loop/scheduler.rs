@@ -104,6 +104,10 @@ pub struct LoopConfig {
     /// The rules that open the prefix: [`assembly::RULES`] in the app; a
     /// replay may try another text (`grill-eval replay --rules`).
     pub rules: Cow<'static, str>,
+    /// The state's empty lenses and pause line (question-quality design.md,
+    /// decision 7): on in the app; a replay may leave them out to measure
+    /// them (`grill-eval replay --baseline-state`).
+    pub state_hints: bool,
 }
 
 impl LoopConfig {
@@ -114,6 +118,7 @@ impl LoopConfig {
             call_timeout: claude_cli::TIMEOUT + Duration::from_secs(2),
             cancel_wait: Duration::from_secs(5),
             rules: Cow::Borrowed(assembly::RULES),
+            state_hints: true,
         }
     }
 }
@@ -713,8 +718,9 @@ async fn run_call(
     let started = Instant::now();
 
     let (id, prefix) = (call.recording_id.clone(), Arc::clone(&call.prefix));
+    let hints = config.state_hints;
     let assembled = match database(host, move |connection| {
-        assembly::assemble(connection, &id, &prefix)
+        assembly::assemble(connection, &id, &prefix, started_at, hints)
     })
     .await
     {
