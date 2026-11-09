@@ -4,13 +4,23 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     process::ExitCode,
+    sync::Arc,
 };
 
 use super::{
     corpus::{self, Corpus},
-    export,
+    export, replay,
+};
+use crate::{
+    agent::{
+        self, AgentState,
+        claude_cli::{Agent, ClaudeCodeCli},
+        discover::{self, SearchEnv},
+    },
+    storage,
 };
 
 const USAGE: &str = "\
@@ -27,7 +37,8 @@ grill-eval — прогон записанных звонков через бы�
   brief <набор>
       Пересобрать бриф набора нынешним промптом брифа. Пока не реализовано.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
-      Прогон набора через быстрый контур. Пока не реализовано.
+      Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
+      .grill-eval/reports/<время>-<L>/report.json.
   judge <отчёт>
       Разметка вопросов прогона LLM-судьёй. Пока не реализовано.
   compare <отчёт A> <отчёт B>
@@ -48,6 +59,22 @@ grill-eval export <id записи> [--name N] [--db ФАЙЛ]
   --db ФАЙЛ   база приложения (по умолчанию база приложения этого пользователя)
 
 База открывается только на чтение. Запись без живой расшифровки — ошибка, файл не создаётся.
+";
+
+const REPLAY_USAGE: &str = "\
+grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
+
+Прогоняет набор (имя в .grill-eval/corpus/ или путь к файлу) через быстрый контур
+приложения с настоящим Claude Code. Простой между фразами пропускается, во время
+вызова часы идут вместе с реальным временем. База приложения не открывается.
+
+  --from M, --to M  только фразы, начавшиеся с M-й по M-ю минуту
+  --label L         метка отчёта (по умолчанию run)
+  --rules ФАЙЛ      правила промпта из файла вместо встроенных
+  --realtime        на настоящих часах, без пропуска простоя
+
+Отчёт: .grill-eval/reports/<время>-<L>/report.json. Если агент недоступен (нет входа,
+исчерпан лимит), прогон останавливается и отчёт сохраняется как неполный.
 ";
 
 /// The arguments after the subcommand.
@@ -127,8 +154,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
             print!("{EXPORT_USAGE}");
             return ExitCode::SUCCESS;
         }
+        "replay" if wants_help(rest) => {
+            print!("{REPLAY_USAGE}");
+            return ExitCode::SUCCESS;
+        }
         "export" => export_command(rest),
-        "import" | "brief" | "replay" | "judge" | "compare" => {
+        "replay" => replay_command(rest),
+        "import" | "brief" | "judge" | "compare" => {
             if wants_help(rest) {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -183,6 +215,144 @@ fn minutes(ms: i64) -> f64 {
     ms as f64 / 60_000.0
 }
 
+fn minutes_arg(parsed: &Parsed, name: &str) -> Result<Option<f64>, String> {
+    parsed
+        .values
+        .get(name)
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .ok()
+                .filter(|minutes| minutes.is_finite() && *minutes >= 0.0)
+                .ok_or_else(|| format!("--{name}: нужно число минут, а не «{value}»"))
+        })
+        .transpose()
+}
+
+/// A folder in the system's temp dir, removed with everything in it when
+/// dropped: the prefix files hold the client's project.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Result<Self, String> {
+        let path = std::env::temp_dir().join(format!("grill-eval-{}", storage::new_id()));
+        fs::create_dir_all(&path)
+            .map_err(|error| format!("Не удалось создать {}: {error}", path.display()))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!(
+                "grill-eval: не удалось удалить {}: {error}",
+                self.0.display()
+            );
+        }
+    }
+}
+
+/// Claude Code, if it is installed and signed in.
+fn ready_cli(cwd: &Path) -> Result<PathBuf, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(async {
+        let cli = discover::find(None, &SearchEnv::from_process())
+            .await
+            .ok_or("Claude Code не найден")?;
+        match agent::status(&cli, cwd, agent::STATUS_TIMEOUT).await {
+            AgentState::Ready { .. } => Ok(cli),
+            AgentState::NeedsLogin { .. } => {
+                Err("Нужен вход в Claude Code: выполните `claude` и войдите".to_owned())
+            }
+            AgentState::NotInstalled => Err("Claude Code не установлен".to_owned()),
+            AgentState::Error { message } => Err(format!("Claude Code: {message}")),
+        }
+    })
+}
+
+fn replay_command(args: &[String]) -> Result<ExitCode, String> {
+    let parsed = parse(args, &["from", "to", "label", "rules"], &["realtime"])?;
+    let argument = one_positional(&parsed, "набор")?;
+    let dir = eval_dir()?;
+    let corpus = Corpus::load(&corpus::resolve(&dir, &argument))?;
+    let label = parsed
+        .values
+        .get("label")
+        .cloned()
+        .unwrap_or_else(|| "run".to_owned());
+    corpus::check_name(&label)?;
+    let rules = match parsed.values.get("rules") {
+        Some(file) => Some(replay::Rules {
+            file: file.clone(),
+            text: fs::read_to_string(file)
+                .map_err(|error| format!("Не удалось прочитать правила {file}: {error}"))?,
+        }),
+        None => None,
+    };
+    let options = replay::Options {
+        from_min: minutes_arg(&parsed, "from")?,
+        to_min: minutes_arg(&parsed, "to")?,
+        label: label.clone(),
+        rules,
+        realtime: parsed.switches.contains("realtime"),
+        progress: true,
+    };
+    if let (Some(from), Some(to)) = (options.from_min, options.to_min)
+        && from >= to
+    {
+        return Err("--from должен быть меньше --to".to_owned());
+    }
+
+    let scratch = Scratch::new()?;
+    let cli = ready_cli(&scratch.0)?;
+    let agent: Arc<dyn Agent> = Arc::new(ClaudeCodeCli::new(cli, &scratch.0));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(!options.realtime)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let report = runtime.block_on(replay::run(
+        &corpus,
+        agent,
+        &options,
+        &scratch.0.join("prompts"),
+        replay::FOLLOW,
+    ))?;
+    drop(runtime);
+
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let path = dir
+        .join("reports")
+        .join(format!("{stamp}-{label}"))
+        .join("report.json");
+    corpus::write_json(&path, &report)?;
+    let cost: f64 = report.calls.iter().filter_map(|call| call.cost_usd).sum();
+    println!(
+        "{}: {} вызовов, {} вопросов, {} тем, ${cost:.2}, {:.1} мин → {}",
+        if report.complete {
+            "Прогон завершён"
+        } else {
+            "Прогон неполный"
+        },
+        report.calls.len(),
+        report.questions.len(),
+        report.topics.len(),
+        minutes(report.run.wall_ms),
+        path.display()
+    );
+    match &report.stopped {
+        Some(reason) => {
+            eprintln!("grill-eval: прогон остановлен: {reason}");
+            Ok(ExitCode::FAILURE)
+        }
+        None => Ok(ExitCode::SUCCESS),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +380,8 @@ mod tests {
         assert!(parse(&args(&["--nope"]), &["from"], &[]).is_err());
         assert!(parse(&args(&["--from"]), &["from"], &[]).is_err());
         assert!(parse(&args(&["--realtime=yes"]), &[], &["realtime"]).is_err());
+        let parsed = parse(&args(&["x", "--from", "abc"]), &["from"], &[]).unwrap();
+        assert!(minutes_arg(&parsed, "from").is_err());
     }
 
     #[test]
@@ -217,6 +389,6 @@ mod tests {
         assert_eq!(main(args(&["judge", "report.json"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["what"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["--help"])), ExitCode::SUCCESS);
-        assert_eq!(main(args(&["export", "--help"])), ExitCode::SUCCESS);
+        assert_eq!(main(args(&["replay", "--help"])), ExitCode::SUCCESS);
     }
 }

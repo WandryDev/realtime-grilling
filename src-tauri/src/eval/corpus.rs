@@ -169,6 +169,16 @@ pub fn path_of(dir: &Path, name: &str) -> PathBuf {
     dir.join("corpus").join(format!("{name}.json"))
 }
 
+/// A corpus argument: a path to a file, or the name of a corpus in `dir`.
+pub fn resolve(dir: &Path, argument: &str) -> PathBuf {
+    let path = PathBuf::from(argument);
+    if path.is_file() {
+        path
+    } else {
+        path_of(dir, argument)
+    }
+}
+
 impl Corpus {
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = fs::read_to_string(path)

@@ -341,7 +341,8 @@ pub fn open_read_only(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
-#[cfg(test)]
+/// A migrated database in memory: the tests, and the database of a
+/// `grill-eval` replay.
 pub fn open_in_memory() -> Result<Connection, String> {
     let mut connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
     configure(&connection)?;

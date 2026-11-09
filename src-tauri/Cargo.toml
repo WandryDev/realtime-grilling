@@ -41,8 +41,9 @@ specta-typescript = "=0.0.13"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 thiserror = "2"
 # Child processes of the agent CLI (timeouts, stdin), on Tauri's runtime;
-# the speech model files.
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+# the speech model files. `test-util`: `grill-eval replay` runs the fast
+# loop on tokio's paused clock (question-quality design.md, decision 3).
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time", "test-util"] }
 # Microphone level (CoreAudio / WASAPI).
 cpal = "0.18"
 which = "8"
