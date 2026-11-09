@@ -3,7 +3,14 @@
   "description": "Project brief from the given materials only.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["product", "stack", "modules", "glossary", "keyDocuments", "gaps"],
+  "required": [
+    "product",
+    "stack",
+    "modules",
+    "glossary",
+    "keyDocuments",
+    "gaps"
+  ],
   "properties": {
     "product": {
       "description": "What the product is and for whom, 1-3 sentences.",
@@ -66,7 +73,15 @@
         "required": ["lens", "text"],
         "properties": {
           "lens": {
-            "enum": ["goal", "users", "scenarios", "edgeCases", "integrations", "constraints", "acceptance"]
+            "enum": [
+              "goal",
+              "users",
+              "scenarios",
+              "edgeCases",
+              "integrations",
+              "constraints",
+              "acceptance"
+            ]
           },
           "text": { "type": "string", "minLength": 1, "maxLength": 200 }
         }
