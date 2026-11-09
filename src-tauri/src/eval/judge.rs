@@ -4,15 +4,22 @@
 //! whole transcript (the refined pass when it covers the live one), the
 //! project with its brief and the run's questions.
 //!
+//! Only the questions that were shown go to the judge, with the time they
+//! were first shown («время появления»); one that waited behind a full list
+//! to the end is neither labeled nor a cover.
+//!
 //! The code checks what the judge cites: a label of an unknown question or
-//! segment is dropped (the question stays unlabeled), a manager question
-//! must be a «Я» segment of the run's span, and the agent question that
-//! covers it must have come before it. A transcript over
-//! [`PART_LIMIT_CHARS`] goes in 30-minute parts every 25 minutes; each
-//! question is labeled in the first part that holds it, and the manager
-//! questions of all parts merge by segment id. A reply not by the schema
-//! leaves the run unlabeled (`labeled: false` with the error) instead of
-//! failing.
+//! segment is dropped (the question stays unlabeled), and so is
+//! `already_answered` without the segment of the answer said before the
+//! question was shown; a manager question must be a «Я» segment of the
+//! run's span, and the agent question that covers it must have been shown
+//! before it. The judge reads the run's span and [`CONTEXT_MS`] before it;
+//! when that is over [`PART_LIMIT_CHARS`], it goes in 30-minute parts every
+//! 25 minutes; each question is labeled in the first part that holds it,
+//! and the manager questions of all parts merge by segment id. A reply not
+//! by the schema, or a failed call after the first part, leaves the run
+//! unlabeled (`labeled: false` with the error and the cost so far) instead
+//! of failing.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -54,6 +61,9 @@ pub const PART_LIMIT_CHARS: usize = 150_000;
 /// A part of a long transcript, and how much the next one repeats of it.
 pub const PART_MS: i64 = 30 * 60_000;
 pub const OVERLAP_MS: i64 = 5 * 60_000;
+/// How much of the call before the run's span the judge reads, for what
+/// was already said.
+pub const CONTEXT_MS: i64 = 5 * 60_000;
 /// The refined pass is judged when it lasts at least this share of the
 /// live one (the second pass may not have finished).
 const REFINED_SHARE: f64 = 0.9;
@@ -119,8 +129,9 @@ pub struct Judge {
     pub transcript: Pass,
     /// How many calls the transcript took.
     pub parts: usize,
-    /// `false` when a reply was not by the schema: then nothing is labeled
-    /// and `error` says why.
+    /// `false` when a reply was not by the schema or a later part failed:
+    /// then nothing counts as labeled and `error` says why (`labels` may
+    /// keep what the earlier parts gave, for a look).
     pub labeled: bool,
     pub error: Option<String>,
     pub labels: Vec<QuestionLabel>,
@@ -153,8 +164,11 @@ pub struct ManagerQuestion {
 }
 
 impl Judge {
-    /// The label of `question_id`, if it has one.
+    /// The label of `question_id`, if it has one and the run is labeled.
     pub fn label_of(&self, question_id: &str) -> Option<&QuestionLabel> {
+        if !self.labeled {
+            return None;
+        }
         self.labels
             .iter()
             .find(|label| label.question_id == question_id)
@@ -242,24 +256,31 @@ fn segment_line(segment: &Segment) -> String {
     )
 }
 
-/// The parts of the transcript, as time ranges: one for all of it when its
+/// The parts of the transcript the judge reads, as time ranges over the
+/// run's `span` and [`CONTEXT_MS`] before it: one for all of that when its
 /// lines fit [`PART_LIMIT_CHARS`], else [`PART_MS`] every
 /// `PART_MS - OVERLAP_MS`. A segment belongs to the parts its start is in.
-pub fn parts(segments: &[Segment]) -> Vec<Range<i64>> {
-    let chars: usize = segments
-        .iter()
+pub fn parts(segments: &[Segment], span: &Range<i64>) -> Vec<Range<i64>> {
+    let from = (span.start - CONTEXT_MS).max(0);
+    let reach = from..span.end;
+    let in_reach = || {
+        segments
+            .iter()
+            .filter(|segment| reach.contains(&segment.start_ms))
+    };
+    let chars: usize = in_reach()
         .map(|segment| segment_line(segment).chars().count())
         .sum();
     if chars <= PART_LIMIT_CHARS {
-        let whole = 0..i64::MAX;
-        return vec![whole];
+        return vec![reach.clone()];
     }
-    let last = segments.iter().map(|s| s.start_ms).max().unwrap_or(0);
+    let last = in_reach().map(|s| s.start_ms).max().unwrap_or(from);
     let mut ranges = Vec::new();
-    let mut start = 0;
+    let mut start = from;
     loop {
-        ranges.push(start..start + PART_MS);
-        if start + PART_MS > last {
+        let end = start.saturating_add(PART_MS);
+        ranges.push(start..end.min(span.end));
+        if end > last {
             return ranges;
         }
         start += PART_MS - OVERLAP_MS;
@@ -313,11 +334,14 @@ fn project_section(corpus: &Corpus) -> String {
     text
 }
 
-fn question_block(question: &ReportQuestion) -> String {
+/// A shown question with the time it was first shown.
+type Shown<'a> = (&'a ReportQuestion, i64);
+
+fn question_block((question, shown_at): Shown<'_>) -> String {
     let mut text = format!(
         "[Q:{}] {} тема «{}», поле {}, тип {}\n  Вопрос: {}\n",
         question.id,
-        clock(question.at_ms),
+        clock(shown_at),
         one_line(question.topic.as_deref().unwrap_or("—")),
         question.card_field.map_or_else(
             || "—".to_owned(),
@@ -353,8 +377,8 @@ fn message(
     corpus: &Corpus,
     span: &Range<i64>,
     (index, count, range): (usize, usize, &Range<i64>),
-    to_label: &[&ReportQuestion],
-    earlier: &[&ReportQuestion],
+    to_label: &[Shown<'_>],
+    earlier: &[Shown<'_>],
     segments: &[&Segment],
 ) -> String {
     let mut text = project_section(corpus);
@@ -369,6 +393,13 @@ fn message(
         "Прогон охватил отрезок звонка {}–{to}. Вопросы менеджера выписывай только из него.",
         clock(span.start)
     );
+    if span.start > 0 {
+        let _ = writeln!(
+            text,
+            "Расшифровка начинается не раньше чем за {} мин до отрезка: это то, что уже было сказано.",
+            CONTEXT_MS / 60_000
+        );
+    }
     if count > 1 {
         let _ = writeln!(
             text,
@@ -383,14 +414,14 @@ fn message(
         text.push_str("Нет.\n");
     }
     for question in to_label {
-        text.push_str(&question_block(question));
+        text.push_str(&question_block(*question));
     }
     if !earlier.is_empty() {
         text.push_str(
             "\n# Вопросы, показанные раньше этой части\n\nНе размечай их: они нужны для `coveredBy` и повторов.\n\n",
         );
         for question in earlier {
-            text.push_str(&question_block(question));
+            text.push_str(&question_block(*question));
         }
     }
     text.push_str("\n# Расшифровка\n\n");
@@ -403,10 +434,11 @@ fn message(
 
 /* The run */
 
-/// Labels the questions of `report` (a replay of `corpus`) with `agent`.
-/// The rules go to a file in `prompt_dir`. `Err` only when the agent could
-/// not answer at all (no login, a timeout); a reply not by the schema gives
-/// an unlabeled [`Judge`].
+/// Labels the shown questions of `report` (a replay of `corpus`) with
+/// `agent`. The rules go to a file in `prompt_dir`. `Err` only when the
+/// first call could not answer at all (no login, a timeout); a reply not by
+/// the schema, or a failed later part, gives an unlabeled [`Judge`] with
+/// the cost so far.
 pub async fn run(
     corpus: &Corpus,
     report: &Report,
@@ -415,7 +447,8 @@ pub async fn run(
 ) -> Result<Judge, String> {
     let (pass, segments) = transcript(corpus);
     let span = span(report);
-    let ranges = parts(segments);
+    let ranges = parts(segments, &span);
+    let shown: Vec<Shown<'_>> = report.shown().collect();
     let prompt = prompt_dir.join("judge.md");
     std::fs::create_dir_all(prompt_dir)
         .and_then(|()| std::fs::write(&prompt, PROMPT))
@@ -437,23 +470,23 @@ pub async fn run(
     };
     let mut replies = Vec::new();
     for (index, range) in ranges.iter().enumerate() {
-        // A question is labeled in the first part that holds it (the last
-        // part takes those after the transcript's end).
-        let owner = |question: &ReportQuestion| {
+        // A question is labeled in the first part that holds its shown
+        // time (the last part takes those after the transcript's end).
+        let owner = |shown_at: i64| {
             ranges
                 .iter()
-                .position(|range| range.contains(&question.at_ms))
+                .position(|range| range.contains(&shown_at))
                 .unwrap_or(ranges.len() - 1)
         };
-        let to_label: Vec<&ReportQuestion> = report
-            .questions
+        let to_label: Vec<Shown<'_>> = shown
             .iter()
-            .filter(|question| owner(question) == index)
+            .copied()
+            .filter(|(_, shown_at)| owner(*shown_at) == index)
             .collect();
-        let earlier: Vec<&ReportQuestion> = report
-            .questions
+        let earlier: Vec<Shown<'_>> = shown
             .iter()
-            .filter(|question| owner(question) < index)
+            .copied()
+            .filter(|(_, shown_at)| owner(*shown_at) < index)
             .collect();
         let in_part: Vec<&Segment> = segments
             .iter()
@@ -486,41 +519,37 @@ pub async fn run(
         } else {
             String::new()
         };
-        let reply = match agent.run(request, cancelled).await {
-            Ok(reply) => reply,
+        let failed = match agent.run(request, cancelled).await {
+            Ok(reply) => {
+                judge.duration_ms += reply.usage.duration_ms;
+                if let Some(cost) = reply.usage.cost_usd {
+                    judge.cost_usd = Some(judge.cost_usd.unwrap_or(0.0) + cost);
+                }
+                match serde_json::from_value::<Reply>(reply.patch) {
+                    Ok(parsed) => {
+                        replies.push((to_label, parsed));
+                        continue;
+                    }
+                    Err(error) => format!("Судья ответил не по схеме{part}: {error}"),
+                }
+            }
             Err(AgentError::InvalidOutput(error)) => {
-                return Ok(unlabeled(
-                    judge,
-                    format!("Судья ответил не по схеме{part}: {error}"),
-                ));
+                format!("Судья ответил не по схеме{part}: {error}")
             }
-            Err(error) => return Err(format!("Судья{part}: {error}")),
+            // Nothing was spent on the first part: the command fails.
+            Err(error) if index == 0 => return Err(format!("Судья{part}: {error}")),
+            Err(error) => format!("Судья{part}: {error}"),
         };
-        judge.duration_ms += reply.usage.duration_ms;
-        if let Some(cost) = reply.usage.cost_usd {
-            judge.cost_usd = Some(judge.cost_usd.unwrap_or(0.0) + cost);
-        }
-        match serde_json::from_value::<Reply>(reply.patch) {
-            Ok(parsed) => replies.push((to_label, parsed)),
-            Err(error) => {
-                return Ok(unlabeled(
-                    judge,
-                    format!("Судья ответил не по схеме{part}: {error}"),
-                ));
-            }
-        }
+        let _ = std::fs::remove_file(&prompt);
+        // The earlier parts' labels stay for a look; none of them counts.
+        check(&mut judge, corpus, report, &span, replies);
+        judge.labeled = false;
+        judge.error = Some(failed);
+        return Ok(judge);
     }
     let _ = std::fs::remove_file(&prompt);
     check(&mut judge, corpus, report, &span, replies);
     Ok(judge)
-}
-
-fn unlabeled(mut judge: Judge, error: String) -> Judge {
-    judge.labeled = false;
-    judge.error = Some(error);
-    judge.labels.clear();
-    judge.manager_questions.clear();
-    judge
 }
 
 /// Keeps what the replies cite correctly; the rest goes to `dropped`.
@@ -529,7 +558,7 @@ fn check(
     corpus: &Corpus,
     report: &Report,
     span: &Range<i64>,
-    replies: Vec<(Vec<&ReportQuestion>, Reply)>,
+    replies: Vec<(Vec<Shown<'_>>, Reply)>,
 ) {
     // Both passes: the judge reads one, the questions cite the live one.
     let known: HashMap<&str, &Segment> = corpus
@@ -538,15 +567,17 @@ fn check(
         .chain(corpus.refined.iter().flatten())
         .map(|segment| (segment.id.as_str(), segment))
         .collect();
-    let questions: HashMap<&str, &ReportQuestion> = report
-        .questions
-        .iter()
-        .map(|question| (question.id.as_str(), question))
+    // The shown questions with their shown time; the others are not
+    // labeled and cover nothing.
+    let questions: HashMap<&str, i64> = report
+        .shown()
+        .map(|(question, shown_at)| (question.id.as_str(), shown_at))
         .collect();
+    let never_shown: HashSet<&str> = report.never_shown().map(|q| q.id.as_str()).collect();
     let mut labeled: HashSet<String> = HashSet::new();
     let mut managers: Vec<ManagerQuestion> = Vec::new();
     for (to_label, reply) in replies {
-        let ours: HashSet<&str> = to_label.iter().map(|q| q.id.as_str()).collect();
+        let ours: HashSet<&str> = to_label.iter().map(|(q, _)| q.id.as_str()).collect();
         for label in reply.labels {
             let question_id = bare(&label.question_id);
             let segment_id = label
@@ -554,17 +585,34 @@ fn check(
                 .as_deref()
                 .map(bare)
                 .filter(|id| !id.is_empty());
-            if !questions.contains_key(question_id.as_str()) {
+            let Some(&shown_at) = questions.get(question_id.as_str()) else {
                 judge
                     .dropped
-                    .push(format!("Метка неизвестного вопроса {question_id}"));
+                    .push(if never_shown.contains(question_id.as_str()) {
+                        format!("Метка вопроса {question_id}: он не показывался")
+                    } else {
+                        format!("Метка неизвестного вопроса {question_id}")
+                    });
                 continue;
-            }
-            if let Some(id) = &segment_id
-                && !known.contains_key(id.as_str())
-            {
+            };
+            let segment = match &segment_id {
+                Some(id) => match known.get(id.as_str()) {
+                    Some(segment) => Some(*segment),
+                    None => {
+                        judge.dropped.push(format!(
+                            "Метка вопроса {question_id} ссылается на неизвестный сегмент {id}"
+                        ));
+                        continue;
+                    }
+                },
+                None => None,
+            };
+            // «Уже отвечено» points at the answer, said before the question
+            // was shown.
+            let answered_before = segment.is_some_and(|segment| segment.start_ms <= shown_at);
+            if label.label == Label::AlreadyAnswered && !answered_before {
                 judge.dropped.push(format!(
-                    "Метка вопроса {question_id} ссылается на неизвестный сегмент {id}"
+                    "Метка «уже отвечено» вопроса {question_id}: нет сегмента ответа до его показа"
                 ));
                 continue;
             }
@@ -607,10 +655,16 @@ fn check(
                 .map(bare)
                 .filter(|id| !id.is_empty())
                 .and_then(|id| match questions.get(id.as_str()) {
-                    Some(question) if question.at_ms < segment.start_ms => Some(id),
+                    Some(&shown_at) if shown_at < segment.start_ms => Some(id),
                     Some(_) => {
                         judge.dropped.push(format!(
                             "Вопрос менеджера {segment_id}: вопрос {id} появился позже"
+                        ));
+                        None
+                    }
+                    None if never_shown.contains(id.as_str()) => {
+                        judge.dropped.push(format!(
+                            "Вопрос менеджера {segment_id}: вопрос {id} не показывался"
                         ));
                         None
                     }

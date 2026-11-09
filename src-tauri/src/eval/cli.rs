@@ -39,18 +39,19 @@ grill-eval — прогон записанных звонков через бы�
 (пример крейта src-tauri с фичей eval, в приложение не входит).
 
 Подкоманды:
-  export <id записи> [--name N] [--db ФАЙЛ]
+  export <id записи> [--name N] [--db ФАЙЛ] [--force]
       Запись из базы приложения (только чтение) в набор .grill-eval/corpus/<N>.json.
   import <аудио> [--others <аудио>] [--channels left=me|right=me|mono]
          --project <описание.md> [--docs <файлы>] [--people <people.json>]
-         [--manager ИМЯ] [--name N]
+         [--manager ИМЯ] [--name N] [--force]
       Внешняя запись звонка в набор: распознавание моделями приложения, аудио
       копируется в .grill-eval/audio/<N>/. Нужен ffmpeg.
   brief <набор>
       Пересобрать бриф набора нынешним промптом брифа; прежний остаётся в briefPrevious.
-  replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime] [--baseline-state]
+  replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
+         [--baseline-state] [--no-gaps]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
-      .grill-eval/reports/<время>-<L>/report.json и report.md.
+      .grill-eval/reports/<время>-<L>-<n>/report.json и report.md.
   judge <отчёт>
       Разметка вопросов прогона LLM-судьёй: judge.json рядом с отчётом, report.md заново.
   compare <отчёт A> <отчёт B>
@@ -58,11 +59,13 @@ grill-eval — прогон записанных звонков через бы�
       появились или пропали; пишется и в compare.md в папке B.
 
 Каталог .grill-eval/ — в корне репозитория (ближайшая папка вверх от текущей, где
-есть .git), он в .gitignore. `grill-eval <подкоманда> --help` — справка по подкоманде.
+есть .git), он в .gitignore. Рабочие файлы команд (промпты, аудио импорта до
+сохранения набора) — в .grill-eval/tmp/. `grill-eval <подкоманда> --help` — справка
+по подкоманде.
 ";
 
 const EXPORT_USAGE: &str = "\
-grill-eval export <id записи> [--name N] [--db ФАЙЛ]
+grill-eval export <id записи> [--name N] [--db ФАЙЛ] [--force]
 
 Выгружает запись из базы приложения в набор .grill-eval/corpus/<N>.json: живую и
 уточнённую расшифровку, проект с брифом и текстами документов, людей, глоссарий,
@@ -70,14 +73,18 @@ grill-eval export <id записи> [--name N] [--db ФАЙЛ]
 
   --name N    имя набора (по умолчанию id записи)
   --db ФАЙЛ   база приложения (по умолчанию база приложения этого пользователя)
+  --force     заменить набор с тем же именем (без флага — ошибка: пересобранный
+              бриф и briefPrevious пропали бы)
 
-База открывается только на чтение. Запись без живой расшифровки — ошибка, файл не создаётся.
+База открывается только на чтение и читается одной транзакцией, так что набор —
+один момент записи, даже если приложение пишет. Запись без живой расшифровки —
+ошибка, файл не создаётся.
 ";
 
 const IMPORT_USAGE: &str = "\
 grill-eval import <аудио> [--others <аудио>] [--channels left=me|right=me|mono]
                   --project <описание.md> [--docs <файлы>] [--people <people.json>]
-                  [--manager ИМЯ] [--name N]
+                  [--manager ИМЯ] [--name N] [--force]
 
 Распознаёт запись звонка, сделанную вне приложения, моделями приложения (живой
 проход и второй проход) и пишет набор .grill-eval/corpus/<N>.json; аудио
@@ -96,42 +103,57 @@ grill-eval import <аудио> [--others <аудио>] [--channels left=me|right
   --people ФАЙЛ       люди клиента: JSON-массив { name, role, profile? }
   --manager ИМЯ       имя менеджера, подсказка для разметки моно
   --name N            имя набора (по умолчанию имя аудиофайла без расширения)
+  --force             заменить набор с тем же именем и его аудио (без флага —
+                      ошибка до распознавания)
 
 Моно-запись делится на «Я» и «Остальные» одним вызовом Claude Code по тексту,
-набор помечается «разделено приблизительно». Нужны ffmpeg и ffprobe в PATH и модель
-распознавания, скачанная в приложении. Бриф набора собирает `grill-eval brief`.
+набор помечается «разделено приблизительно»; расшифровка длиннее 150 тыс. символов в
+один вызов не помещается — такую запись режут на части. Нужны ffmpeg и ffprobe в PATH
+и модель распознавания, скачанная в приложении. Бриф набора собирает
+`grill-eval brief`. Неудачный импорт ничего не оставляет.
 ";
 
 const REPLAY_USAGE: &str = "\
 grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
-                  [--baseline-state]
+                  [--baseline-state] [--no-gaps]
 
 Прогоняет набор (имя в .grill-eval/corpus/ или путь к файлу) через быстрый контур
 приложения с настоящим Claude Code. Простой между фразами пропускается, во время
-вызова часы идут вместе с реальным временем. База приложения не открывается.
+вызова часы идут вместе с реальным временем. Фраза подаётся в момент своего конца,
+а приложение получает её на 1–3 с позже (распознавание): прогон чуть оптимистичнее.
+База приложения не открывается.
 
   --from M, --to M  только фразы, начавшиеся с M-й по M-ю минуту
   --label L         метка отчёта (по умолчанию run)
-  --rules ФАЙЛ      правила промпта из файла вместо встроенных
+  --rules ФАЙЛ      правила промпта из файла вместо встроенных; описание схемы
+                    патча от них не зависит (это видно в заголовке отчёта)
   --realtime        на настоящих часах, без пропуска простоя
   --baseline-state  состояние вызова без строк «Пустые линзы» и «N мин без новых
                     вопросов»: базовая линия, с которой их сравнивают
+  --no-gaps         бриф без пунктов «Неясно до звонка»
 
-Отчёт: .grill-eval/reports/<время>-<L>/report.json и report.md с метриками. Если агент
-недоступен (нет входа, исчерпан лимит), прогон останавливается и отчёт сохраняется как
-неполный.
+Базовая линия до изменения question-quality (правила, состояние и бриф как раньше):
+  --rules spikes/question-quality/rules-baseline.md --baseline-state --no-gaps
+
+Отчёт: .grill-eval/reports/<время>-<L>-<n>/report.json и report.md с метриками (n —
+номер, чтобы прогоны в одну секунду не совпали). Время вопроса в метриках — когда
+он впервые показан; вопросы, так и не показанные (ждали за полным списком), идут
+отдельным списком. Если агент недоступен (нет входа, исчерпан лимит) или прогон
+упал после начала, он останавливается и отчёт сохраняется как неполный.
 ";
 
 const JUDGE_USAGE: &str = "\
 grill-eval judge <отчёт>
 
-Размечает вопросы прогона (папка отчёта или его report.json) LLM-судьёй: claude-sonnet-5-5,
-один вызов на звонок (длинный — частями по 30 минут). Судья получает расшифровку набора
-(уточнённую, если она не короче 90 % живой), проект с брифом и вопросы прогона. Набор
-берётся из .grill-eval/corpus/ по имени из отчёта.
+Размечает показанные вопросы прогона (папка отчёта или его report.json) LLM-судьёй:
+claude-sonnet-5-5, один вызов на звонок (длинный — частями по 30 минут). Судья получает
+расшифровку набора (уточнённую, если она не короче 90 % живой) на отрезке прогона и за
+5 минут до него, проект с брифом и вопросы прогона со временем показа. Набор берётся
+из файла, который читал прогон, а если его нет — из .grill-eval/corpus/ по имени.
 
-Пишет judge.json рядом с отчётом и заново report.md. Ответ не по схеме — прогон
-«неразмечено» (judge.json с ошибкой), команда не падает.
+Пишет judge.json рядом с отчётом и заново report.md. Ответ не по схеме или сбой
+второй и следующих частей — прогон «неразмечено» (judge.json с ошибкой и
+стоимостью), команда не падает.
 ";
 
 const COMPARE_USAGE: &str = "\
@@ -139,7 +161,8 @@ grill-eval compare <отчёт A> <отчёт B>
 
 Печатает таблицу метрик «A | B | разница» и вопросы, которые появились в B или пропали
 из A (пары — одна тема и похожий текст), и пишет то же в compare.md в папке B. Метки
-судьи берутся из judge.json, если он есть.
+судьи берутся из judge.json, если он есть. Если у прогонов разные отрезок, флаги
+(--realtime, --baseline-state, --no-gaps) или правила, сравнение говорит об этом.
 ";
 
 const BRIEF_USAGE: &str = "\
@@ -271,7 +294,7 @@ fn eval_dir() -> Result<PathBuf, String> {
 }
 
 fn export_command(args: &[String]) -> Result<ExitCode, String> {
-    let parsed = parse(args, &["name", "db"], &[])?;
+    let parsed = parse(args, &["name", "db"], &["force"])?;
     let recording_id = one_positional(&parsed, "id записи")?;
     let database = match parsed.values.get("db") {
         Some(path) => PathBuf::from(path),
@@ -283,6 +306,7 @@ fn export_command(args: &[String]) -> Result<ExitCode, String> {
         &recording_id,
         parsed.values.get("name").map(String::as_str),
         &eval_dir()?,
+        parsed.switches.contains("force"),
     )?;
     let corpus = Corpus::load(&path)?;
     println!(
@@ -315,13 +339,17 @@ fn minutes_arg(parsed: &Parsed, name: &str) -> Result<Option<f64>, String> {
         .transpose()
 }
 
-/// A folder in the system's temp dir, removed with everything in it when
-/// dropped: the prefix files hold the client's project.
+/// A folder in `.grill-eval/tmp/`, removed with everything in it when
+/// dropped: the prefix files hold the client's project, the import's work
+/// files their audio. After a Ctrl-C or a panic it stays there, inside the
+/// git-ignored `.grill-eval/`, not in the system's temp dir.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    fn new() -> Result<Self, String> {
-        let path = std::env::temp_dir().join(format!("grill-eval-{}", storage::new_id()));
+    fn new(eval_dir: &Path) -> Result<Self, String> {
+        let path = eval_dir
+            .join(corpus::TMP_DIR)
+            .join(format!("grill-eval-{}", storage::new_id()));
         fs::create_dir_all(&path)
             .map_err(|error| format!("Не удалось создать {}: {error}", path.display()))?;
         Ok(Self(path))
@@ -336,7 +364,30 @@ impl Drop for Scratch {
                 self.0.display()
             );
         }
+        // `tmp/` itself goes once it is empty.
+        if let Some(parent) = self.0.parent() {
+            let _ = fs::remove_dir(parent);
+        }
     }
+}
+
+/// A new folder for a report: `<stamp>-<label>-<n>` in `reports`, `n` from
+/// 1 up to the first free one. Made atomically, so two runs started in the
+/// same second never share it.
+fn report_dir(reports: &Path, stamp: &str, label: &str) -> Result<PathBuf, String> {
+    fs::create_dir_all(reports)
+        .map_err(|error| format!("Не удалось создать {}: {error}", reports.display()))?;
+    for n in 1.. {
+        let dir = reports.join(format!("{stamp}-{label}-{n}"));
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(format!("Не удалось создать {}: {error}", dir.display()));
+            }
+        }
+    }
+    unreachable!("an unbounded range")
 }
 
 /// Claude Code, if it is installed and signed in.
@@ -364,11 +415,16 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
     let parsed = parse(
         args,
         &["from", "to", "label", "rules"],
-        &["realtime", "baseline-state"],
+        &["realtime", "baseline-state", "no-gaps"],
     )?;
     let argument = one_positional(&parsed, "набор")?;
     let dir = eval_dir()?;
-    let corpus = Corpus::load(&corpus::resolve(&dir, &argument))?;
+    let corpus_file = corpus::resolve(&dir, &argument);
+    let corpus = Corpus::load(&corpus_file)?;
+    let corpus_path = fs::canonicalize(&corpus_file)
+        .unwrap_or(corpus_file)
+        .display()
+        .to_string();
     let label = parsed
         .values
         .get("label")
@@ -390,6 +446,8 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         rules,
         realtime: parsed.switches.contains("realtime"),
         baseline_state: parsed.switches.contains("baseline-state"),
+        no_gaps: parsed.switches.contains("no-gaps"),
+        corpus_path: Some(corpus_path),
         progress: true,
     };
     if let (Some(from), Some(to)) = (options.from_min, options.to_min)
@@ -398,7 +456,7 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         return Err("--from должен быть меньше --to".to_owned());
     }
 
-    let scratch = Scratch::new()?;
+    let scratch = Scratch::new(&dir)?;
     let cli = ready_cli(&scratch.0)?;
     let agent: Arc<dyn Agent> = Arc::new(ClaudeCodeCli::new(cli, &scratch.0));
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -415,23 +473,22 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
     ))?;
     drop(runtime);
 
-    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let path = dir
-        .join("reports")
-        .join(format!("{stamp}-{label}"))
-        .join(report::REPORT_FILE);
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let path = report_dir(&dir.join("reports"), &stamp, &label)?.join(report::REPORT_FILE);
     corpus::write_json(&path, &report)?;
     write_markdown(&path, &report, None)?;
     let cost: f64 = report.calls.iter().filter_map(|call| call.cost_usd).sum();
     println!(
-        "{}: {} вызовов, {} вопросов, {} тем, ${cost:.2}, {:.1} мин → {}",
+        "{}: {} вызовов, {} показанных вопросов (не показано {}), {} тем, ${cost:.2}, \
+         {:.1} мин → {}",
         if report.complete {
             "Прогон завершён"
         } else {
             "Прогон неполный"
         },
         report.calls.len(),
-        report.questions.len(),
+        report.shown().count(),
+        report.never_shown().count(),
         report.topics.len(),
         minutes(report.run.wall_ms),
         path.display()
@@ -481,9 +538,18 @@ fn judge_command(args: &[String]) -> Result<ExitCode, String> {
     let parsed = parse(args, &[], &[])?;
     let path = report::file_of(Path::new(&one_positional(&parsed, "отчёт")?));
     let report = Report::load(&path)?;
-    let corpus = Corpus::load(&corpus::resolve(&eval_dir()?, &report.corpus))?;
+    let dir = eval_dir()?;
+    // The file the run read; by name for a report without it, or when it
+    // moved.
+    let corpus_file = report
+        .corpus_path
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|file| file.is_file())
+        .unwrap_or_else(|| corpus::resolve(&dir, &report.corpus));
+    let corpus = Corpus::load(&corpus_file)?;
 
-    let scratch = Scratch::new()?;
+    let scratch = Scratch::new(&dir)?;
     let cli = ready_cli(&scratch.0)?;
     let agent: Arc<dyn Agent> = Arc::new(ClaudeCodeCli::new(cli, &scratch.0));
     let judged = runtime()?.block_on(judge::run(&corpus, &report, agent, &scratch.0))?;
@@ -510,9 +576,9 @@ fn judge_command(args: &[String]) -> Result<ExitCode, String> {
         format!(", покрытие {} из {}", coverage.covered, coverage.total)
     });
     println!(
-        "Судья: размечено {} из {} ({}){coverage}, отброшено {}, ${cost:.2} → {}",
+        "Судья: размечено {} из {} показанных ({}){coverage}, отброшено {}, ${cost:.2} → {}",
         labels.labeled,
-        report.questions.len(),
+        found.questions,
         counts.join(", "),
         judged.dropped.len(),
         file.display()
@@ -550,12 +616,13 @@ fn compare_command(args: &[String]) -> Result<ExitCode, String> {
 
 fn brief_command(args: &[String]) -> Result<ExitCode, String> {
     let parsed = parse(args, &[], &[])?;
-    let path = corpus::resolve(&eval_dir()?, &one_positional(&parsed, "набор")?);
+    let dir = eval_dir()?;
+    let path = corpus::resolve(&dir, &one_positional(&parsed, "набор")?);
     let mut corpus = Corpus::load(&path)?;
     // Nothing to build from: an error before the agent is looked for.
     brief::inputs(&corpus)?;
 
-    let scratch = Scratch::new()?;
+    let scratch = Scratch::new(&dir)?;
     let cli = ready_cli(&scratch.0)?;
     let agent: Arc<dyn Agent> = Arc::new(ClaudeCodeCli::new(cli, &scratch.0));
     let usage = runtime()?.block_on(brief::run(&mut corpus, agent, &scratch.0))?;
@@ -610,7 +677,7 @@ fn import_command(args: &[String]) -> Result<ExitCode, String> {
     let parsed = parse(
         &args,
         &["others", "channels", "project", "people", "manager", "name"],
-        &[],
+        &["force"],
     )?;
     let path = |name: &str| parsed.values.get(name).map(PathBuf::from);
     let mut options = import::Options {
@@ -627,8 +694,14 @@ fn import_command(args: &[String]) -> Result<ExitCode, String> {
         manager: parsed.values.get("manager").cloned(),
         name: parsed.values.get("name").cloned(),
         settings: storage::settings::SettingsMap::new(),
+        force: parsed.switches.contains("force"),
         progress: true,
     };
+    // A taken name fails before the long work, not after it.
+    let dir = eval_dir()?;
+    let name = import::name_of(&options);
+    corpus::check_name(&name)?;
+    corpus::check_free(&dir, &name, options.force)?;
     let given = [&options.audio, &options.project]
         .into_iter()
         .chain(&options.others)
@@ -644,7 +717,7 @@ fn import_command(args: &[String]) -> Result<ExitCode, String> {
     options.settings = settings;
     let (model, model_path) = import::installed_model(&data.join("models"), selected)?;
     let layout = import::layout(&options, &Ffmpeg)?;
-    let scratch = Scratch::new()?;
+    let scratch = Scratch::new(&dir)?;
     let agent = match layout {
         Layout::Mono => {
             Some(Arc::new(ClaudeCodeCli::new(ready_cli(&scratch.0)?, &scratch.0)) as Arc<dyn Agent>)
@@ -659,13 +732,7 @@ fn import_command(args: &[String]) -> Result<ExitCode, String> {
         vad_model: vad::dev_model_path(),
     };
     let imported = tauri::async_runtime::block_on(import::run(
-        &options,
-        layout,
-        &tracks,
-        &speech,
-        agent,
-        &eval_dir()?,
-        &scratch.0,
+        &options, layout, &tracks, &speech, agent, &dir, &scratch.0,
     ))?;
 
     let corpus = &imported.corpus;
@@ -753,6 +820,30 @@ mod tests {
         );
         assert_eq!(main(args(&["import", "--help"])), ExitCode::SUCCESS);
         assert_eq!(main(args(&["import", "a.wav"])), ExitCode::FAILURE);
+    }
+
+    /// Two runs with one label in the same second get their own folders.
+    #[test]
+    fn report_folders_never_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports = dir.path().join("reports");
+        let first = report_dir(&reports, "20261109-120000", "run").unwrap();
+        let second = report_dir(&reports, "20261109-120000", "run").unwrap();
+        assert_eq!(first, reports.join("20261109-120000-run-1"));
+        assert_eq!(second, reports.join("20261109-120000-run-2"));
+        assert!(first.is_dir() && second.is_dir());
+    }
+
+    /// The scratch folder is in `.grill-eval/tmp/`, gone with `tmp/` when
+    /// dropped.
+    #[test]
+    fn the_scratch_folder_is_in_the_eval_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = Scratch::new(dir.path()).unwrap();
+        assert!(scratch.0.starts_with(dir.path().join("tmp")));
+        assert!(scratch.0.is_dir());
+        drop(scratch);
+        assert!(!dir.path().join("tmp").exists());
     }
 
     #[test]

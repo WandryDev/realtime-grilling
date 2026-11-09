@@ -12,10 +12,12 @@
 //!    documents from `--docs` through the app's text extraction, people
 //!    from `--people`. The brief stays empty (`grill-eval brief`).
 //!
-//! The audio is copied to `.grill-eval/audio/<name>/` with the corpus, and
-//! only once everything went through: a failed import leaves nothing. The
-//! audio never leaves the machine: only the transcript goes to Claude Code,
-//! and only for a mono recording.
+//! The audio is copied to a folder in `.grill-eval/tmp/` once everything
+//! went through, and renamed to `.grill-eval/audio/<name>/` after the
+//! corpus is saved: a failed import leaves nothing. An existing corpus or
+//! its audio is replaced only with `--force`. The audio never leaves the
+//! machine: only the transcript goes to Claude Code, and only for a mono
+//! recording.
 
 pub mod decode;
 pub mod label;
@@ -73,8 +75,19 @@ pub struct Options {
     /// The fast loop's settings of the app (`questionFrequency`,
     /// `questionCount`, `callLanguage`); the defaults when empty.
     pub settings: SettingsMap,
+    /// `--force`: replace a corpus of the same name and its audio.
+    pub force: bool,
     /// Progress lines on stderr.
     pub progress: bool,
+}
+
+/// The corpus's name: `--name`, else the audio file's name without the
+/// extension.
+pub fn name_of(options: &Options) -> String {
+    options
+        .name
+        .clone()
+        .unwrap_or_else(|| file_stem(&options.audio))
 }
 
 /// What the import made.
@@ -298,11 +311,9 @@ fn segments(heard: Vec<Heard>) -> Result<Vec<Segment>, String> {
         .collect()
 }
 
-/// Copies the audio to `.grill-eval/audio/<name>/`; the copied files'
-/// names.
-fn copy_audio(options: &Options, eval_dir: &Path, name: &str) -> Result<Vec<String>, String> {
-    let dir = eval_dir.join("audio").join(name);
-    fs::create_dir_all(&dir)
+/// Copies the audio to `dir` (new); the copied files' names.
+fn copy_audio(options: &Options, dir: &Path) -> Result<Vec<String>, String> {
+    fs::create_dir_all(dir)
         .map_err(|error| format!("Не удалось создать {}: {error}", dir.display()))?;
     let mut copied = Vec::new();
     for source in std::iter::once(&options.audio).chain(&options.others) {
@@ -317,6 +328,46 @@ fn copy_audio(options: &Options, eval_dir: &Path, name: &str) -> Result<Vec<Stri
     Ok(copied)
 }
 
+/// Removes the audio copied to `dir` in `.grill-eval/tmp/`, and `tmp/`
+/// once it is empty.
+fn remove_staged(dir: &Path) {
+    let _ = fs::remove_dir_all(dir);
+    if let Some(tmp) = dir.parent() {
+        let _ = fs::remove_dir(tmp);
+    }
+}
+
+/// Saves `corpus` at `path` and moves the audio staged in `staged` to
+/// `audio`, replacing what was there (the name was checked free, or
+/// `--force`). On a failure nothing of the import is left.
+fn store(corpus: &Corpus, path: &Path, staged: &Path, audio: &Path) -> Result<(), String> {
+    if let Err(error) = corpus.save(path) {
+        remove_staged(staged);
+        return Err(error);
+    }
+    let moved = (|| {
+        if audio.exists() {
+            fs::remove_dir_all(audio)?;
+        }
+        if let Some(parent) = audio.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(staged, audio)
+    })();
+    if let Err(error) = moved {
+        let _ = fs::remove_file(path);
+        remove_staged(staged);
+        return Err(format!(
+            "Не удалось перенести аудио в {}: {error}",
+            audio.display()
+        ));
+    }
+    if let Some(tmp) = staged.parent() {
+        let _ = fs::remove_dir(tmp);
+    }
+    Ok(())
+}
+
 /// Imports the recording into the corpus in `eval_dir`. `tracks` are the
 /// recording's audio as [`decode`] gave it; `agent` labels a mono one.
 /// `work_dir` is scratch space (the passes' files, the labeling prompt).
@@ -329,11 +380,9 @@ pub async fn run(
     eval_dir: &Path,
     work_dir: &Path,
 ) -> Result<Imported, String> {
-    let name = options
-        .name
-        .clone()
-        .unwrap_or_else(|| file_stem(&options.audio));
+    let name = name_of(options);
     corpus::check_name(&name)?;
+    corpus::check_free(eval_dir, &name, options.force)?;
     let labeler = match (layout, agent) {
         (Layout::Mono, None) => {
             return Err("Моно-запись размечает Claude Code, а он недоступен".to_owned());
@@ -440,12 +489,15 @@ pub async fn run(
     let refined = segments(refined)?;
     corpus.refined = (!refined.is_empty()).then_some(refined);
 
-    let files = copy_audio(options, eval_dir, &name)?;
+    let staged = eval_dir
+        .join(corpus::TMP_DIR)
+        .join(format!("audio-{}", storage::new_id()));
+    let files = copy_audio(options, &staged).inspect_err(|_| remove_staged(&staged))?;
     if let Origin::Import { files: copied, .. } = &mut corpus.origin {
         *copied = files;
     }
     let path = corpus::path_of(eval_dir, &name);
-    corpus.save(&path)?;
+    store(&corpus, &path, &staged, &corpus::audio_dir(eval_dir, &name))?;
     Ok(Imported {
         path,
         corpus,

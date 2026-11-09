@@ -77,7 +77,16 @@ pub fn topic(id: &str, title: &str, at_ms: i64) -> ReportTopic {
     }
 }
 
-/// An open `empty` question about `users` of `topic_id`, citing `seg`.
+/// [`question`] that waited behind a full list and was never shown.
+pub fn never_shown(id: &str, at_ms: i64, topic_id: &str, text: &str) -> ReportQuestion {
+    ReportQuestion {
+        shown_at_ms: None,
+        ..question(id, at_ms, topic_id, text)
+    }
+}
+
+/// An open `empty` question about `users` of `topic_id`, citing `seg`,
+/// shown as soon as it was added.
 pub fn question(id: &str, at_ms: i64, topic_id: &str, text: &str) -> ReportQuestion {
     ReportQuestion {
         id: id.to_owned(),
@@ -129,6 +138,7 @@ pub fn report() -> Report {
     Report {
         version: report::FORMAT,
         corpus: "telemedia".to_owned(),
+        corpus_path: None,
         label: "test".to_owned(),
         complete: true,
         stopped: None,

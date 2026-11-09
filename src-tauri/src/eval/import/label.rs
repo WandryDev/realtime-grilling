@@ -16,6 +16,7 @@ use crate::{
         claude_cli::{Agent, AgentRequest, CallOptions, MODEL, OutputKind, Usage},
         process::TreeSlot,
     },
+    eval::judge::PART_LIMIT_CHARS,
     storage::transcript::TranscriptChannel,
 };
 
@@ -127,7 +128,9 @@ pub fn parse(reply: &Value, count: usize) -> Result<Vec<TranscriptChannel>, Stri
     Ok(channels.into_iter().flatten().collect())
 }
 
-/// Labels `transcript` (the refined pass, in time order) with one call.
+/// Labels `transcript` (the refined pass, in time order) with one call. A
+/// message over the judge's limit ([`PART_LIMIT_CHARS`]) fails before the
+/// call: one call would not hold it.
 pub async fn label(
     agent: &Arc<dyn Agent>,
     transcript: &[Heard],
@@ -135,6 +138,17 @@ pub async fn label(
     manager: Option<&str>,
     prompt_dir: &Path,
 ) -> Result<(Vec<TranscriptChannel>, Usage), String> {
+    let user_message = message(transcript, description, manager);
+    let chars = user_message.chars().count();
+    if chars > PART_LIMIT_CHARS {
+        return Err(format!(
+            "Моно-запись слишком длинная для разметки одним вызовом: {} тыс. символов \
+             расшифровки, предел {} тыс. Разрежьте запись на части (ffmpeg -ss … -t …) и \
+             импортируйте их по отдельности",
+            chars / 1_000,
+            PART_LIMIT_CHARS / 1_000
+        ));
+    }
     std::fs::create_dir_all(prompt_dir)
         .map_err(|error| format!("Не удалось создать {}: {error}", prompt_dir.display()))?;
     let prompt = prompt_dir.join("label.md");
@@ -142,7 +156,7 @@ pub async fn label(
         .map_err(|error| format!("Не удалось записать {}: {error}", prompt.display()))?;
     let request = AgentRequest {
         system_prompt_file: prompt,
-        user_message: message(transcript, description, manager),
+        user_message,
         schema: schema_argument(),
         process: TreeSlot::default(),
         options: CallOptions {

@@ -4,7 +4,6 @@
 //! only, so it sits behind [`Decoder`] and the tests decode WAV fixtures.
 
 use std::{
-    io::Read as _,
     path::Path,
     process::{Command, Stdio},
 };
@@ -33,32 +32,21 @@ pub struct Ffmpeg;
 const MISSING: &str = "Нужен ffmpeg (с ffprobe) в PATH: brew install ffmpeg. \
                        Он нужен только для импорта, приложению не нужен";
 
+/// Runs `command` to its end and returns its stdout. `output()` reads
+/// stdout and stderr at once: a damaged file can make ffmpeg log an error
+/// per frame, and a stderr pipe left full would block it forever.
 fn run(command: &mut Command, what: &str, path: &Path) -> Result<Vec<u8>, String> {
-    let mut child = command
+    let output = command
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => MISSING.to_owned(),
             _ => format!("Не удалось запустить {what}: {error}"),
         })?;
-    let mut stdout = Vec::new();
-    // stderr is short (`-v error`): read after stdout without a deadlock.
-    if let Some(mut out) = child.stdout.take() {
-        out.read_to_end(&mut stdout)
-            .map_err(|error| format!("{what} {}: {error}", path.display()))?;
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
-    let status = child
-        .wait()
-        .map_err(|error| format!("{what} {}: {error}", path.display()))?;
-    if status.success() {
-        Ok(stdout)
+    if output.status.success() {
+        Ok(output.stdout)
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!(
             "{what} не прочитал {}: {}",
             path.display(),
@@ -128,6 +116,35 @@ impl Decoder for Ffmpeg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tool that fills stderr far past a pipe's buffer before it writes
+    /// stdout (ffmpeg on a damaged file): both are read, nothing blocks.
+    #[cfg(unix)]
+    #[test]
+    fn a_loud_stderr_does_not_block_the_tool() {
+        let script = "head -c 300000 /dev/zero | tr '\\0' x >&2; printf ok";
+        let out = run(
+            Command::new("sh").args(["-c", script]),
+            "sh",
+            Path::new("loud"),
+        )
+        .unwrap();
+        assert_eq!(out, b"ok");
+
+        let script = "head -c 300000 /dev/zero | tr '\\0' x >&2; echo broken >&2; exit 1";
+        let error = run(
+            Command::new("sh").args(["-c", script]),
+            "ffmpeg",
+            Path::new("call.m4a"),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("ffmpeg не прочитал call.m4a: xxx"),
+            "{}",
+            error.chars().take(80).collect::<String>()
+        );
+        assert!(error.ends_with("broken"));
+    }
 
     /// Needs ffmpeg, which CI has not: run by hand with `--ignored`.
     #[test]

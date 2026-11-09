@@ -301,5 +301,5 @@ fn an_empty_report_has_dashes() {
     assert!(text.contains("| Показано вопросов | 0 |"), "{text}");
     assert!(text.contains("| Вызов p50 | — |"), "{text}");
     assert!(text.contains("Тем нет."), "{text}");
-    assert!(text.contains("Вопросов нет."), "{text}");
+    assert!(text.contains("Показанных вопросов нет."), "{text}");
 }

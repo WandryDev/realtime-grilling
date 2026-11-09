@@ -125,6 +125,7 @@ fn the_table_has_both_columns_and_the_difference() {
         assert!(text.contains(part), "no «{part}» in\n{text}");
     }
     assert!(!text.contains("Внимание"));
+    assert!(!text.contains("Для сведения"));
     // B has no stretch with five client phrases between its questions.
     assert!(
         text.contains(
@@ -148,6 +149,56 @@ fn the_table_has_both_columns_and_the_difference() {
         },
     );
     assert!(text.contains("прогоны разных наборов"), "{text}");
+}
+
+/// Runs made differently (span, flags, rules): `compare` says so, for
+/// information, and still compares.
+#[test]
+fn runs_made_differently_are_flagged() {
+    let a = baseline();
+    let mut b = variant();
+    b.flags.from_min = Some(40.0);
+    b.flags.to_min = Some(75.0);
+    b.flags.realtime = true;
+    b.flags.baseline_state = true;
+    b.flags.no_gaps = true;
+    b.rules_sha256 = "cd".repeat(32);
+    let text = markdown(
+        &Run {
+            report: &a,
+            judge: None,
+            place: "a".to_owned(),
+        },
+        &Run {
+            report: &b,
+            judge: None,
+            place: "b".to_owned(),
+        },
+    );
+    for part in [
+        "**Для сведения:** прогоны отличаются",
+        "- отрезки звонка разные: A —–—, B 40–75 мин",
+        "- --realtime: A нет, B да",
+        "- --baseline-state: A нет, B да",
+        "- --no-gaps: A нет, B да",
+        "- правила разные (sha256 в заголовках)",
+        "| Метрика | A | B | разница |",
+    ] {
+        assert!(text.contains(part), "no «{part}» in\n{text}");
+    }
+    assert!(!text.contains("Внимание"));
+}
+
+/// A question never shown is in neither list: it pairs with nothing and
+/// neither appears nor disappears.
+#[test]
+fn a_question_never_shown_is_not_compared() {
+    let a = baseline();
+    let mut b = variant();
+    b.questions[2].shown_at_ms = None;
+    let matched = match_questions(&a, &b);
+    assert_eq!(matched.pairs.len(), 2);
+    assert!(matched.appeared.is_empty(), "{:?}", matched.appeared);
 }
 
 #[test]

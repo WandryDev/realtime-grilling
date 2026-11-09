@@ -8,8 +8,8 @@ use super::*;
 use crate::eval::{
     metrics,
     testing::{
-        ME, MINUTE, OTHERS, block_on, corpus, fake::Fake, phrase, question, report_with, segment,
-        topic,
+        ME, MINUTE, OTHERS, block_on, corpus, fake::Fake, never_shown, phrase, question,
+        report_with, segment, topic,
     },
 };
 
@@ -259,16 +259,16 @@ fn a_long_call_goes_in_parts_and_merges() {
         "А кто отвечает ночью?",
     ));
     let corpus = corpus(live);
+    let whole = 0..i64::MAX;
     assert_eq!(
-        parts(&corpus.live),
+        parts(&corpus.live, &whole),
         [
             0..30 * MINUTE,
             25 * MINUTE..55 * MINUTE,
             50 * MINUTE..80 * MINUTE
         ]
     );
-    let whole = 0..i64::MAX;
-    assert_eq!(parts(&corpus.live[..5]), vec![whole]);
+    assert_eq!(parts(&corpus.live[..5], &whole), vec![whole.clone()]);
 
     let report = report_with(
         vec![topic("t1", "Очередь", 0)],
@@ -315,4 +315,168 @@ fn a_long_call_goes_in_parts_and_merges() {
     assert!(second.contains("# Вопросы, показанные раньше этой части"));
     assert!(second.contains("[S:c25]") && !second.contains("[S:c24]"));
     assert!(fake.read("stdin-3").contains("[Q:q2] 57:00"));
+}
+
+/// 80 minutes, a client phrase of 4 000 characters every minute: over the
+/// limit even from minute 35.
+fn long_call() -> Corpus {
+    let long = "очередь ".repeat(500);
+    corpus(
+        (0..80)
+            .map(|minute| segment(&format!("c{minute}"), OTHERS, minute * MINUTE, &long))
+            .collect(),
+    )
+}
+
+/// `--from 40 --to 75` on a long call: the parts cover the span and 5
+/// minutes before it, none lies before minute 35, nothing after the span.
+#[test]
+fn the_parts_cover_the_runs_span() {
+    let corpus = long_call();
+    let mut report = report_with(Vec::new(), Vec::new(), Vec::new());
+    report.flags.from_min = Some(40.0);
+    report.flags.to_min = Some(75.0);
+    let span = span(&report);
+    assert_eq!(span, 40 * MINUTE..75 * MINUTE);
+
+    let ranges = parts(&corpus.live, &span);
+    assert_eq!(
+        ranges,
+        [35 * MINUTE..65 * MINUTE, 60 * MINUTE..75 * MINUTE],
+        "{ranges:?}"
+    );
+    assert!(ranges.iter().all(|range| range.end > 35 * MINUTE));
+
+    let fake = Fake::new(&[
+        json!({ "labels": [], "managerQuestions": [] }),
+        json!({ "labels": [], "managerQuestions": [] }),
+    ]);
+    let judge = fake.judge(&corpus, &report);
+    assert_eq!((fake.runs(), judge.parts), (2, 2));
+    let first = fake.read("stdin-1");
+    assert!(first.contains("[S:c35]") && !first.contains("[S:c34]"));
+    assert!(first.contains("Расшифровка начинается не раньше чем за 5 мин до отрезка"));
+    assert!(!fake.read("stdin-2").contains("[S:c75]"));
+}
+
+/// A failed later part keeps the run unlabeled with the cost and the
+/// error of the parts before it; the command doesn't fail.
+#[test]
+fn a_failed_later_part_keeps_the_cost_and_the_error() {
+    let corpus = long_call();
+    let report = report_with(
+        vec![topic("t1", "Очередь", 0)],
+        vec![question("q1", 10 * MINUTE, "t1", "Кто дежурит ночью?")],
+        Vec::new(),
+    );
+    // No reply for the second part: the fake CLI fails.
+    let fake = Fake::new(&[json!({
+        "labels": [{ "questionId": "q1", "label": "would_ask", "reason": "Важно", "segmentId": null }],
+        "managerQuestions": [],
+    })]);
+    let judge = fake.judge(&corpus, &report);
+
+    assert_eq!(fake.runs(), 2);
+    assert!(!judge.labeled);
+    assert_eq!(judge.cost_usd, Some(0.12));
+    assert!(
+        judge
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("(часть 2)")),
+        "{judge:?}"
+    );
+    // The first part's label is kept for a look, and counts nowhere.
+    assert_eq!(judge.labels.len(), 1);
+    assert_eq!(judge.label_of("q1"), None);
+    assert_eq!(metrics::compute(&report, Some(&judge)).labels, None);
+}
+
+/// «Уже отвечено» needs the segment of the answer, said before the
+/// question was shown; without one, or with a later one, the label is
+/// dropped and the question stays unlabeled.
+#[test]
+fn already_answered_needs_an_earlier_answer() {
+    let (corpus, report) = call();
+    let fake = Fake::new(&[json!({
+        "labels": [
+            { "questionId": "q1", "label": "already_answered", "reason": "Сказано", "segmentId": null },
+            { "questionId": "q2", "label": "already_answered", "reason": "Сказано", "segmentId": "s5" },
+        ],
+        "managerQuestions": [],
+    })]);
+    let judge = fake.judge(&corpus, &report);
+    assert!(judge.labeled);
+    assert!(judge.labels.is_empty(), "{:?}", judge.labels);
+    assert_eq!(
+        judge
+            .dropped
+            .iter()
+            .filter(|why| why.contains("нет сегмента ответа до его показа"))
+            .count(),
+        2,
+        "{:?}",
+        judge.dropped
+    );
+}
+
+/// A question queued behind a full list and never shown is not given to
+/// the judge, not labeled, and covers no manager question; one shown later
+/// than it was added is judged by its shown time.
+#[test]
+fn a_question_never_shown_covers_nothing() {
+    let (corpus, mut report) = call();
+    report.questions = vec![
+        never_shown(
+            "q-wait",
+            4 * MINUTE,
+            "t1",
+            "Через какие каналы обращаются пациенты?",
+        ),
+        ReportQuestion {
+            shown_at_ms: Some(6 * MINUTE + 30_000),
+            ..question("q-late", 3 * MINUTE, "t1", "А в Telegram пишут?")
+        },
+    ];
+    let fake = Fake::new(&[json!({
+        "labels": [
+            { "questionId": "q-wait", "label": "would_ask", "reason": "Важно", "segmentId": null },
+        ],
+        "managerQuestions": [
+            { "segmentId": "s4", "coveredBy": "q-wait" },
+        ],
+    })]);
+    let judge = fake.judge(&corpus, &report);
+
+    let stdin = fake.read("stdin-1");
+    assert!(!stdin.contains("q-wait"), "{stdin}");
+    assert!(stdin.contains("[Q:q-late] 06:30"), "{stdin}");
+    assert!(judge.labels.is_empty(), "{:?}", judge.labels);
+    assert_eq!(judge.manager_questions[0].covered_by, None);
+    for why in [
+        "Метка вопроса q-wait: он не показывался",
+        "вопрос q-wait не показывался",
+    ] {
+        assert!(
+            judge.dropped.iter().any(|d| d.contains(why)),
+            "{:?}",
+            judge.dropped
+        );
+    }
+    let coverage = metrics::compute(&report, Some(&judge)).coverage.unwrap();
+    assert_eq!((coverage.covered, coverage.total), (0, 1));
+
+    // Shown at 6:30, after the manager's 6:00: no cover either.
+    let late = Fake::new(&[json!({
+        "labels": [],
+        "managerQuestions": [{ "segmentId": "s4", "coveredBy": "q-late" }],
+    })]);
+    let judge = late.judge(&corpus, &report);
+    assert_eq!(judge.manager_questions[0].covered_by, None);
+    assert!(
+        judge
+            .dropped
+            .iter()
+            .any(|d| d.contains("q-late появился позже"))
+    );
 }

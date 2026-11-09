@@ -2,8 +2,9 @@
 //! `report.json` and, once the judge ran, `judge.json`; and `report.md`,
 //! which shows them. `replay` writes `report.md`, `judge` rewrites it.
 //!
-//! - Every question the checks let through counts as shown: the report
-//!   keeps where it ended, not whether a waiting one ever reached the list.
+//! - Only the questions that were shown count, from when they were first
+//!   shown: one that waited behind a full list to the end of the run is
+//!   listed apart in `report.md` and counts nowhere else.
 //! - The longest pause is the longest stretch between new questions (from
 //!   the run's start to the first, between two, from the last to the run's
 //!   last phrase) in which the client said at least
@@ -17,7 +18,7 @@ use serde_json::Value;
 use super::{
     corpus::Channels,
     judge::{Judge, Label, Pass},
-    report::Report,
+    report::{Report, ReportQuestion},
 };
 use crate::storage::transcript::TranscriptChannel;
 
@@ -25,11 +26,17 @@ use crate::storage::transcript::TranscriptChannel;
 pub const PAUSE_CLIENT_PHRASES: usize = 5;
 /// Examples of a rejection reason or a label in `report.md`.
 const EXAMPLES: usize = 3;
+/// What a rules variant (`--rules`) leaves as it is, in `report.md`.
+const NOT_IN_RULES: &str = "Не зависит от --rules: описание схемы патча (patch.schema.json, \
+                            в том числе типов пробела) — одно для всех вариантов правил; \
+                            пункты «Неясно до звонка» убирает только --no-gaps";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Metrics {
-    /// Questions the checks let through.
+    /// Questions that were shown.
     pub questions: usize,
+    /// Questions the checks let through that were never shown.
+    pub never_shown: usize,
     /// The run's span: from its start to its last phrase, ms.
     pub span_ms: i64,
     pub per_ten_minutes: Option<f64>,
@@ -159,7 +166,8 @@ pub fn start_ms(report: &Report) -> i64 {
 /// The metrics of `report`, with the judge's labels when it has them.
 pub fn compute(report: &Report, judge: Option<&Judge>) -> Metrics {
     let start = start_ms(report);
-    let last_question = report.questions.iter().map(|q| q.at_ms).max();
+    let shown: Vec<(&ReportQuestion, i64)> = report.shown().collect();
+    let last_question = shown.iter().map(|(_, at)| *at).max();
     let end = report
         .run
         .last_fed_ms
@@ -169,13 +177,12 @@ pub fn compute(report: &Report, judge: Option<&Judge>) -> Metrics {
         .unwrap_or(start);
     let span_ms = (end - start).max(0);
     #[allow(clippy::cast_precision_loss)]
-    let per_ten_minutes =
-        (span_ms > 0).then(|| report.questions.len() as f64 * 600_000.0 / span_ms as f64);
+    let per_ten_minutes = (span_ms > 0).then(|| shown.len() as f64 * 600_000.0 / span_ms as f64);
 
     let judged = judge.filter(|judge| judge.labeled);
     let labels = judged.map(|judge| {
         let mut counts = LabelCounts::default();
-        for question in &report.questions {
+        for (question, _) in &shown {
             if let Some(label) = judge.label_of(&question.id) {
                 counts.labeled += 1;
                 *counts.counts.entry(label.label).or_default() += 1;
@@ -198,33 +205,34 @@ pub fn compute(report: &Report, judge: Option<&Judge>) -> Metrics {
         .map(|topic| FirstQuestion {
             topic: topic.title.clone(),
             topic_at_ms: topic.at_ms,
-            after_ms: report
-                .questions
+            after_ms: shown
                 .iter()
-                .filter(|question| question.topic_id.as_deref() == Some(topic.id.as_str()))
-                .map(|question| (question.at_ms - topic.at_ms).max(0))
+                .filter(|(question, _)| question.topic_id.as_deref() == Some(topic.id.as_str()))
+                .map(|(_, at)| (at - topic.at_ms).max(0))
                 .min(),
         })
         .collect();
     let afters: Vec<i64> = first_questions.iter().filter_map(|f| f.after_ms).collect();
+    let marks: Vec<i64> = shown.iter().map(|(_, at)| *at).collect();
 
     Metrics {
-        questions: report.questions.len(),
+        questions: shown.len(),
+        never_shown: report.never_shown().count(),
         span_ms,
         per_ten_minutes,
         labels,
         coverage,
         first_question_median_ms: percentile(&afters, 0.5),
         first_questions,
-        longest_pause: longest_pause(report, start, end),
+        longest_pause: longest_pause(report, marks, start, end),
         topics: report.topics.len(),
         rejected: rejected(report),
         calls: calls(report),
     }
 }
 
-fn longest_pause(report: &Report, start: i64, end: i64) -> Option<Pause> {
-    let mut marks: Vec<i64> = report.questions.iter().map(|q| q.at_ms).collect();
+/// `marks`: when the shown questions were first shown.
+fn longest_pause(report: &Report, mut marks: Vec<i64>, start: i64, end: i64) -> Option<Pause> {
     marks.sort_unstable();
     let bounds: Vec<i64> = std::iter::once(start)
         .chain(marks)
@@ -384,6 +392,9 @@ pub fn header(report: &Report) -> Vec<String> {
     if report.flags.baseline_state {
         flags.push("--baseline-state".to_owned());
     }
+    if report.flags.no_gaps {
+        flags.push("--no-gaps".to_owned());
+    }
     lines.push(format!(
         "Флаги: {}",
         if flags.is_empty() {
@@ -435,6 +446,7 @@ pub fn markdown(report: &Report, judge: Option<&Judge>) -> String {
     for line in header(report) {
         let _ = writeln!(text, "- {line}");
     }
+    let _ = writeln!(text, "- {NOT_IN_RULES}");
     let _ = writeln!(
         text,
         "- Фраз подано: {} из {}, время прогона {}",
@@ -466,14 +478,13 @@ pub fn markdown(report: &Report, judge: Option<&Judge>) -> String {
         }
         for label in Label::ALL {
             let examples: Vec<String> = report
-                .questions
-                .iter()
-                .filter_map(|question| {
+                .shown()
+                .filter_map(|(question, shown_at)| {
                     let given = judge.label_of(&question.id)?;
                     (given.label == label).then(|| {
                         format!(
                             "- {} «{}» — {}",
-                            clock(question.at_ms),
+                            clock(shown_at),
                             cell(&question.text),
                             cell(&given.reason)
                         )
@@ -515,23 +526,43 @@ pub fn markdown(report: &Report, judge: Option<&Judge>) -> String {
     }
 
     text.push_str("\n## Вопросы\n\n");
-    if report.questions.is_empty() {
-        text.push_str("Вопросов нет.\n");
+    if metrics.questions == 0 {
+        text.push_str("Показанных вопросов нет.\n");
     } else {
         text.push_str(
-            "| Время | Тема | Поле | Тип | Метка | Вопрос |\n|---|---|---|---|---|---|\n",
+            "Время — когда вопрос впервые показан.\n\n\
+             | Время | Тема | Поле | Тип | Метка | Вопрос |\n|---|---|---|---|---|---|\n",
         );
-        for question in &report.questions {
+        for (question, shown_at) in report.shown() {
             let label = judge
                 .and_then(|judge| judge.label_of(&question.id))
                 .map_or("—", |label| label.label.title());
             let _ = writeln!(
                 text,
                 "| {} | {} | {} | {} | {label} | {} |",
-                clock(question.at_ms),
+                clock(shown_at),
                 cell(question.topic.as_deref().unwrap_or("—")),
                 question.card_field.map_or("—", |lens| lens.label()),
                 question.gap_type.as_str(),
+                cell(&question.text)
+            );
+        }
+    }
+    if metrics.never_shown > 0 {
+        let _ = write!(
+            text,
+            "\n## Не показаны: {}\n\nПрошли проверку, но до конца прогона ждали за полным \
+             списком. Судья их не размечает, в метриках их нет.\n\n\
+             | Добавлен | Тема | Приоритет | Вопрос |\n|---|---|---|---|\n",
+            metrics.never_shown
+        );
+        for question in report.never_shown() {
+            let _ = writeln!(
+                text,
+                "| {} | {} | {} | {} |",
+                clock(question.at_ms),
+                cell(question.topic.as_deref().unwrap_or("—")),
+                question.priority,
                 cell(&question.text)
             );
         }
@@ -547,10 +578,10 @@ pub fn markdown(report: &Report, judge: Option<&Judge>) -> String {
                 let covered = question
                     .covered_by
                     .as_deref()
-                    .and_then(|id| report.questions.iter().find(|q| q.id == id))
+                    .and_then(|id| report.shown().find(|(q, _)| q.id == id))
                     .map_or_else(
                         || "—".to_owned(),
-                        |q| format!("{} «{}»", clock(q.at_ms), cell(&q.text)),
+                        |(q, shown_at)| format!("{} «{}»", clock(shown_at), cell(&q.text)),
                     );
                 let _ = writeln!(
                     text,
@@ -616,6 +647,14 @@ pub fn rows(metrics: &Metrics) -> Vec<(&'static str, Option<MetricValue>)> {
                 metrics.questions as f64,
                 Kind::Count,
                 metrics.questions.to_string(),
+            ),
+        ),
+        (
+            "Не показано (ждали за полным списком)",
+            value(
+                metrics.never_shown as f64,
+                Kind::Count,
+                metrics.never_shown.to_string(),
             ),
         ),
         (

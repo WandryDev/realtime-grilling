@@ -321,7 +321,7 @@ async fn the_report_holds_the_questions_and_calls() {
     let report = replay(&corpus, agent, &options(), FAST).await;
     let json = serde_json::to_value(&report).unwrap();
 
-    assert_eq!(json["version"], 1);
+    assert_eq!(json["version"], 2);
     assert_eq!(json["corpus"], "telemedia");
     assert_eq!(json["label"], "test");
     assert_eq!(json["complete"], true);
@@ -468,4 +468,241 @@ async fn the_pause_line_follows_the_replay_clock_and_the_baseline_drops_it() {
     assert!(!second.contains("мин без новых вопросов"), "{second}");
     assert!(!second.contains("Пустые линзы"), "{second}");
     assert!(report.flags.baseline_state);
+}
+
+/* When a question was shown */
+
+const URGENT: &str = "Что происходит со звонком, если все операторы заняты?";
+const MINOR: &str = "Сколько операторов обычно работает в одной смене?";
+
+/// A topic and two questions on the client's phrase `segment_id`: the
+/// urgent one (priority 3) and a minor one (priority 1).
+fn two_questions(segment_id: &str) -> Value {
+    let evidence = json!([{ "source": "segment", "id": segment_id, "quote": "если все заняты" }]);
+    let ask = |title: &str, field: &str, priority: u8| {
+        json!({
+            "op": "question", "title": title, "description": "Для оценки",
+            "cardField": field, "gapType": "empty", "priority": priority,
+            "evidence": evidence
+        })
+    };
+    json!({ "ops": [
+        { "op": "topic", "action": "create", "title": "Очередь операторов" },
+        ask(URGENT, "edgeCases", 3),
+        ask(MINOR, "users", 1),
+    ] })
+}
+
+/// The first call asks [`two_questions`]; the second marks the urgent one
+/// answered by `seg-3` (its id is read from the message), which frees the
+/// list's only place.
+struct AnswersTheUrgent {
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl Agent for AnswersTheUrgent {
+    fn run(&self, request: AgentRequest, _cancel: oneshot::Receiver<()>) -> AgentFuture<'_> {
+        let mut calls = self.calls.lock().unwrap();
+        let patch = if calls.is_empty() {
+            two_questions("seg-2")
+        } else {
+            let line = request
+                .user_message
+                .lines()
+                .find(|line| line.contains(URGENT))
+                .unwrap_or_default()
+                .to_owned();
+            let id = line
+                .split("[Q:")
+                .nth(1)
+                .and_then(|rest| rest.split(']').next())
+                .unwrap_or_default()
+                .to_owned();
+            json!({ "ops": [{
+                "op": "answered", "questionId": id,
+                "evidence": [{ "source": "segment", "id": "seg-3", "quote": "звонок уходит в общую очередь" }]
+            }] })
+        };
+        calls.push(request.user_message);
+        Box::pin(async move {
+            Ok(AgentReply {
+                patch,
+                usage: Usage::default(),
+            })
+        })
+    }
+}
+
+/// «Вопрос в очереди»: one place in the list (`questionCount` 1), two
+/// questions; the minor one waits behind the urgent one and, never shown,
+/// has no shown time; the report lists it apart.
+#[tokio::test(start_paused = true)]
+async fn a_question_queued_behind_a_full_list_is_never_shown() {
+    let mut corpus = corpus(vec![
+        segment(1, ME, 4_000, "Что будет, если все операторы заняты?"),
+        segment(
+            2,
+            OTHERS,
+            10_000,
+            "Если все заняты, тогда уже как получится",
+        ),
+    ]);
+    corpus
+        .settings
+        .insert(storage::settings::QUESTION_COUNT.to_owned(), json!(1));
+    let agent = FakeAgent::new([Step::patch(two_questions("seg-2"))]);
+    let report = replay(&corpus, agent, &options(), FAST).await;
+
+    let by_text = |text: &str| {
+        report
+            .questions
+            .iter()
+            .find(|question| question.text == text)
+            .unwrap()
+    };
+    let (urgent, minor) = (by_text(URGENT), by_text(MINOR));
+    assert!((15_000..15_300).contains(&urgent.at_ms), "{urgent:?}");
+    assert_eq!(urgent.shown_at_ms, Some(urgent.at_ms));
+    assert_eq!(minor.shown_at_ms, None, "{minor:?}");
+    assert_eq!(report.shown().count(), 1);
+
+    let text = crate::eval::metrics::markdown(&report, None);
+    assert!(text.contains("| Показано вопросов | 1 |"), "{text}");
+    assert!(text.contains("## Не показаны: 1"), "{text}");
+    assert!(text.contains(MINOR), "{text}");
+}
+
+/// The minor question is shown once the urgent one is answered: its shown
+/// time is that later moment, not when it was added.
+#[tokio::test(start_paused = true)]
+async fn a_question_shown_later_gets_the_later_time() {
+    let mut corpus = corpus(vec![
+        segment(
+            2,
+            OTHERS,
+            10_000,
+            "Если все заняты, тогда уже как получится",
+        ),
+        segment(
+            3,
+            OTHERS,
+            60_000,
+            "Если все заняты, звонок уходит в общую очередь",
+        ),
+    ]);
+    corpus
+        .settings
+        .insert(storage::settings::QUESTION_COUNT.to_owned(), json!(1));
+    let agent = Arc::new(AnswersTheUrgent {
+        calls: std::sync::Mutex::new(Vec::new()),
+    });
+    let report = replay(&corpus, agent.clone(), &options(), FAST).await;
+
+    assert_eq!(agent.calls.lock().unwrap().len(), 2);
+    let minor = report.questions.iter().find(|q| q.text == MINOR).unwrap();
+    assert!(minor.at_ms < 11_000, "{minor:?}");
+    let shown = minor.shown_at_ms.unwrap();
+    assert!((60_000..61_000).contains(&shown), "{minor:?}");
+    let urgent = report.questions.iter().find(|q| q.text == URGENT).unwrap();
+    assert_eq!(urgent.status, storage::call_state::QuestionStatus::Answered);
+    assert_eq!(urgent.shown_at_ms, Some(urgent.at_ms));
+}
+
+/// The last call fails at 31 s; the corpus goes on to 2 minutes, so the
+/// run waits for the retry 30 s later, as the live app would.
+#[tokio::test(start_paused = true)]
+async fn a_failed_last_call_is_retried_before_the_end() {
+    let steps = || {
+        [
+            Step::empty().after(Duration::from_secs(1)),
+            Step::fail(AgentError::Process("упал".to_owned())).after(Duration::from_secs(1)),
+        ]
+    };
+    let mut corpus = corpus(vec![
+        segment(1, OTHERS, 2_000, "Звонки идут на личные телефоны"),
+        segment(2, OTHERS, 30_000, "Ночью никто не отвечает"),
+    ]);
+    corpus.recording.duration_ms = 120_000;
+    let agent = FakeAgent::new(steps());
+    let report = replay(&corpus, agent.clone(), &options(), FAST).await;
+
+    assert!(report.complete, "{report:#?}");
+    assert_eq!(agent.calls(), 3);
+    let retry = report.calls[2].at_ms;
+    assert!((61_000..61_500).contains(&retry), "{retry}");
+    assert!(message(&agent, 2).contains("Ночью никто не отвечает"));
+
+    // `--to 1` ends the run before the retry: no third call.
+    let agent = FakeAgent::new(steps());
+    let options = Options {
+        to_min: Some(1.0),
+        ..options()
+    };
+    replay(&corpus, agent.clone(), &options, FAST).await;
+    assert_eq!(agent.calls(), 2);
+}
+
+/// A failure after the run began (a phrase the database refuses) still
+/// gives the report, incomplete, with what ran before it.
+#[tokio::test(start_paused = true)]
+async fn a_failure_after_the_start_keeps_the_report() {
+    let agent = FakeAgent::new([Step::empty().after(Duration::from_secs(1))]);
+    let corpus = corpus(vec![
+        segment(1, OTHERS, 2_000, "Звонки идут на личные телефоны"),
+        Segment {
+            start_ms: 31_000,
+            ..segment(2, OTHERS, 30_000, "Время этой фразы испорчено")
+        },
+        segment(3, OTHERS, 60_000, "Пациенты ждут по десять минут"),
+    ]);
+    let report = replay(&corpus, agent.clone(), &options(), FAST).await;
+
+    assert!(!report.complete);
+    let stopped = report.stopped.as_deref().unwrap();
+    assert!(
+        stopped.starts_with("Не удалось записать фразу seg-2"),
+        "{stopped}"
+    );
+    assert_eq!(report.run.segments_fed, 1);
+    assert_eq!(report.calls.len(), 1);
+    let text = crate::eval::metrics::markdown(&report, None);
+    assert!(text.contains("Прогон: **неполный** — Не удалось записать фразу seg-2"));
+}
+
+/// `--no-gaps`: the brief's gaps are gone from the prefix (and only from
+/// the run's database); the report says so.
+#[tokio::test(start_paused = true)]
+async fn no_gaps_drops_the_briefs_gaps() {
+    let mut corpus = corpus(vec![segment(
+        1,
+        OTHERS,
+        2_000,
+        "Звонки идут на личные телефоны",
+    )]);
+    corpus.project.as_mut().unwrap().brief.as_mut().unwrap()["gaps"] =
+        json!([{ "lens": "users", "text": "Не сказано, кто отвечает ночью" }]);
+
+    let agent = FakeAgent::new([]);
+    let report = replay(&corpus, agent.clone(), &options(), FAST).await;
+    let prompt = String::from_utf8(agent.received(0).prompt).unwrap();
+    assert!(prompt.contains("G1 (пользователи): Не сказано, кто отвечает ночью"));
+    assert!(!report.flags.no_gaps);
+
+    let agent = FakeAgent::new([]);
+    let options = Options {
+        no_gaps: true,
+        ..options()
+    };
+    let report = replay(&corpus, agent.clone(), &options, FAST).await;
+    let prompt = String::from_utf8(agent.received(0).prompt).unwrap();
+    assert!(prompt.contains("# Неясно до звонка\n\nНет.\n"), "{prompt}");
+    assert!(!prompt.contains("G1 ("));
+    assert!(report.flags.no_gaps);
+    assert!(corpus.project.unwrap().brief.unwrap()["gaps"].is_array());
+    let text = crate::eval::metrics::markdown(&report, None);
+    assert!(text.contains("Флаги: --no-gaps"), "{text}");
+    assert!(
+        text.contains("Не зависит от --rules: описание схемы патча"),
+        "{text}"
+    );
 }

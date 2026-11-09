@@ -388,6 +388,7 @@ fn documents_are_read_as_the_apps_sources() {
     assert_eq!(project.sources[0].text, "# ТЗ\n\nПриём звонков ночью.");
 
     options.docs = vec![setup.file("tz.odt", "x")];
+    options.force = true;
     let error = setup
         .import(&options, &decoder, &script(), None)
         .unwrap_err();
@@ -407,6 +408,84 @@ fn a_silent_recording_is_not_imported() {
         .unwrap_err();
     assert!(error.contains("ни одной фразы"), "{error}");
     assert!(!setup.eval_dir().exists());
+}
+
+/// A second import under a taken name is refused before any recognition,
+/// and the first corpus and its audio stay; `--force` replaces them. A
+/// finished import leaves nothing in `.grill-eval/tmp/`.
+#[test]
+fn an_existing_corpus_needs_force() {
+    let setup = Setup::new();
+    let mut options = setup.options("zoom.m4a");
+    options.channels = Some(Layout::LeftMe);
+    let decoder = FakeDecoder::default().with(&options.audio, zoom_stereo());
+    let first = setup.import(&options, &decoder, &script(), None).unwrap();
+    assert!(!setup.eval_dir().join("tmp").exists());
+    let saved = fs::read(&first.path).unwrap();
+
+    let script = script();
+    let error = setup.import(&options, &decoder, &script, None).unwrap_err();
+    assert!(
+        error.contains("уже есть") && error.contains("--force"),
+        "{error}"
+    );
+    assert!(script.prompts.lock().unwrap().is_empty());
+    assert_eq!(fs::read(&first.path).unwrap(), saved);
+    assert!(setup.eval_dir().join("audio/zoom/zoom.m4a").is_file());
+
+    options.force = true;
+    let again = setup.import(&options, &decoder, &script, None).unwrap();
+    assert_eq!(again.path, first.path);
+    assert!(setup.eval_dir().join("audio/zoom/zoom.m4a").is_file());
+    assert!(!setup.eval_dir().join("tmp").exists());
+}
+
+/// The corpus can't be saved: the audio copied for it goes too, nothing of
+/// the import is left.
+#[test]
+fn a_failed_save_leaves_no_audio() {
+    let setup = Setup::new();
+    let mut options = setup.options("zoom.m4a");
+    options.channels = Some(Layout::LeftMe);
+    options.force = true;
+    // A folder where the corpus file goes.
+    fs::create_dir_all(setup.eval_dir().join("corpus/zoom.json")).unwrap();
+    let decoder = FakeDecoder::default().with(&options.audio, zoom_stereo());
+
+    let error = setup
+        .import(&options, &decoder, &script(), None)
+        .unwrap_err();
+    assert!(error.contains("Не удалось записать"), "{error}");
+    assert!(!setup.eval_dir().join("audio").exists());
+    assert!(!setup.eval_dir().join("tmp").exists());
+}
+
+/// A mono transcript over the judge's limit can't be labeled in one call:
+/// a clear error before the call.
+#[test]
+fn a_mono_transcript_over_the_limit_fails_before_the_call() {
+    let cli = FakeCli::replying(&json!({ "labels": [] }));
+    let long = "очередь ".repeat(500);
+    let phrases: Vec<Heard> = (0..40)
+        .map(|n| Heard {
+            text: long.clone(),
+            ..heard(&format!("p{n}"), n * 60_000, n * 60_000 + 50_000)
+        })
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let error = block_on(label::label(
+        &cli.agent(),
+        &phrases,
+        "Телемедиа",
+        None,
+        dir.path(),
+    ))
+    .unwrap_err();
+    assert!(
+        error.contains("слишком длинная") && error.contains("предел 150 тыс."),
+        "{error}"
+    );
+    assert!(cli.read("args").is_empty());
 }
 
 /// A mono recording comes out of both passes as one mixed track, before

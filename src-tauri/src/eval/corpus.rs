@@ -25,6 +25,9 @@ pub const FORMAT: u32 = 1;
 
 /// The folder of corpora, audio and reports.
 pub const EVAL_DIR: &str = ".grill-eval";
+/// Work files of a running command in [`EVAL_DIR`]: the prompts, an
+/// import's audio until its corpus is saved.
+pub const TMP_DIR: &str = "tmp";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,6 +200,30 @@ pub fn check_name(name: &str) -> Result<(), String> {
 /// Where the corpus `name` lives.
 pub fn path_of(dir: &Path, name: &str) -> PathBuf {
     dir.join("corpus").join(format!("{name}.json"))
+}
+
+/// Where an imported corpus's audio lives.
+pub fn audio_dir(dir: &Path, name: &str) -> PathBuf {
+    dir.join("audio").join(name)
+}
+
+/// The corpus `name` in `dir` may be written: it doesn't exist yet (nor its
+/// audio), or `force` replaces it. Otherwise a rebuilt brief, or another
+/// recording under the same name, would be lost.
+pub fn check_free(dir: &Path, name: &str, force: bool) -> Result<(), String> {
+    if force {
+        return Ok(());
+    }
+    let taken = [path_of(dir, name), audio_dir(dir, name)]
+        .into_iter()
+        .find(|path| path.exists());
+    match taken {
+        Some(path) => Err(format!(
+            "Набор {name} уже есть ({}): дайте другое имя (--name) или --force, чтобы заменить",
+            path.display()
+        )),
+        None => Ok(()),
+    }
 }
 
 /// A corpus argument: a path to a file, or the name of a corpus in `dir`.

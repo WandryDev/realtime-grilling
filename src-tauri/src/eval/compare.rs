@@ -41,8 +41,13 @@ fn topic_of<'a>(report: &'a Report, question: &ReportQuestion) -> Option<&'a Rep
     report.topics.iter().find(|topic| topic.id == id)
 }
 
-/// Pairs the questions of `a` and `b`.
+/// Pairs the shown questions of `a` and `b` (the never shown count nowhere,
+/// as in the metrics).
 pub fn match_questions<'a>(a: &'a Report, b: &'a Report) -> Matched<'a> {
+    let shown = |report: &'a Report| -> Vec<&'a ReportQuestion> {
+        report.shown().map(|(question, _)| question).collect()
+    };
+    let (questions_a, questions_b) = (shown(a), shown(b));
     let similarity = TrigramSimilarity::default();
     let alike = |x: &str, y: &str| similarity.score(x, y) >= similarity.threshold();
     let has_match = |topic: &ReportTopic, other: &Report| {
@@ -59,8 +64,8 @@ pub fn match_questions<'a>(a: &'a Report, b: &'a Report) -> Matched<'a> {
             _ => true,
         };
     let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
-    for (i, qa) in a.questions.iter().enumerate() {
-        for (j, qb) in b.questions.iter().enumerate() {
+    for (i, qa) in questions_a.iter().enumerate() {
+        for (j, qb) in questions_b.iter().enumerate() {
             let score = similarity.score(&qa.text, &qb.text);
             if score >= similarity.threshold() && same_topic(qa, qb) {
                 candidates.push((score, i, j));
@@ -69,35 +74,71 @@ pub fn match_questions<'a>(a: &'a Report, b: &'a Report) -> Matched<'a> {
     }
     candidates.sort_by(|x, y| y.0.total_cmp(&x.0).then((x.1, x.2).cmp(&(y.1, y.2))));
     let (mut used_a, mut used_b) = (
-        vec![false; a.questions.len()],
-        vec![false; b.questions.len()],
+        vec![false; questions_a.len()],
+        vec![false; questions_b.len()],
     );
     let mut pairs = Vec::new();
     for (_, i, j) in candidates {
         if !used_a[i] && !used_b[j] {
             used_a[i] = true;
             used_b[j] = true;
-            pairs.push((&a.questions[i], &b.questions[j]));
+            pairs.push((questions_a[i], questions_b[j]));
         }
     }
-    pairs.sort_by_key(|(qa, _)| qa.at_ms);
+    pairs.sort_by_key(|(qa, _)| shown_at(qa));
+    let unused = |questions: Vec<&'a ReportQuestion>, used: Vec<bool>| {
+        questions
+            .into_iter()
+            .zip(used)
+            .filter(|(_, used)| !used)
+            .map(|(question, _)| question)
+            .collect()
+    };
     Matched {
         pairs,
-        disappeared: a
-            .questions
-            .iter()
-            .zip(used_a)
-            .filter(|(_, used)| !used)
-            .map(|(question, _)| question)
-            .collect(),
-        appeared: b
-            .questions
-            .iter()
-            .zip(used_b)
-            .filter(|(_, used)| !used)
-            .map(|(question, _)| question)
-            .collect(),
+        disappeared: unused(questions_a, used_a),
+        appeared: unused(questions_b, used_b),
     }
+}
+
+/// When a shown question was first shown.
+fn shown_at(question: &ReportQuestion) -> i64 {
+    question.shown_at_ms.unwrap_or(question.at_ms)
+}
+
+/// How the runs were made differently: the span, the flags, the rules.
+/// Informational: one of them is usually what is compared, the others make
+/// the numbers less comparable.
+fn differences(a: &Report, b: &Report) -> Vec<String> {
+    let mut found = Vec::new();
+    let minutes = |value: Option<f64>| value.map_or_else(|| "—".to_owned(), |v| v.to_string());
+    if a.flags.from_min != b.flags.from_min || a.flags.to_min != b.flags.to_min {
+        found.push(format!(
+            "отрезки звонка разные: A {}–{}, B {}–{} мин",
+            minutes(a.flags.from_min),
+            minutes(a.flags.to_min),
+            minutes(b.flags.from_min),
+            minutes(b.flags.to_min)
+        ));
+    }
+    let switch = |on: bool| if on { "да" } else { "нет" };
+    for (name, in_a, in_b) in [
+        ("--realtime", a.flags.realtime, b.flags.realtime),
+        (
+            "--baseline-state",
+            a.flags.baseline_state,
+            b.flags.baseline_state,
+        ),
+        ("--no-gaps", a.flags.no_gaps, b.flags.no_gaps),
+    ] {
+        if in_a != in_b {
+            found.push(format!("{name}: A {}, B {}", switch(in_a), switch(in_b)));
+        }
+    }
+    if a.rules_sha256 != b.rules_sha256 {
+        found.push("правила разные (sha256 в заголовках)".to_owned());
+    }
+    found
 }
 
 /// B minus A as the metric shows it.
@@ -129,7 +170,7 @@ fn question_line(report: &Report, question: &ReportQuestion, judge: Option<&Judg
         .unwrap_or_default();
     format!(
         "- {} «{}» — {}{label}",
-        clock(question.at_ms),
+        clock(shown_at(question)),
         topic,
         question
             .text
@@ -161,6 +202,17 @@ pub fn markdown(a: &Run<'_>, b: &Run<'_>) -> String {
         text.push_str(
             "**Внимание:** у одного набора каналы настоящие, у другого приблизительные.\n\n",
         );
+    }
+    let differences = differences(a.report, b.report);
+    if !differences.is_empty() {
+        text.push_str(
+            "**Для сведения:** прогоны отличаются; всё, кроме того, что сравнивается, \
+             делает цифры хуже сравнимыми.\n\n",
+        );
+        for difference in differences {
+            let _ = writeln!(text, "- {difference}");
+        }
+        text.push('\n');
     }
 
     let (ma, mb) = (

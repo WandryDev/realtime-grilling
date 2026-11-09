@@ -24,8 +24,9 @@ use crate::{
     },
 };
 
-/// The version of the report format.
-pub const FORMAT: u32 = 1;
+/// The version of the report format. In 1 `shownAtMs` was when a question
+/// was visible at the end of the run; since 2 it is when it was first shown.
+pub const FORMAT: u32 = 2;
 
 /// The raw results in a report's folder.
 pub const REPORT_FILE: &str = "report.json";
@@ -38,6 +39,10 @@ pub struct Report {
     pub version: u32,
     /// The corpus's name.
     pub corpus: String,
+    /// The corpus's file the run read; `judge` reads it again. Older
+    /// reports have none: then the corpus is looked up by name.
+    #[serde(default)]
+    pub corpus_path: Option<String>,
     pub label: String,
     /// `false` when the run stopped early (the agent not signed in, the
     /// limit used up): what came before is here, the rest of the call is
@@ -76,6 +81,9 @@ pub struct Flags {
     /// line (question-quality design.md, decision 7).
     #[serde(default)]
     pub baseline_state: bool,
+    /// `--no-gaps`: the brief without its gaps.
+    #[serde(default)]
+    pub no_gaps: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -110,7 +118,10 @@ pub struct ReportQuestion {
     pub id: String,
     /// When the agent added it.
     pub at_ms: i64,
-    /// When it last became visible; `null` when it isn't at the end.
+    /// When it first became visible (in the list of the windows or the
+    /// final check); `null` when it never was: it waited behind a full list
+    /// to the end. The judge, the coverage and the metrics count only the
+    /// shown ones, from this time.
     pub shown_at_ms: Option<i64>,
     pub topic_id: Option<String>,
     pub topic: Option<String>,
@@ -174,8 +185,31 @@ impl Report {
         let file = file_of(path);
         let text = fs::read_to_string(&file)
             .map_err(|error| format!("Не удалось прочитать отчёт {}: {error}", file.display()))?;
-        serde_json::from_str(&text)
-            .map_err(|error| format!("Отчёт {} не по формату: {error}", file.display()))
+        let mut report: Self = serde_json::from_str(&text)
+            .map_err(|error| format!("Отчёт {} не по формату: {error}", file.display()))?;
+        if report.version < 2 {
+            // Format 1 didn't track the shown time: every question counted
+            // as shown when it was added, as its metrics did.
+            for question in &mut report.questions {
+                question.shown_at_ms = Some(question.at_ms);
+            }
+        }
+        Ok(report)
+    }
+
+    /// The questions that were shown, with their first shown time, in the
+    /// report's order.
+    pub fn shown(&self) -> impl Iterator<Item = (&ReportQuestion, i64)> {
+        self.questions
+            .iter()
+            .filter_map(|question| Some((question, question.shown_at_ms?)))
+    }
+
+    /// The questions that were never shown.
+    pub fn never_shown(&self) -> impl Iterator<Item = &ReportQuestion> {
+        self.questions
+            .iter()
+            .filter(|question| question.shown_at_ms.is_none())
     }
 }
 
@@ -189,11 +223,13 @@ pub fn file_of(path: &Path) -> PathBuf {
 }
 
 /// The topics, questions and calls of `recording_id`, times from
-/// `call_started_at`.
+/// `call_started_at`; `first_shown` is when each question was first shown,
+/// already from `call_started_at`.
 pub fn results(
     connection: &Connection,
     recording_id: &str,
     call_started_at: i64,
+    first_shown: &HashMap<String, i64>,
 ) -> CommandResult<(Vec<ReportTopic>, Vec<ReportQuestion>, Vec<ReportCall>)> {
     let since = |at: i64| at - call_started_at;
     let state = call_state::get(connection, recording_id)?;
@@ -217,7 +253,7 @@ pub fn results(
         .map(|question| ReportQuestion {
             id: question.id.clone(),
             at_ms: since(question.created_at),
-            shown_at_ms: question.shown_at.map(since),
+            shown_at_ms: first_shown.get(&question.id).copied(),
             topic_id: question.topic_id.clone(),
             topic: question
                 .topic_id
@@ -264,6 +300,28 @@ pub fn sha256_hex(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Format 1 had no shown time: every question counts as shown when it
+    /// was added, as its metrics did; format 2 keeps a never shown one.
+    #[test]
+    fn a_report_of_format_1_counts_every_question_as_shown() {
+        use crate::eval::testing::{never_shown, report_with};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(REPORT_FILE);
+        let mut report = report_with(
+            Vec::new(),
+            vec![never_shown("q1", 60_000, "t1", "Кто дежурит ночью?")],
+            Vec::new(),
+        );
+
+        fs::write(&path, serde_json::to_string(&report).unwrap()).unwrap();
+        assert_eq!(Report::load(dir.path()).unwrap().shown().count(), 0);
+
+        report.version = 1;
+        fs::write(&path, serde_json::to_string(&report).unwrap()).unwrap();
+        let loaded = Report::load(dir.path()).unwrap();
+        assert_eq!(loaded.questions[0].shown_at_ms, Some(60_000));
+    }
 
     #[test]
     fn the_hash_is_sha256() {

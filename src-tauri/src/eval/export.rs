@@ -52,23 +52,46 @@ pub fn app_data_dir() -> Option<PathBuf> {
 
 /// Exports `recording_id` of the database at `database` to the corpus
 /// `name` (the recording id when `None`) in `eval_dir`. Returns the file.
-/// Nothing is written when the recording can't be exported.
+/// Nothing is written when the recording can't be exported, nor over an
+/// existing corpus unless `force`. Everything is read in one read
+/// transaction: the app may be writing meanwhile, and the corpus must be
+/// one moment of the recording.
 pub fn run(
     database: &Path,
     recording_id: &str,
     name: Option<&str>,
     eval_dir: &Path,
+    force: bool,
 ) -> Result<PathBuf, String> {
     let name = name.unwrap_or(recording_id);
     corpus::check_name(name)?;
+    corpus::check_free(eval_dir, name, force)?;
     if !database.is_file() {
         return Err(format!("Базы приложения нет: {}", database.display()));
     }
     let connection = storage::open_read_only(database)?;
-    let corpus = build(&connection, recording_id, name, storage::now_ms())?;
+    let corpus = read_snapshot(&connection, |connection| {
+        build(connection, recording_id, name, storage::now_ms())
+    })?;
     let path = corpus::path_of(eval_dir, name);
     corpus.save(&path)?;
     Ok(path)
+}
+
+/// `read` inside one read transaction of `connection` (a deferred one works
+/// on a read-only connection): every query sees the same moment.
+fn read_snapshot<T>(
+    connection: &Connection,
+    read: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    connection
+        .execute_batch("BEGIN DEFERRED")
+        .map_err(|error| format!("Не удалось начать чтение базы: {error}"))?;
+    let result = read(connection);
+    // Nothing was written: the end of the transaction only lets the
+    // snapshot go.
+    let _ = connection.execute_batch("COMMIT");
+    result
 }
 
 fn segment(segment: TranscriptSegment) -> Segment {
@@ -318,7 +341,7 @@ mod tests {
         let (database, id) = exported_recording(dir.path());
         let eval_dir = dir.path().join(".grill-eval");
 
-        let path = run(&database, &id, Some("telemedia"), &eval_dir).unwrap();
+        let path = run(&database, &id, Some("telemedia"), &eval_dir, false).unwrap();
         assert_eq!(path, eval_dir.join("corpus/telemedia.json"));
         let corpus = Corpus::load(&path).unwrap();
 
@@ -378,7 +401,7 @@ mod tests {
         };
         let eval_dir = dir.path().join(".grill-eval");
 
-        let error = run(&path, &id, None, &eval_dir).unwrap_err();
+        let error = run(&path, &id, None, &eval_dir, false).unwrap_err();
         assert!(error.contains("нет живой расшифровки"), "{error}");
         assert!(!eval_dir.exists());
     }
@@ -387,7 +410,7 @@ mod tests {
     fn an_unknown_recording_is_not_exported() {
         let dir = tempfile::tempdir().unwrap();
         let (database, _) = exported_recording(dir.path());
-        let error = run(&database, "nope", None, &dir.path().join("e")).unwrap_err();
+        let error = run(&database, "nope", None, &dir.path().join("e"), false).unwrap_err();
         assert!(error.contains("не найдена"), "{error}");
     }
 
@@ -398,11 +421,65 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (database, id) = exported_recording(dir.path());
         let before = std::fs::read(&database).unwrap();
-        run(&database, &id, None, &dir.path().join("e")).unwrap();
+        run(&database, &id, None, &dir.path().join("e"), false).unwrap();
         assert_eq!(std::fs::read(&database).unwrap(), before);
 
         let db = storage::open_read_only(&database).unwrap();
         assert!(db.execute("DELETE FROM recordings", []).is_err());
+    }
+
+    /// An existing corpus (say, with a rebuilt brief) is not overwritten
+    /// without `--force`; with it, it is.
+    #[test]
+    fn an_existing_corpus_needs_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let (database, id) = exported_recording(dir.path());
+        let eval_dir = dir.path().join(".grill-eval");
+        let path = run(&database, &id, Some("telemedia"), &eval_dir, false).unwrap();
+        let mut rebuilt = Corpus::load(&path).unwrap();
+        rebuilt.project.as_mut().unwrap().brief_previous = Some(json!({ "product": "old" }));
+        rebuilt.save(&path).unwrap();
+
+        let error = run(&database, &id, Some("telemedia"), &eval_dir, false).unwrap_err();
+        assert!(
+            error.contains("уже есть") && error.contains("--force"),
+            "{error}"
+        );
+        assert_eq!(Corpus::load(&path).unwrap(), rebuilt);
+
+        run(&database, &id, Some("telemedia"), &eval_dir, true).unwrap();
+        let replaced = Corpus::load(&path).unwrap();
+        assert_eq!(replaced.project.unwrap().brief_previous, None);
+    }
+
+    /// The export reads one moment of the database: a write of the app
+    /// between its queries is not seen until the snapshot ends.
+    #[test]
+    fn the_export_reads_one_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (database, id) = exported_recording(dir.path());
+        let app = storage::open(&database, &storage::MIGRATIONS).unwrap();
+        let reader = storage::open_read_only(&database).unwrap();
+        let live = |connection: &Connection| {
+            transcript::of_pass(connection, &id, TranscriptPass::Live)
+                .unwrap()
+                .len()
+        };
+
+        let (before, after) = read_snapshot(&reader, |connection| {
+            let before = live(connection);
+            say(
+                &app,
+                &id,
+                TranscriptChannel::Others,
+                9_000,
+                "Ещё ночью звонят",
+            );
+            Ok((before, live(connection)))
+        })
+        .unwrap();
+        assert_eq!((before, after), (2, 2));
+        assert_eq!(live(&reader), 3);
     }
 
     #[test]

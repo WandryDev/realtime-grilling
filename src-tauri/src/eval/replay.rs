@@ -7,10 +7,17 @@
 //!   people, recording, settings); the app's is never opened.
 //! - The host ([`ReplayHost`]) keeps what the loop reports in the run's log
 //!   instead of telling windows, and gives the loop the call's wall clock:
-//!   the corpus's start plus the time on tokio's clock.
-//! - The driver feeds each live segment at its `end_ms`, the moment the
-//!   live pass stored it: it inserts the segment (under the corpus's id)
-//!   and calls [`FastLoop::phrase`].
+//!   the corpus's start plus the time on tokio's clock. On every change of
+//!   the call's state it notes which questions are visible, so the report
+//!   knows when each was first shown (a question can wait behind a full
+//!   list, or never be shown).
+//! - The driver feeds each live segment at its `end_ms`: it inserts the
+//!   segment (under the corpus's id) and calls [`FastLoop::phrase`]. The
+//!   app stores a segment only once it is recognized, about 1–3 s after its
+//!   end, so the replay is optimistic by that latency.
+//! - After the last phrase the run waits for the running call, and for the
+//!   retry of a failed one while it is due before the corpus's end (or
+//!   `--to`): the live app, still recording, would retry.
 //!
 //! The clock is tokio's paused one, so idle time costs nothing: with no
 //! call running the driver's sleep to the next phrase ends at once, as
@@ -38,6 +45,7 @@ use std::{
 };
 
 use rusqlite::Connection;
+use serde_json::Value;
 use tokio::{
     runtime::Handle,
     sync::{oneshot, watch},
@@ -61,7 +69,9 @@ use crate::{
     error::CommandResult,
     speech::context,
     storage::{
-        self, people,
+        self,
+        call_state::{self, QuestionStatus},
+        people,
         people::PersonCreate,
         projects::{self, ProjectCreate},
         recordings::{self, RecordingFiles, RecordingLinks},
@@ -83,6 +93,11 @@ pub struct Options {
     pub realtime: bool,
     /// `--baseline-state`: the state without the lines of decision 7.
     pub baseline_state: bool,
+    /// `--no-gaps`: the brief without its gaps (decision 6), so the prefix
+    /// says «Неясно до звонка: нет».
+    pub no_gaps: bool,
+    /// Where the corpus was read from, for `judge`.
+    pub corpus_path: Option<String>,
     /// Progress lines on stderr.
     pub progress: bool,
 }
@@ -128,6 +143,20 @@ fn selected(corpus: &Corpus, from_ms: Option<i64>, to_ms: Option<i64>) -> Vec<&S
         .collect();
     picked.sort_by(|a, b| (a.end_ms, a.start_ms, &a.id).cmp(&(b.end_ms, b.start_ms, &b.id)));
     picked
+}
+
+/// `corpus` with a brief without gaps (`--no-gaps`); an old brief reads
+/// without the key as with an empty list.
+fn without_gaps(corpus: &Corpus) -> Corpus {
+    let mut corpus = corpus.clone();
+    if let Some(Value::Object(brief)) = corpus
+        .project
+        .as_mut()
+        .and_then(|project| project.brief.as_mut())
+    {
+        brief.remove("gaps");
+    }
+    corpus
 }
 
 /// The corpus's project, people and recording in `connection`. Returns the
@@ -196,7 +225,13 @@ struct ReplayHost {
     state: watch::Sender<Option<AgentLoopState>>,
     progress: bool,
     calls: AtomicUsize,
+    /// When each question first became visible, ms from the start of the
+    /// call.
+    first_shown: Mutex<HashMap<String, i64>>,
 }
+
+/// After a retry is due, how long the run waits for it to start.
+const RETRY_SLACK: Duration = Duration::from_secs(5);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -219,6 +254,37 @@ impl ReplayHost {
         lock(&self.log).push(LogEntry { at_ms, event });
         at_ms
     }
+
+    /// The tokio instant of `wall_ms` (Unix ms on the call's clock).
+    fn instant_of(&self, wall_ms: i64) -> Instant {
+        let offset = u64::try_from(wall_ms - self.wall_at_t0).unwrap_or(0);
+        self.t0 + Duration::from_millis(offset)
+    }
+
+    /// Notes the questions visible now that weren't before: the list of the
+    /// windows, or the final check's while it runs.
+    fn note_shown(&self, recording_id: &str, at_ms: i64) {
+        let state = match call_state::get(&lock(&self.db), recording_id) {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!("grill-eval: не удалось прочитать состояние звонка: {error}");
+                return;
+            }
+        };
+        let final_check = state
+            .final_check
+            .as_ref()
+            .map(|check| check.question_ids.as_slice())
+            .unwrap_or_default();
+        let mut first_shown = lock(&self.first_shown);
+        for question in &state.questions {
+            let in_final_check =
+                question.status == QuestionStatus::Open && final_check.contains(&question.id);
+            if question.visible || in_final_check {
+                first_shown.entry(question.id.clone()).or_insert(at_ms);
+            }
+        }
+    }
 }
 
 impl LoopHost for ReplayHost {
@@ -226,8 +292,9 @@ impl LoopHost for ReplayHost {
         work(&lock(&self.db))
     }
 
-    fn call_state_changed(&self, _recording_id: &str) {
+    fn call_state_changed(&self, recording_id: &str) {
         let at_ms = self.push(LogEvent::CallStateChanged);
+        self.note_shown(recording_id, at_ms);
         if self.progress {
             eprintln!("{} состояние звонка обновлено", clock(at_ms));
         }
@@ -355,23 +422,50 @@ async fn wait_until(
     }
 }
 
-/// After the last phrase: until the running call, if any, ends.
-async fn drain(states: &mut watch::Receiver<Option<AgentLoopState>>) -> Option<String> {
+/// After the last phrase: until the running call, if any, ends; and while
+/// the last call failed and its retry is due before `end_ms` (from the
+/// start of the call: the corpus's end or `--to`), until that retry ran.
+async fn drain(
+    host: &ReplayHost,
+    end_ms: i64,
+    states: &mut watch::Receiver<Option<AgentLoopState>>,
+) -> Option<String> {
     loop {
         settle().await;
         let state = states.borrow_and_update().clone();
         if let Some(reason) = halted(state.as_ref()) {
             return Some(reason);
         }
-        if state != Some(AgentLoopState::Thinking) || states.changed().await.is_err() {
-            return None;
+        match state {
+            Some(AgentLoopState::Thinking) => {
+                if states.changed().await.is_err() {
+                    return None;
+                }
+            }
+            Some(AgentLoopState::Error {
+                retry_at: Some(retry_at),
+                ..
+            }) if retry_at - host.call_started_at < end_ms => {
+                // The retry starts a call; a little past its time at most.
+                let due = host.instant_of(retry_at) + RETRY_SLACK;
+                tokio::select! {
+                    changed = states.changed() => {
+                        if changed.is_err() {
+                            return None;
+                        }
+                    }
+                    () = tokio::time::sleep_until(due) => return None,
+                }
+            }
+            _ => return None,
         }
     }
 }
 
 /// Replays `corpus` with `agent` and returns the report (`complete: false`
-/// when the agent halted). The prefix files go to `prompt_dir`. Runs on a
-/// current-thread runtime whose clock is paused, unless `options.realtime`.
+/// with `stopped` when the agent halted or the run failed after it began).
+/// The prefix files go to `prompt_dir`. Runs on a current-thread runtime
+/// whose clock is paused, unless `options.realtime`.
 pub async fn run(
     corpus: &Corpus,
     agent: Arc<dyn Agent>,
@@ -381,6 +475,13 @@ pub async fn run(
 ) -> Result<Report, String> {
     let wall_start = std::time::Instant::now();
     let run_started_at = storage::now_ms();
+    let stripped;
+    let corpus = if options.no_gaps {
+        stripped = without_gaps(corpus);
+        &stripped
+    } else {
+        corpus
+    };
     let connection = storage::open_in_memory()?;
     let recording_id = seed(&connection, corpus).map_err(|error| error.to_string())?;
     let glossary = context::load(&connection, &recording_id)
@@ -406,6 +507,7 @@ pub async fn run(
         state,
         progress: options.progress,
         calls: AtomicUsize::new(0),
+        first_shown: Mutex::new(HashMap::new()),
     });
     let loop_host: Arc<dyn LoopHost> = host.clone();
     let agent: Arc<dyn Agent> = Arc::new(Clocked {
@@ -445,11 +547,15 @@ pub async fn run(
             },
         );
         let recording = recording_id.clone();
-        scheduler::database(&loop_host, move |connection| {
+        let stored = scheduler::database(&loop_host, move |connection| {
             transcript::append_live_as(connection, &recording, id, input).map(|_| ())
         })
-        .await
-        .map_err(|error| format!("Не удалось записать фразу {}: {error}", segment.id))?;
+        .await;
+        if let Err(error) = stored {
+            // What ran so far is still reported, as incomplete.
+            stopped = Some(format!("Не удалось записать фразу {}: {error}", segment.id));
+            break;
+        }
         fast_loop.phrase(&recording_id, segment.channel);
         phrases.push(Phrase {
             id: segment.id.clone(),
@@ -459,18 +565,32 @@ pub async fn run(
         });
     }
     if stopped.is_none() {
-        stopped = drain(&mut states).await;
+        let duration = corpus.recording.duration_ms;
+        let end_ms = to_ms.map_or(duration, |to| to.min(duration));
+        stopped = drain(&host, end_ms, &mut states).await;
     }
     fast_loop.live_finished(&recording_id);
     settle().await;
     fast_loop.shutdown();
 
     let started_at = corpus.recording.started_at;
-    let (topics, questions, calls) = report::results(&lock(&host.db), &recording_id, started_at)
-        .map_err(|error| error.to_string())?;
+    let first_shown = std::mem::take(&mut *lock(&host.first_shown));
+    let results = report::results(&lock(&host.db), &recording_id, started_at, &first_shown);
+    let (topics, questions, calls) = match results {
+        Ok(results) => results,
+        Err(error) => {
+            let reason = format!("Не удалось прочитать результаты прогона: {error}");
+            stopped = Some(match stopped {
+                Some(earlier) => format!("{earlier}; {reason}"),
+                None => reason,
+            });
+            Default::default()
+        }
+    };
     Ok(Report {
         version: report::FORMAT,
         corpus: corpus.name.clone(),
+        corpus_path: options.corpus_path.clone(),
         label: options.label.clone(),
         complete: stopped.is_none(),
         stopped,
@@ -482,6 +602,7 @@ pub async fn run(
             realtime: options.realtime,
             rules_file: options.rules.as_ref().map(|rules| rules.file.clone()),
             baseline_state: options.baseline_state,
+            no_gaps: options.no_gaps,
         },
         run: Run {
             started_at: run_started_at,
