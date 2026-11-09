@@ -345,7 +345,6 @@ impl VadWorker {
     }
 
     /// Audio waiting for the worker or being scored, in milliseconds.
-    #[cfg_attr(not(test), allow(dead_code, reason = "used by the tests"))]
     pub fn backlog_ms(&self) -> u64 {
         self.shared.lock().backlog() as u64 / SAMPLES_PER_MS
     }

@@ -69,6 +69,33 @@ pub enum Origin {
         /// Unix ms.
         exported_at: i64,
     },
+    /// `grill-eval import`: audio recorded outside the app, recognized
+    /// with the app's models (question-quality design.md, decision 2a).
+    #[serde(rename_all = "camelCase")]
+    Import {
+        /// The audio files as given; copies are in
+        /// `.grill-eval/audio/<name>/`.
+        files: Vec<String>,
+        layout: Layout,
+        /// The Whisper model that recognized both passes.
+        model: String,
+        /// Unix ms.
+        imported_at: i64,
+    },
+}
+
+/// Where «Я» and «Остальные» of an imported recording come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Layout {
+    /// Two files: the manager's track and the client's (`--others`).
+    TwoFiles,
+    /// A stereo file, the manager on the left (`--channels left=me`).
+    LeftMe,
+    /// A stereo file, the manager on the right (`--channels right=me`).
+    RightMe,
+    /// One mixed track, split by the text (`channels: "approximate"`).
+    Mono,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
