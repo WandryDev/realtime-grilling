@@ -63,7 +63,7 @@ pub const RULES: &str = r#"# Правила
 ## Что приходит
 
 1. Этот промпт, затем проект (`P1` — описание, `B1…Bn` — пункты брифа), «Неясно до звонка» (`G1…Gn` — чего нет в материалах проекта, с линзой карточки), люди клиента с профилями и глоссарий.
-2. В сообщении: режим, темы с ID, карточка текущей темы, вопросы звонка с ID и состоянием.
+2. В сообщении: режим, темы с ID, карточка текущей темы, вопросы звонка с ID и состоянием. Там же могут быть строка «Пустые линзы» (поля карточки текущей темы без значения) и строка «N мин без новых вопросов»: их считает код, это подсказки, а не слова собеседников и не расшифровка.
 3. Расшифровка последних 10 минут: строки `[S:<id>] мм:сс Остальные|Я: текст`.
 
 ## Протокол патча
@@ -456,23 +456,28 @@ pub struct Hints {
 
 impl Hints {
     /// The hints of a call at `now_ms` (Unix ms, the host's clock): the
-    /// pause runs from the last new question of the call, or from the
-    /// current topic's start while the call has none, and counts only when
-    /// a live phrase of «Остальные» ended after it. `segments` are the
-    /// recording's, their times from `recording_started_at`.
+    /// pause runs from the later of the last new question of the call and
+    /// the current topic's start (a new topic is a fresh start), and counts
+    /// only when a live phrase of «Остальные» ended after it. None in the
+    /// final check: it asks for no new topics, and the pause line would
+    /// push towards them. `segments` are the recording's, their times from
+    /// `recording_started_at`.
     pub fn at(
         state: &CallState,
         segments: &[TranscriptSegment],
         recording_started_at: i64,
         now_ms: i64,
     ) -> Self {
+        if state.final_check.is_some() {
+            return Self::default();
+        }
         let last_question = state.questions.iter().map(|q| q.created_at).max();
-        let topic_start = || {
-            let current = state.current_topic_id.as_deref()?;
-            let topic = state.topics.iter().find(|topic| topic.id == current)?;
-            Some(topic.created_at)
-        };
-        let Some(since) = last_question.or_else(topic_start) else {
+        let topic_start = state
+            .current_topic_id
+            .as_deref()
+            .and_then(|current| state.topics.iter().find(|topic| topic.id == current))
+            .map(|topic| topic.created_at);
+        let Some(since) = last_question.into_iter().chain(topic_start).max() else {
             return Self::default();
         };
         let client_spoke = segments.iter().any(|segment| {

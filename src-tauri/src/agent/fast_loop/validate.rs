@@ -200,6 +200,10 @@ pub enum RejectReason {
     /// the brief, or a contradiction cites the manager: facts come from
     /// «Остальные» or the project.
     NotFromClient,
+    /// A question cites a gap of the brief (`G…`) but no phrase of
+    /// «Остальные»: a gap is raised only once the client spoke of its lens,
+    /// not as a checklist.
+    GapWithoutClient,
     /// A contradiction cites two different segments.
     ContradictionNeedsTwoSegments,
     /// A required text is blank.
@@ -402,7 +406,9 @@ pub fn validate(
                     // contradiction is about something the card already says.
                     let field = *card_field;
                     rejected.push(reject(subject, RejectReason::UnknownCardField { field }));
-                } else if let Err(reason) = check_evidence(context, evidence) {
+                } else if let Err(reason) =
+                    check_evidence(context, evidence).and_then(|()| check_gap(context, evidence))
+                {
                     rejected.push(reject(subject, reason));
                 } else if let Err(reason) = if contradiction {
                     check_contradiction(context, evidence)
@@ -630,6 +636,24 @@ fn check_fact(context: &CallContext, evidence: &[Evidence]) -> Result<(), Reject
         Ok(())
     } else {
         Err(RejectReason::NotFromClient)
+    }
+}
+
+/// A question on a gap of the brief also cites the client: a gap is raised
+/// when the client spoke of its lens (question-quality design.md, decision
+/// 6), never on its own.
+fn check_gap(context: &CallContext, evidence: &[Evidence]) -> Result<(), RejectReason> {
+    let kinds: Vec<SourceKind> = evidence
+        .iter()
+        .filter_map(|item| context.source(item.source, &item.id))
+        .map(|source| source.kind)
+        .collect();
+    let cites_gap = kinds.contains(&SourceKind::Gap);
+    let cites_client = kinds.contains(&SourceKind::Said(TranscriptChannel::Others));
+    if cites_gap && !cites_client {
+        Err(RejectReason::GapWithoutClient)
+    } else {
+        Ok(())
     }
 }
 
@@ -1230,6 +1254,41 @@ mod tests {
             reasons(&validation)[..],
             [RejectReason::QuoteNotFound { .. }]
         ));
+    }
+
+    /// A question on a gap needs the client too: a gap alone, or with the
+    /// manager only, is a checklist question and is rejected; with a
+    /// phrase of «Остальные» it passes.
+    #[test]
+    fn a_question_on_a_gap_alone_is_rejected() {
+        let ask = |evidence: serde_json::Value| {
+            check_with_gap(json!([{
+                "op": "question", "title": "Кто из операторов берёт ночные звонки?",
+                "description": "Без этого не понять смены", "cardField": "users",
+                "gapType": "empty", "priority": 3, "evidence": evidence
+            }]))
+        };
+        let gap_quote = || gap("кто из операторов отвечает на ночные звонки");
+
+        for evidence in [
+            json!([gap_quote()]),
+            json!([gap_quote(), segment("S4", "у вас пять операторов в смену")]),
+        ] {
+            let validation = ask(evidence);
+            assert!(validation.patch.ops.is_empty(), "{:?}", validation.patch);
+            assert_eq!(reasons(&validation), vec![&RejectReason::GapWithoutClient]);
+            assert_eq!(validation.rejected_json()[0]["reason"], "gapWithoutClient");
+        }
+
+        let validation = ask(json!([
+            gap_quote(),
+            segment("S2", "ночью никто не дежурит")
+        ]));
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        assert_eq!(
+            added(&validation),
+            ["Кто из операторов берёт ночные звонки?"]
+        );
     }
 
     /// Spec «Пробел как факт»: a gap is what the materials lack, so on its

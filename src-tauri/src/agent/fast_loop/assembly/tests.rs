@@ -191,6 +191,8 @@ fn the_full_rules_variant_is_the_rules() {
         "не раскрыто: поле пустое ИЛИ записано общими словами",
         "даже если он не сказал «теперь о другом»",
         "Первый вопрос темы — сразу.",
+        "строка «Пустые линзы»",
+        "строка «N мин без новых вопросов»: их считает код, это подсказки",
     ] {
         assert!(RULES.contains(rule), "no «{rule}» in the rules");
     }
@@ -646,6 +648,75 @@ fn seven_minutes_without_a_question_while_the_client_talks() {
     assert!(pause < message.find("# Расшифровка").unwrap());
 }
 
+/// The same pause in the final check: no line, it would push towards the
+/// new topics and questions the final check forbids.
+#[test]
+fn the_final_check_has_no_pause_line() {
+    let db = database();
+    let id = recording(&db);
+    topic_with_a_question(&db, &id);
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        4 * MINUTE,
+        "Ну всё, спасибо, до связи",
+    );
+    call_state::apply_patch_at(
+        &db,
+        &id,
+        &ValidatedPatch {
+            ops: vec![ValidatedOp::StartFinalCheck],
+        },
+        wall(5.0),
+    )
+    .unwrap();
+
+    let message = message_at(&db, &id, 9.5);
+    assert!(
+        message.starts_with("Режим: финальная проверка."),
+        "{message}"
+    );
+    assert!(!message.contains("мин без новых вопросов"), "{message}");
+    assert!(!message.contains("Проверь:"), "{message}");
+}
+
+/// A topic created a minute ago, after a question 7 minutes ago: the
+/// pause runs from the topic, so there is no line.
+#[test]
+fn a_new_topic_restarts_the_pause() {
+    let db = database();
+    let id = recording(&db);
+    topic_with_a_question(&db, &id);
+    call_state::apply_patch_at(
+        &db,
+        &id,
+        &ValidatedPatch {
+            ops: vec![ValidatedOp::CreateTopic {
+                title: "Ночная смена".to_owned(),
+            }],
+        },
+        wall(8.0),
+    )
+    .unwrap();
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        8 * MINUTE + 20_000,
+        "Ночью у нас дежурит один оператор",
+    );
+
+    let message = message_at(&db, &id, 9.0);
+    assert!(!message.contains(PAUSE_LINE), "{message}");
+    // Still 5 minutes after the topic, the line comes back.
+    assert!(
+        message_at(&db, &id, 13.0).contains(&format!("\n5 {PAUSE_LINE}")),
+        "{}",
+        message_at(&db, &id, 13.0)
+    );
+}
+
 /// Under 5 minutes: no line, though the lenses are listed.
 #[test]
 fn under_five_minutes_there_is_no_pause_line() {
@@ -744,7 +815,8 @@ fn the_hints_leave_the_prefix_alone_and_the_baseline_has_none() {
     );
     let prefix = build_prefix(&db, &id).unwrap();
     assert_eq!(prefix, before);
-    assert!(!prefix.text.contains("Пустые линзы"));
+    // The rules name the line; the line itself is not in the prefix.
+    assert!(!prefix.text.contains("Пустые линзы:"));
 
     let with = assemble(&db, &id, &prefix, wall(9.5), true).unwrap();
     let without = assemble(&db, &id, &prefix, wall(9.5), false).unwrap();
