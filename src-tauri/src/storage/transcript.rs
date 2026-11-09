@@ -174,12 +174,12 @@ fn changed(recording_id: &str, project_id: Option<&str>, change: Change) -> Data
 fn insert(
     connection: &Connection,
     recording_id: &str,
+    id: String,
     call_id: Option<&str>,
     pass: TranscriptPass,
     segment: SegmentInput,
     now: i64,
 ) -> CommandResult<TranscriptSegment> {
-    let id = new_id();
     connection.execute(
         "INSERT INTO transcript_segments
            (id, recording_id, call_id, pass, channel, start_ms, end_ms, text, created_at, updated_at)
@@ -217,11 +217,24 @@ pub fn append_live(
     recording_id: &str,
     segment: SegmentInput,
 ) -> CommandResult<(TranscriptSegment, Vec<DataChanged>)> {
+    append_live_as(connection, recording_id, new_id(), segment)
+}
+
+/// [`append_live`] under the id given: a replay keeps the ids of the
+/// segments it replays, so the evidence of its questions cites the corpus
+/// (`grill-eval replay`).
+pub fn append_live_as(
+    connection: &Connection,
+    recording_id: &str,
+    id: String,
+    segment: SegmentInput,
+) -> CommandResult<(TranscriptSegment, Vec<DataChanged>)> {
     let (call_id, project_id) = links_of(connection, recording_id)?;
     check_times(&segment)?;
     let added = insert(
         connection,
         recording_id,
+        id,
         call_id.as_deref(),
         TranscriptPass::Live,
         segment,
@@ -260,6 +273,7 @@ pub fn replace_refined(
                 insert(
                     connection,
                     recording_id,
+                    new_id(),
                     call_id.as_deref(),
                     TranscriptPass::Refined,
                     segment,
@@ -309,6 +323,24 @@ pub fn for_recording(
           ORDER BY s.start_ms, s.end_ms, s.id"
     ))?;
     let rows = statement.query_map([recording_id], from_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// One pass of a recording's transcript, in time order, whichever reads
+/// return (`grill-eval export` keeps both). `NotFound` for an unknown
+/// recording.
+pub fn of_pass(
+    connection: &Connection,
+    recording_id: &str,
+    pass: TranscriptPass,
+) -> CommandResult<Vec<TranscriptSegment>> {
+    links_of(connection, recording_id)?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM transcript_segments AS s
+          WHERE s.recording_id = ?1 AND s.pass = ?2
+          ORDER BY s.start_ms, s.end_ms, s.id"
+    ))?;
+    let rows = statement.query_map(params![recording_id, pass.as_str()], from_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 

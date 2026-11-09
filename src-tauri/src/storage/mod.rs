@@ -35,7 +35,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, OpenFlags, Transaction};
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
@@ -74,7 +74,6 @@ const MIGRATION_LIST: &[M<'static>] = &[
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
 
 /// Schema version this build knows.
-#[cfg(test)]
 pub const SCHEMA_VERSION: usize = MIGRATION_LIST.len();
 
 type Db = Arc<Mutex<Connection>>;
@@ -315,6 +314,30 @@ pub fn open(path: &Path, migrations: &Migrations) -> Result<Connection, String> 
         backup(&connection, path, version)?;
     }
     migrate(&mut connection, migrations)?;
+    Ok(connection)
+}
+
+/// Opens the app's database file only to read it (`grill-eval export`):
+/// SQLite refuses every write, nothing is migrated or backed up. A schema
+/// other than this build's is an error: its queries may not fit it.
+pub fn open_read_only(path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("Не удалось открыть базу {}: {error}", path.display()))?;
+    let version = schema_version(&connection, &MIGRATIONS)?;
+    if version != SCHEMA_VERSION {
+        return Err(format!(
+            "База {} на схеме v{version}, а эта сборка знает v{SCHEMA_VERSION}. \
+             Откройте приложение этой же версии, чтобы обновить базу, или соберите \
+             grill-eval из той версии, что её создала.",
+            path.display()
+        ));
+    }
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|error| format!("Не удалось настроить базу: {error}"))?;
     Ok(connection)
 }
 

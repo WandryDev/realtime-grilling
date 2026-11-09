@@ -4,6 +4,8 @@ version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
+# Two binaries: `cargo run` and `tauri dev` start the app.
+default-run = "realtime-grilling"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +15,12 @@ edition = "2024"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "realtime_grilling_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Replays of recorded calls through the fast loop, a developer's tool
+# (question-quality design.md, decision 1).
+[[bin]]
+name = "grill-eval"
+path = "src/bin/grill-eval.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

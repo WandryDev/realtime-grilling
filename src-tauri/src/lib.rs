@@ -4,6 +4,9 @@ mod bindings;
 mod call;
 mod commands;
 mod error;
+/// `grill-eval` (question-quality design.md, decision 1): its only way in
+/// is `eval::cli::main`.
+pub mod eval;
 mod events;
 mod permissions;
 mod projects;

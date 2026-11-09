@@ -39,6 +39,9 @@ spikes/**/runs/
 spikes/**/.venv/
 spikes/**/__pycache__/
 
+# grill-eval: corpora, imported audio and replay reports hold clients' calls
+.grill-eval/
+
 # playwright
 test-results/
 playwright-report/
