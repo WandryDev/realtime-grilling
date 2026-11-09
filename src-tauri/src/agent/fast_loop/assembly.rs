@@ -92,8 +92,8 @@ pub const RULES: &str = r#"# Правила
 В режиме «финальная проверка» новых тем не создавай. Отмечай отвеченные вопросы; новый вопрос — только если без него нельзя оценить или реализовать задачу.
 "#;
 
-/// Brief keys that point at sources instead of stating facts.
-const BRIEF_SKIPPED: [&str; 2] = ["keyDocuments", "keyDocumentsNote"];
+/// Brief keys that point at sources or name gaps instead of stating facts.
+const BRIEF_SKIPPED: [&str; 3] = ["keyDocuments", "keyDocumentsNote", "gaps"];
 /// Fields of a brief entry that name it, so they come first.
 const ENTRY_NAMES: [&str; 3] = ["term", "name", "title"];
 /// Profile fields of a person in the order and words of the prompt.

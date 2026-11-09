@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::{
     error::{CommandError, CommandResult},
-    storage::{Storage, projects, sources},
+    storage::{Storage, call_state::CardLens, projects, sources},
 };
 
 /// Characters Windows or macOS do not take in a file name.
@@ -158,6 +158,23 @@ pub fn markdown(project: &str, brief: &Value, sources: &[(String, String)]) -> S
         (!term.is_empty()).then(|| entry(&term, &text(item.get("definition"))))
     });
     write_items(&mut out, glossary);
+
+    // Only a brief built with gaps has the section, as on the page.
+    let gaps: Vec<String> = list("gaps")
+        .into_iter()
+        .filter_map(|gap| {
+            let text = text(gap.get("text"));
+            let lens = gap
+                .get("lens")
+                .and_then(Value::as_str)
+                .and_then(CardLens::from_id)?;
+            (!text.is_empty()).then(|| entry(lens.label(), &text))
+        })
+        .collect();
+    if !gaps.is_empty() {
+        out.push_str("\n## Неясно до звонка\n\n");
+        write_items(&mut out, gaps.into_iter());
+    }
 
     out.push_str("\n## Ключевые документы\n\n");
     let documents = list("keyDocuments").into_iter().filter_map(|document| {

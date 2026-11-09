@@ -7,7 +7,8 @@
 //! through both). The agent names documents `F1…Fn`; the saved brief has the
 //! documents' real ids, and only of the project's `ready` documents.
 //! `glossary[].term` and `stack[]` are what `speech/glossary.rs` reads;
-//! `fast_loop/assembly.rs` numbers every field but `keyDocuments`.
+//! `fast_loop/assembly.rs` numbers every field but `keyDocuments` and
+//! `gaps`; the gaps go to their own section (`G1…Gn`).
 
 pub mod export;
 pub mod input;
@@ -20,11 +21,18 @@ use serde_json::Value;
 use specta::Type;
 use tauri_specta::Event;
 
+use crate::storage::call_state::CardLens;
+
 /// The JSON Schema of the agent's reply.
 pub const BRIEF_SCHEMA: &str = include_str!("brief.schema.json");
 
 /// The rules of the build, in Russian: the CLI's system prompt file.
 pub const PROMPT: &str = include_str!("prompt.md");
+
+/// At most this many gaps (`gaps.maxItems` of the schema); the rest go.
+pub const MAX_GAPS: usize = 10;
+/// A gap's text is cut to this many characters (`maxLength` of the schema).
+pub const MAX_GAP_CHARS: usize = 200;
 
 /// [`BRIEF_SCHEMA`] on one line without spaces, as `--json-schema` takes it:
 /// it stays on the command line, so it is kept under 4 KB.
@@ -48,6 +56,10 @@ pub struct Brief {
     /// Project terms and names; recognition is prompted with the terms.
     pub glossary: Vec<GlossaryEntry>,
     pub key_documents: Vec<KeyDocument>,
+    /// «Неясно до звонка»: what the materials lack to estimate or build the
+    /// product. A brief built before them has none.
+    #[serde(default)]
+    pub gaps: Vec<BriefGap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -71,6 +83,14 @@ pub struct KeyDocument {
     pub source_id: String,
     pub title: String,
     pub why: String,
+}
+
+/// A gap of the materials, about one lens of the task card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BriefGap {
+    pub lens: CardLens,
+    pub text: String,
 }
 
 impl Brief {
@@ -102,6 +122,15 @@ impl Brief {
             trim(&mut document.title);
             trim(&mut document.why);
         }
+        for gap in &mut self.gaps {
+            trim(&mut gap.text);
+            if let Some((cut, _)) = gap.text.char_indices().nth(MAX_GAP_CHARS) {
+                gap.text.truncate(cut);
+                gap.text = gap.text.trim_end().to_owned();
+            }
+        }
+        self.gaps.retain(|gap| !gap.text.is_empty());
+        self.gaps.truncate(MAX_GAPS);
     }
 
     /// `F1…` of the reply to the documents' ids (`ids[n]` for `F{n+1}`);

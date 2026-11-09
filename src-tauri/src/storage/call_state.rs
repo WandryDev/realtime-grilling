@@ -117,6 +117,24 @@ impl CardLens {
         }
     }
 
+    /// The lens in Russian, as the rules of the fast loop name it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Goal => "цель",
+            Self::Users => "пользователи",
+            Self::Scenarios => "сценарии",
+            Self::EdgeCases => "крайние случаи",
+            Self::Integrations => "интеграции",
+            Self::Constraints => "ограничения",
+            Self::Acceptance => "критерии готовности",
+        }
+    }
+
+    /// The lens of an id ([`Self::as_str`]), if it is one.
+    pub fn from_id(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|lens| lens.as_str() == text)
+    }
+
     fn parse(text: &str) -> rusqlite::Result<Self> {
         Self::ALL
             .into_iter()
