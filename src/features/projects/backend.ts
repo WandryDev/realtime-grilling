@@ -11,7 +11,13 @@ import {
   Stream,
 } from "effect";
 
-import { type Brief, type BriefProgress, commands, events } from "@/bindings";
+import {
+  type Brief,
+  type BriefGap,
+  type BriefProgress,
+  commands,
+  events,
+} from "@/bindings";
 import {
   briefFingerprint,
   MockDatabase,
@@ -452,7 +458,22 @@ function mockBrief(tables: MockTables, projectId: string): Brief {
     people.length > 0 ? "люди клиента" : null,
     documents.length > 0 ? "документы" : null,
   ].filter((item) => item !== null);
+  // What the materials lack, as the agent would list it.
+  const gaps: BriefGap[] = [];
+  if (people.length === 0) {
+    gaps.push({
+      lens: "users",
+      text: "Не сказано, кто будет пользоваться продуктом",
+    });
+  }
+  if (documents.length === 0) {
+    gaps.push({
+      lens: "acceptance",
+      text: "Нет документов: не описано, по каким критериям работу примут",
+    });
+  }
   return {
+    gaps,
     glossary: people.map((person) => ({
       definition: person.role || "Человек клиента",
       term: person.name,

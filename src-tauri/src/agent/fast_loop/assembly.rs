@@ -2,8 +2,9 @@
 //!
 //! 1. the stable prefix, built once per recording when its scheduler starts
 //!    and passed as a file (`--system-prompt-file`): the rules, the project
-//!    (`P1` the description, `B1…Bn` the brief items), the client's people
-//!    with their profiles, the glossary. It never changes during the
+//!    (`P1` the description, `B1…Bn` the brief items), the brief's gaps
+//!    («Неясно до звонка», `G1…Gn`), the client's people with their
+//!    profiles, the glossary. It never changes during the
 //!    recording, so the CLI's prompt cache holds;
 //! 2. the state with ids: the mode, the topics, the current topic's card,
 //!    the questions;
@@ -52,7 +53,7 @@ pub const RULES: &str = r#"# Правила
 
 ## Что приходит
 
-1. Этот промпт, затем проект (`P1` — описание, `B1…Bn` — пункты брифа), люди клиента с профилями и глоссарий.
+1. Этот промпт, затем проект (`P1` — описание, `B1…Bn` — пункты брифа), «Неясно до звонка» (`G1…Gn` — чего нет в материалах проекта, с линзой карточки), люди клиента с профилями и глоссарий.
 2. В сообщении: режим, темы с ID, карточка текущей темы, вопросы звонка с ID и состоянием.
 3. Расшифровка последних 10 минут: строки `[S:<id>] мм:сс Остальные|Я: текст`.
 
@@ -60,22 +61,23 @@ pub const RULES: &str = r#"# Правила
 
 `ops` — список операций, выполняются по порядку. Порядок в одном вызове: `topic` → `card` → `answered` → `question` → `finalCheck`.
 
-- `topic`: `action: "create"` с `title` — новая тема, она становится текущей; `action: "switch"` с `topicId` — вернуться к теме из списка. Создавай тему, только когда клиент явно перешёл к другой задаче; small talk — не тема.
+- `topic`: `action: "create"` с `title` — новая тема, она становится текущей; `action: "switch"` с `topicId` — вернуться к теме из списка. Новая тема — когда клиент перешёл к другой задаче, функции или подсистеме (другие пользователи, другой сценарий, другая интеграция), даже если он не сказал «теперь о другом». Small talk и уточнения той же задачи — не тема.
 - `card`: `field`, `value`, `evidence` — поле карточки текущей темы. `field` — строго одна из семи линз: `goal` — цель, зачем это бизнесу; `users` — пользователи, кто пользуется и кого затрагивает; `scenarios` — основные сценарии; `edgeCases` — крайние и нештатные случаи; `integrations` — интеграции, системы и данные; `constraints` — ограничения: сроки, бюджет, законы, техника; `acceptance` — критерии готовности, как поймём, что готово. Других полей нет. Новое значение целиком заменяет старое: включай прежние факты, если они верны. Пиши сжато, до 300 символов, не больше 3 операций `card` за вызов.
-- `question`: `title` — вопрос одним предложением, до 25 слов, на русском; `description` — почему это важно, одно короткое предложение; `cardField` — линза поля карточки текущей темы; для `assumption` и `contradiction` поле уже заполнено или задано операцией `card` раньше в этом патче, для `empty` — пустое поле; `gapType` — `empty` (в поле пусто), `assumption` (кто-то предположил, клиент не подтвердил) или `contradiction` (две реплики или реплика и проект расходятся); `priority` — 3: без ответа нельзя оценить или реализовать задачу, 2: влияет на объём или архитектуру, 1: уточнение; `evidence`.
+- `question`: `title` — вопрос одним предложением, до 25 слов, на русском; `description` — почему это важно, одно короткое предложение; `cardField` — линза поля карточки текущей темы; для `assumption` и `contradiction` поле уже заполнено или задано операцией `card` раньше в этом патче, для `empty` — поле, которое не раскрыто; `gapType` — `empty` (не раскрыто: поле пустое ИЛИ записано общими словами без того, что нужно для оценки — кто именно, сколько, при каком условии, какая система), `assumption` (кто-то предположил, клиент не подтвердил) или `contradiction` (две реплики или реплика и проект расходятся); `priority` — 3: без ответа нельзя оценить или реализовать задачу, 2: влияет на объём или архитектуру, 1: уточнение; `evidence`.
 - `answered`: `questionId` открытого или заданного менеджером вопроса и `evidence` с цитатой ответа клиента. Заданный вопрос менеджер уже задал и ждёт ответа: когда клиент ответил, отмечай его отвеченным. Частичный ответ — не ответ: вопрос остаётся открытым.
 - `finalCheck`: разговор идёт к завершению (прощание, «давайте подведём итог», договорённость о следующем шаге) — начать финальную проверку.
 
 `evidence` — список из 1–3 оснований `{"source", "id", "quote"}`:
 - `source: "segment"`, `id` — ID сегмента из `[S:<id>]` без `S:`;
-- `source: "project"`, `id` — `P1` или `B1…Bn`.
+- `source: "project"`, `id` — `P1`, `B1…Bn` или `G1…Gn`.
 
-`quote` — короткая ДОСЛОВНАЯ цитата (3–15 слов) из этого источника: не пересказывай, копируй. Код проверяет, что ID был в этом сообщении, цитата не короче трёх слов (если в источнике их не меньше) и совпадает с текстом; иначе операция отбрасывается. У `card` и `answered` хотя бы одно основание — фраза «Остальные» или пункт проекта; фраза «Я» одна не годится. Противоречие ссылается на обе фразы клиента: два основания из разных сегментов «Остальные». ID тем и вопросов передавай без префиксов `T:` и `Q:`.
+`quote` — короткая ДОСЛОВНАЯ цитата (3–15 слов) из этого источника: не пересказывай, копируй. Код проверяет, что ID был в этом сообщении, цитата не короче трёх слов (если в источнике их не меньше) и совпадает с текстом; иначе операция отбрасывается. У `card` и `answered` хотя бы одно основание — фраза «Остальные» или пункт проекта `P1`, `B…`; фраза «Я» или пункт `G…` без них не годятся: это вопрос или пробел, а не факт. Противоречие ссылается на обе фразы клиента: два основания из разных сегментов «Остальные». ID тем и вопросов передавай без префиксов `T:` и `Q:`.
 
 ## Качество вопросов
 
-- Вопрос рождается только там, где в карточке текущей темы пусто, допущение или противоречие. Вопрос не о поле карточки текущей темы будет отброшен.
+- Вопрос рождается только там, где поле карточки текущей темы не раскрыто (пусто или общие слова), или в нём допущение или противоречие. Вопрос не о поле карточки текущей темы будет отброшен.
 - Первый вопрос темы — сразу. Как только у текущей темы есть цель, а у неё нет ни одного открытого вопроса, в том же патче предложи 1 вопрос по самому важному пустому полю: обычно `users`, `integrations` или `acceptance` — то, без чего задачу нельзя оценить. Пустое ключевое поле — настоящий пробел, а не повод ждать: не возвращай патч только из `card`, если такое поле пусто. Основание — фраза клиента, где он описал задачу; `gapType: "empty"`.
+- Пункт «Неясно до звонка» (`G…`) поднимай вопросом, когда клиент в текущей теме заговорил о его линзе: основание — пункт `G` и фраза клиента, `cardField` — линза пункта. Пункты, которых разговор не касался, не поднимай. Пункт, о котором уже есть вопрос звонка, не повторяй.
 - Не больше 2 новых вопросов за вызов. В деталях сомневаешься — не спрашивай.
 - Не задавай вопрос, если ответ уже есть в расшифровке, в проекте или в карточке.
 - Не повторяй вопросы звонка — открытые, отвеченные, заданные и скрытые; сверяйся по смыслу, а не по словам. Скрытые менеджер отклонил: не предлагай их снова в другой формулировке.
@@ -92,8 +94,8 @@ pub const RULES: &str = r#"# Правила
 В режиме «финальная проверка» новых тем не создавай. Отмечай отвеченные вопросы; новый вопрос — только если без него нельзя оценить или реализовать задачу.
 "#;
 
-/// Brief keys that point at sources instead of stating facts.
-const BRIEF_SKIPPED: [&str; 2] = ["keyDocuments", "keyDocumentsNote"];
+/// Brief keys that point at sources or name gaps instead of stating facts.
+const BRIEF_SKIPPED: [&str; 3] = ["keyDocuments", "keyDocumentsNote", "gaps"];
 /// Fields of a brief entry that name it, so they come first.
 const ENTRY_NAMES: [&str; 3] = ["term", "name", "title"];
 /// Profile fields of a person in the order and words of the prompt.
@@ -112,7 +114,8 @@ const PROFILE_SKIPPED: [&str; 2] = ["initials", "edits"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prefix {
     pub text: String,
-    /// `P1`, `B1…Bn`: what `evidence` with `source: project` may cite.
+    /// `P1`, `B1…Bn` and the gaps `G1…Gn`: what `evidence` with
+    /// `source: project` may cite.
     pub project_items: Vec<SourceText>,
 }
 
@@ -160,6 +163,21 @@ pub fn build_prefix_with_rules(
             }
         }
         None => text.push_str("Проект не выбран.\n"),
+    }
+
+    text.push_str("\n# Неясно до звонка\n\n");
+    let gaps = project
+        .as_ref()
+        .and_then(|project| project.brief.as_ref())
+        .map(brief_gaps)
+        .unwrap_or_default();
+    if gaps.is_empty() {
+        text.push_str("Нет.\n");
+    }
+    for (index, (lens, gap)) in gaps.into_iter().enumerate() {
+        let id = format!("G{}", index + 1);
+        text.push_str(&format!("{id} ({}): {gap}\n", lens.label()));
+        project_items.push(SourceText::gap(id, gap));
     }
 
     text.push_str("\n# Люди клиента на звонке\n\n");
@@ -274,6 +292,23 @@ pub fn brief_items(brief: &Value) -> Vec<String> {
         }
     }
     items
+}
+
+/// The brief's gaps («Неясно до звонка») with their lens, in order; a gap
+/// without a known lens or a text is left out.
+pub fn brief_gaps(brief: &Value) -> Vec<(CardLens, String)> {
+    let gaps = brief.get("gaps").and_then(Value::as_array);
+    gaps.into_iter()
+        .flatten()
+        .filter_map(|gap| {
+            let lens = gap
+                .get("lens")
+                .and_then(Value::as_str)
+                .and_then(CardLens::from_id)?;
+            let text = gap.get("text").and_then(scalar)?;
+            Some((lens, text))
+        })
+        .collect()
 }
 
 /// Whitespace and line breaks collapsed: one segment, one line.

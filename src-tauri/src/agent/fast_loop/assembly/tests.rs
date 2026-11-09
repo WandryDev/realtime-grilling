@@ -2,7 +2,10 @@ use serde_json::json;
 
 use super::*;
 use crate::{
-    agent::fast_loop::testing::{database, recording, say},
+    agent::fast_loop::{
+        testing::{database, recording, say},
+        validate::SourceKind,
+    },
     storage::{
         call_state::{CardLens, GapType, NewQuestion, ValidatedOp, ValidatedPatch},
         projects::ProjectUpdate,
@@ -75,6 +78,121 @@ fn the_prefix_is_byte_identical_for_the_same_storage() {
     let first = build_prefix(&db, &id).unwrap();
     say(&db, &id, TranscriptChannel::Others, 0, "Новая фраза");
     assert_eq!(build_prefix(&db, &id).unwrap(), first);
+}
+
+/// Sets the brief of the recording's project to the fixture's brief with
+/// two gaps («Неясно до звонка»).
+fn brief_with_gaps(db: &Connection, recording_id: &str) {
+    let project_id = recordings::get(db, recording_id)
+        .unwrap()
+        .project_id
+        .unwrap();
+    let mut brief = projects::get(db, &project_id).unwrap().brief.unwrap();
+    brief["gaps"] = json!([
+        { "lens": "users", "text": "Не сказано, кто из операторов\n работает ночью" },
+        { "lens": "budget", "text": "Линза не из семи" },
+        { "lens": "acceptance", "text": "Нет критериев, когда очередь готова" },
+        { "lens": "goal", "text": "  " }
+    ]);
+    projects::update(
+        db,
+        &project_id,
+        ProjectUpdate {
+            brief: Some(Some(brief)),
+            ..ProjectUpdate::default()
+        },
+    )
+    .unwrap();
+}
+
+/// Spec «Пробел брифа в звонке»: the gaps are their own section with ids
+/// and lenses, citable as project items but not facts.
+#[test]
+fn the_prefix_lists_the_gaps_of_the_brief() {
+    let db = database();
+    let id = recording(&db);
+    let prefix = build_prefix(&db, &id).unwrap();
+    assert!(
+        prefix
+            .text
+            .contains("\n# Неясно до звонка\n\nНет.\n\n# Люди клиента на звонке"),
+        "{}",
+        prefix.text
+    );
+
+    brief_with_gaps(&db, &id);
+    let prefix = build_prefix(&db, &id).unwrap();
+    assert!(
+        prefix.text.contains(
+            "B4: Mango Office\n\
+             \n# Неясно до звонка\n\n\
+             G1 (пользователи): Не сказано, кто из операторов работает ночью\n\
+             G2 (критерии готовности): Нет критериев, когда очередь готова\n\
+             \n# Люди клиента на звонке"
+        ),
+        "{}",
+        prefix.text
+    );
+    let items: Vec<(&str, SourceKind)> = prefix
+        .project_items
+        .iter()
+        .map(|item| (item.id.as_str(), item.kind))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("P1", SourceKind::Project),
+            ("B1", SourceKind::Project),
+            ("B2", SourceKind::Project),
+            ("B3", SourceKind::Project),
+            ("B4", SourceKind::Project),
+            ("G1", SourceKind::Gap),
+            ("G2", SourceKind::Gap),
+        ]
+    );
+    assert_eq!(
+        prefix.project_items[5].text,
+        "Не сказано, кто из операторов работает ночью"
+    );
+    // The gaps are no brief items.
+    assert!(!prefix.text.contains("B5:"));
+}
+
+/// Spec «Стабильная часть не меняется», with gaps in the brief.
+#[test]
+fn the_prefix_with_gaps_is_byte_identical_between_calls() {
+    let db = database();
+    let id = recording(&db);
+    brief_with_gaps(&db, &id);
+    let first = build_prefix(&db, &id).unwrap();
+    say(
+        &db,
+        &id,
+        TranscriptChannel::Others,
+        0,
+        "Ночью у нас дежурит один",
+    );
+    let second = build_prefix(&db, &id).unwrap();
+    assert_eq!(second.text.as_bytes(), first.text.as_bytes());
+    assert_eq!(second, first);
+}
+
+/// The measured variant `--rules spikes/question-quality/rules-full.md` is
+/// the rules the app runs: they don't drift apart.
+#[test]
+fn the_full_rules_variant_is_the_rules() {
+    let full = include_str!("../../../../../spikes/question-quality/rules-full.md");
+    assert_eq!(full, RULES);
+    for rule in [
+        "`G1…Gn`",
+        "Пункт «Неясно до звонка» (`G…`) поднимай вопросом",
+        "пункт `G…` без них не годятся",
+        "не раскрыто: поле пустое ИЛИ записано общими словами",
+        "даже если он не сказал «теперь о другом»",
+        "Первый вопрос темы — сразу.",
+    ] {
+        assert!(RULES.contains(rule), "no «{rule}» in the rules");
+    }
 }
 
 #[test]
@@ -300,7 +418,7 @@ fn the_message_has_the_mode_the_state_with_ids_the_transcript_and_the_last_line(
         .context
         .segments
         .iter()
-        .map(|source| source.channel)
+        .map(SourceText::channel)
         .collect();
     assert_eq!(
         channels,

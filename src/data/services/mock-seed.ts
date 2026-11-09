@@ -43,6 +43,7 @@ const SEED_BRIEF_AGE_MS = 2 * 60 * 60 * 1000;
  */
 function demoBrief(): Brief {
   return {
+    gaps: BRIEF.gaps.map((gap) => ({ ...gap })),
     glossary: BRIEF.glossary.map((entry) => ({ ...entry })),
     keyDocuments: [],
     modules: BRIEF.modules.map((module) => ({

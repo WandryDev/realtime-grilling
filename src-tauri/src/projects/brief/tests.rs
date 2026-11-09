@@ -45,7 +45,11 @@ pub fn reply() -> Value {
             { "term": "Медэлемент", "definition": "Сеть клиник, клиент" },
             { "term": "Первичка", "definition": "Пациент без карты" }
         ],
-        "keyDocuments": [{ "sourceId": "F1", "title": "ТЗ", "why": "Требования к очереди" }]
+        "keyDocuments": [{ "sourceId": "F1", "title": "ТЗ", "why": "Требования к очереди" }],
+        "gaps": [
+            { "lens": "users", "text": "Не сказано, кто из сотрудников работает с очередью" },
+            { "lens": "acceptance", "text": "Нет критериев, по которым очередь считается готовой" }
+        ]
     })
 }
 
@@ -77,7 +81,7 @@ fn schema_and_serde_agree() {
     };
     let valid = [
         reply(),
-        json!({ "product": "", "stack": [], "modules": [], "glossary": [], "keyDocuments": [] }),
+        json!({ "product": "", "stack": [], "modules": [], "glossary": [], "keyDocuments": [], "gaps": [] }),
     ];
     let invalid = [
         with(&|value| {
@@ -90,6 +94,9 @@ fn schema_and_serde_agree() {
         with(&|value| value["glossary"][0]["note"] = json!("x")),
         with(&|value| value["modules"][0] = json!({ "name": "x", "description": 1 })),
         with(&|value| value["keyDocuments"][0] = json!({ "sourceId": "F1", "title": "x" })),
+        with(&|value| value["gaps"][0]["lens"] = json!("budget")),
+        with(&|value| value["gaps"][0] = json!({ "lens": "users" })),
+        with(&|value| value["gaps"][0]["source"] = json!("F1")),
         json!(null),
         json!([]),
     ];
@@ -112,6 +119,45 @@ fn schema_and_serde_agree() {
     let mut brief = Brief::from_reply(foreign).unwrap();
     brief.resolve_documents(&HashMap::from([("F1".to_owned(), "id-1".to_owned())]));
     assert!(brief.key_documents.is_empty());
+}
+
+/// Spec «Старый бриф»: a brief saved before the gaps reads with none.
+#[test]
+fn an_old_brief_without_gaps_reads_with_an_empty_list() {
+    let mut old = reply();
+    old.as_object_mut().unwrap().remove("gaps");
+    let brief: Brief = serde_json::from_value(old.clone()).unwrap();
+    assert!(brief.gaps.is_empty());
+    assert_eq!(Brief::from_reply(old).unwrap().gaps, []);
+}
+
+#[test]
+fn the_schema_caps_the_gaps_and_the_build_trims_what_is_over() {
+    let schema = validator();
+    let gap = |text: String| json!({ "lens": "scenarios", "text": text });
+    let mut too_many = reply();
+    too_many["gaps"] = (1..=12).map(|n| gap(format!("Пробел {n}"))).collect();
+    assert!(!schema.is_valid(&too_many));
+    let mut too_long = reply();
+    too_long["gaps"] = json!([gap("я".repeat(MAX_GAP_CHARS + 1))]);
+    assert!(!schema.is_valid(&too_long));
+    let mut at_limit = reply();
+    at_limit["gaps"] = (1..=MAX_GAPS)
+        .map(|_| gap("я".repeat(MAX_GAP_CHARS)))
+        .collect();
+    assert!(schema.is_valid(&at_limit));
+
+    // Should the CLI let one through, the build cuts it to the limits.
+    too_many["gaps"][0] = gap(format!("  {}  ", "я".repeat(MAX_GAP_CHARS + 50)));
+    too_many["gaps"][1] = gap("   ".to_owned());
+    let brief = Brief::from_reply(too_many).unwrap();
+    assert_eq!(brief.gaps.len(), MAX_GAPS);
+    assert_eq!(brief.gaps[0].text.chars().count(), MAX_GAP_CHARS);
+    assert_eq!(brief.gaps[1].text, "Пробел 3");
+    assert_eq!(
+        brief.gaps[0].lens,
+        crate::storage::call_state::CardLens::Scenarios
+    );
 }
 
 #[test]
@@ -177,6 +223,10 @@ fn the_glossary_and_the_fast_loop_read_a_built_brief() {
             .any(|item| item.contains("Требования к очереди")),
         "key documents only point at sources: {items:?}"
     );
+    assert!(
+        !items.iter().any(|item| item.contains("Не сказано")),
+        "gaps are not brief items: {items:?}"
+    );
 
     // Spec «Термин из брифа»: saved by the build, in the stable prefix and
     // in the recording's glossary.
@@ -195,6 +245,14 @@ fn the_glossary_and_the_fast_loop_read_a_built_brief() {
     );
     let prefix = build_prefix(&db, &recording_id).unwrap();
     assert!(prefix.text.contains("Медэлемент"), "{}", prefix.text);
+    // Spec «Пробел брифа в звонке».
+    assert!(
+        prefix
+            .text
+            .contains("G1 (пользователи): Не сказано, кто из сотрудников работает с очередью"),
+        "{}",
+        prefix.text
+    );
 }
 
 /* The message */
@@ -429,12 +487,17 @@ fn the_markdown_has_the_sections_of_the_page() {
          \n## Стек\n\n- amoCRM API v4\n- Mango Office\n\
          \n## Модули\n\n- **Очередь** — Распределяет звонки по операторам\n\
          \n## Глоссарий\n\n- **Медэлемент** — Сеть клиник, клиент\n- **Первичка** — Пациент без карты\n\
+         \n## Неясно до звонка\n\n\
+         - **пользователи** — Не сказано, кто из сотрудников работает с очередью\n\
+         - **критерии готовности** — Нет критериев, по которым очередь считается готовой\n\
          \n## Ключевые документы\n\n- **ТЗ.docx** — ТЗ. Требования к очереди\n"
     );
     // A loose brief (not built by the agent) still exports.
     let loose = export::markdown("X", &json!({ "product": "Звонки" }), &[]);
     assert!(loose.contains("## Продукт\n\nЗвонки\n"));
     assert!(loose.contains("## Ключевые документы\n\n—\n"));
+    // A brief without gaps (built before them) has no such section.
+    assert!(!loose.contains("Неясно до звонка"));
 }
 
 /* A host without the app */

@@ -261,6 +261,7 @@ export function toBriefView(
     keyDocumentsNote = `Агент выбрал ${keyDocuments.length} из ${documentsCount(ready.length)}.`;
   }
   return {
+    gaps: brief.gaps ?? [],
     glossary: brief.glossary,
     keyDocuments,
     keyDocumentsNote,

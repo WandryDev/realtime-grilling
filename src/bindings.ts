@@ -592,6 +592,17 @@ export type Brief = {
 	/**  Project terms and names; recognition is prompted with the terms. */
 	glossary: GlossaryEntry[],
 	keyDocuments: KeyDocument[],
+	/**
+	 *  «Неясно до звонка»: what the materials lack to estimate or build the
+	 *  product. A brief built before them has none.
+	 */
+	gaps?: BriefGap[],
+};
+
+/**  A gap of the materials, about one lens of the task card. */
+export type BriefGap = {
+	lens: CardLens,
+	text: string,
 };
 
 export type BriefModule = {

@@ -4,6 +4,7 @@
  * "Проекты и настройки".
  */
 
+import type { CardLens } from "@/bindings";
 import { type MockProject, PROJECTS } from "@/features/mock/projects";
 
 export type SourceKind = "outline" | "github" | "clickup";
@@ -377,6 +378,20 @@ export const PROJECT_ANCHORS = [
 ];
 
 export const BRIEF = {
+  gaps: [
+    {
+      lens: "users" as CardLens,
+      text: "Не сказано, кто из операторов разбирает пропущенные звонки ночью и в выходные",
+    },
+    {
+      lens: "integrations" as CardLens,
+      text: "Неясно, какие поля карточки пациента берутся из amoCRM, а какие заводит оператор",
+    },
+    {
+      lens: "acceptance" as CardLens,
+      text: "Нет критериев, по которым клиент примет очередь операторов",
+    },
+  ],
   glossary: [
     {
       definition:
