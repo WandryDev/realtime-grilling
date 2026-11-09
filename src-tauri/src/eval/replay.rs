@@ -46,7 +46,7 @@ use tokio::{
 
 use super::{
     corpus::{Corpus, Segment},
-    report::{self, Flags, LogEntry, LogEvent, Report, Run},
+    report::{self, Flags, LogEntry, LogEvent, Phrase, Report, Run},
 };
 use crate::{
     agent::{
@@ -81,6 +81,8 @@ pub struct Options {
     /// `--rules`: the file and its text, instead of `assembly::RULES`.
     pub rules: Option<Rules>,
     pub realtime: bool,
+    /// `--baseline-state`: the state without the lines of decision 7.
+    pub baseline_state: bool,
     /// Progress lines on stderr.
     pub progress: bool,
 }
@@ -414,6 +416,7 @@ pub async fn run(
     if let Some(rules) = &options.rules {
         config.rules = Cow::Owned(rules.text.clone());
     }
+    config.state_hints = !options.baseline_state;
     let rules_sha256 = report::sha256_hex(&config.rules);
     let fast_loop = FastLoop::new(
         Arc::clone(&loop_host),
@@ -424,8 +427,7 @@ pub async fn run(
     fast_loop.live_started(&recording_id);
 
     let mut stopped = None;
-    let mut fed = 0;
-    let mut last_fed_ms = None;
+    let mut phrases = Vec::new();
     for segment in &segments {
         let offset = u64::try_from(segment.end_ms - skipped).unwrap_or(0);
         let due = host.t0 + Duration::from_millis(offset);
@@ -449,8 +451,12 @@ pub async fn run(
         .await
         .map_err(|error| format!("Не удалось записать фразу {}: {error}", segment.id))?;
         fast_loop.phrase(&recording_id, segment.channel);
-        fed += 1;
-        last_fed_ms = Some(segment.end_ms);
+        phrases.push(Phrase {
+            id: segment.id.clone(),
+            channel: segment.channel,
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+        });
     }
     if stopped.is_none() {
         stopped = drain(&mut states).await;
@@ -475,19 +481,21 @@ pub async fn run(
             to_min: options.to_min,
             realtime: options.realtime,
             rules_file: options.rules.as_ref().map(|rules| rules.file.clone()),
+            baseline_state: options.baseline_state,
         },
         run: Run {
             started_at: run_started_at,
             wall_ms: ms(wall_start.elapsed()),
             call_started_at: started_at,
             segments: segments.len(),
-            segments_fed: fed,
-            last_fed_ms,
+            segments_fed: phrases.len(),
+            last_fed_ms: phrases.last().map(|phrase| phrase.end_ms),
         },
         topics,
         questions,
         calls,
         log: std::mem::take(&mut lock(&host.log)),
+        phrases,
     })
 }
 

@@ -90,6 +90,9 @@ pub struct Project {
     pub notes: String,
     /// As stored: the shape of `projects/brief/brief.schema.json`.
     pub brief: Option<Value>,
+    /// The brief `grill-eval brief` replaced last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_previous: Option<Value>,
     /// The texts of the project's read documents (`grill-eval brief`).
     #[serde(default)]
     pub sources: Vec<SourceText>,

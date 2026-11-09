@@ -4,23 +4,35 @@
 //! The metrics, `report.md` and `compare` read this file (task 2.5): it
 //! keeps the questions, topics and calls as stored, not summaries of them.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::corpus::Channels;
 use crate::{
     agent::fast_loop::events::AgentLoopState,
     error::CommandResult,
-    storage::call_state::{self, AgentCallOutcome, CardLens, Evidence, GapType, QuestionStatus},
+    storage::{
+        call_state::{self, AgentCallOutcome, CardLens, Evidence, GapType, QuestionStatus},
+        transcript::TranscriptChannel,
+    },
 };
 
 /// The version of the report format.
 pub const FORMAT: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// The raw results in a report's folder.
+pub const REPORT_FILE: &str = "report.json";
+/// The metrics in Markdown, next to it (replay writes it, judge rewrites it).
+pub const MARKDOWN_FILE: &str = "report.md";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
     pub version: u32,
@@ -43,10 +55,15 @@ pub struct Report {
     pub calls: Vec<ReportCall>,
     /// What the loop reported to its host, in order.
     pub log: Vec<LogEntry>,
+    /// The live segments the loop got, without their text: the metrics
+    /// count the client's phrases in a pause. A report written before them
+    /// has none.
+    #[serde(default)]
+    pub phrases: Vec<Phrase>,
 }
 
 /// How the run was started.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Flags {
     /// `--from` / `--to`, minutes.
@@ -55,9 +72,13 @@ pub struct Flags {
     pub realtime: bool,
     /// `--rules`: the file the rules came from; `null` for the built-in ones.
     pub rules_file: Option<String>,
+    /// `--baseline-state`: the state without its empty lenses and pause
+    /// line (question-quality design.md, decision 7).
+    #[serde(default)]
+    pub baseline_state: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     /// When the run started, Unix ms (the real clock).
@@ -75,7 +96,7 @@ pub struct Run {
     pub last_fed_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportTopic {
     pub id: String,
@@ -83,7 +104,7 @@ pub struct ReportTopic {
     pub at_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportQuestion {
     pub id: String,
@@ -105,7 +126,7 @@ pub struct ReportQuestion {
     pub answer_evidence: Option<Vec<Evidence>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportCall {
     pub at_ms: i64,
@@ -122,7 +143,17 @@ pub struct ReportCall {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// A live segment fed to the loop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Phrase {
+    pub id: String,
+    pub channel: TranscriptChannel,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     pub at_ms: i64,
@@ -130,11 +161,31 @@ pub struct LogEntry {
     pub event: LogEvent,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "camelCase")]
 pub enum LogEvent {
     CallStateChanged,
     AgentStatus { state: AgentLoopState },
+}
+
+impl Report {
+    /// `report.json` at `path`, or in the folder `path`.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let file = file_of(path);
+        let text = fs::read_to_string(&file)
+            .map_err(|error| format!("Не удалось прочитать отчёт {}: {error}", file.display()))?;
+        serde_json::from_str(&text)
+            .map_err(|error| format!("Отчёт {} не по формату: {error}", file.display()))
+    }
+}
+
+/// The report's file: `path` itself, or `report.json` in the folder `path`.
+pub fn file_of(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join(REPORT_FILE)
+    } else {
+        path.to_owned()
+    }
 }
 
 /// The topics, questions and calls of `recording_id`, times from

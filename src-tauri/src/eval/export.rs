@@ -113,6 +113,7 @@ pub fn build(
                 description: project.description,
                 notes: project.notes,
                 brief: project.brief,
+                brief_previous: None,
                 sources: texts
                     .into_iter()
                     .map(|source| corpus::SourceText {

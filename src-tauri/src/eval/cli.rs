@@ -11,8 +11,10 @@ use std::{
 };
 
 use super::{
+    compare,
     corpus::{self, Corpus},
-    export, replay,
+    export, judge, metrics, replay,
+    report::{self, Report},
 };
 use crate::{
     agent::{
@@ -36,13 +38,14 @@ grill-eval — прогон записанных звонков через бы�
       Внешняя запись звонка в набор. Пока не реализовано.
   brief <набор>
       Пересобрать бриф набора нынешним промптом брифа. Пока не реализовано.
-  replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
+  replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime] [--baseline-state]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
-      .grill-eval/reports/<время>-<L>/report.json.
+      .grill-eval/reports/<время>-<L>/report.json и report.md.
   judge <отчёт>
-      Разметка вопросов прогона LLM-судьёй. Пока не реализовано.
+      Разметка вопросов прогона LLM-судьёй: judge.json рядом с отчётом, report.md заново.
   compare <отчёт A> <отчёт B>
-      Сравнение двух прогонов одного набора. Пока не реализовано.
+      Сравнение двух прогонов одного набора: таблица метрик и вопросы, которые
+      появились или пропали; пишется и в compare.md в папке B.
 
 Каталог .grill-eval/ — в корне репозитория (ближайшая папка вверх от текущей, где
 есть .git), он в .gitignore. `grill-eval <подкоманда> --help` — справка по подкоманде.
@@ -63,6 +66,7 @@ grill-eval export <id записи> [--name N] [--db ФАЙЛ]
 
 const REPLAY_USAGE: &str = "\
 grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
+                  [--baseline-state]
 
 Прогоняет набор (имя в .grill-eval/corpus/ или путь к файлу) через быстрый контур
 приложения с настоящим Claude Code. Простой между фразами пропускается, во время
@@ -72,9 +76,32 @@ grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ
   --label L         метка отчёта (по умолчанию run)
   --rules ФАЙЛ      правила промпта из файла вместо встроенных
   --realtime        на настоящих часах, без пропуска простоя
+  --baseline-state  состояние вызова без строк «Пустые линзы» и «N мин без новых
+                    вопросов»: базовая линия, с которой их сравнивают
 
-Отчёт: .grill-eval/reports/<время>-<L>/report.json. Если агент недоступен (нет входа,
-исчерпан лимит), прогон останавливается и отчёт сохраняется как неполный.
+Отчёт: .grill-eval/reports/<время>-<L>/report.json и report.md с метриками. Если агент
+недоступен (нет входа, исчерпан лимит), прогон останавливается и отчёт сохраняется как
+неполный.
+";
+
+const JUDGE_USAGE: &str = "\
+grill-eval judge <отчёт>
+
+Размечает вопросы прогона (папка отчёта или его report.json) LLM-судьёй: claude-sonnet-5-5,
+один вызов на звонок (длинный — частями по 30 минут). Судья получает расшифровку набора
+(уточнённую, если она не короче 90 % живой), проект с брифом и вопросы прогона. Набор
+берётся из .grill-eval/corpus/ по имени из отчёта.
+
+Пишет judge.json рядом с отчётом и заново report.md. Ответ не по схеме — прогон
+«неразмечено» (judge.json с ошибкой), команда не падает.
+";
+
+const COMPARE_USAGE: &str = "\
+grill-eval compare <отчёт A> <отчёт B>
+
+Печатает таблицу метрик «A | B | разница» и вопросы, которые появились в B или пропали
+из A (пары — одна тема и похожий текст), и пишет то же в compare.md в папке B. Метки
+судьи берутся из judge.json, если он есть.
 ";
 
 /// The arguments after the subcommand.
@@ -158,9 +185,19 @@ pub fn main(args: Vec<String>) -> ExitCode {
             print!("{REPLAY_USAGE}");
             return ExitCode::SUCCESS;
         }
+        "judge" if wants_help(rest) => {
+            print!("{JUDGE_USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        "compare" if wants_help(rest) => {
+            print!("{COMPARE_USAGE}");
+            return ExitCode::SUCCESS;
+        }
         "export" => export_command(rest),
         "replay" => replay_command(rest),
-        "import" | "brief" | "judge" | "compare" => {
+        "judge" => judge_command(rest),
+        "compare" => compare_command(rest),
+        "import" | "brief" => {
             if wants_help(rest) {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -275,7 +312,11 @@ fn ready_cli(cwd: &Path) -> Result<PathBuf, String> {
 }
 
 fn replay_command(args: &[String]) -> Result<ExitCode, String> {
-    let parsed = parse(args, &["from", "to", "label", "rules"], &["realtime"])?;
+    let parsed = parse(
+        args,
+        &["from", "to", "label", "rules"],
+        &["realtime", "baseline-state"],
+    )?;
     let argument = one_positional(&parsed, "набор")?;
     let dir = eval_dir()?;
     let corpus = Corpus::load(&corpus::resolve(&dir, &argument))?;
@@ -299,6 +340,7 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         label: label.clone(),
         rules,
         realtime: parsed.switches.contains("realtime"),
+        baseline_state: parsed.switches.contains("baseline-state"),
         progress: true,
     };
     if let (Some(from), Some(to)) = (options.from_min, options.to_min)
@@ -328,8 +370,9 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
     let path = dir
         .join("reports")
         .join(format!("{stamp}-{label}"))
-        .join("report.json");
+        .join(report::REPORT_FILE);
     corpus::write_json(&path, &report)?;
+    write_markdown(&path, &report, None)?;
     let cost: f64 = report.calls.iter().filter_map(|call| call.cost_usd).sum();
     println!(
         "{}: {} вызовов, {} вопросов, {} тем, ${cost:.2}, {:.1} мин → {}",
@@ -351,6 +394,109 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         }
         None => Ok(ExitCode::SUCCESS),
     }
+}
+
+/// `report.md` next to the report file `path`.
+fn write_markdown(
+    path: &Path,
+    report: &Report,
+    judge: Option<&judge::Judge>,
+) -> Result<(), String> {
+    let file = path.with_file_name(report::MARKDOWN_FILE);
+    fs::write(&file, metrics::markdown(report, judge))
+        .map_err(|error| format!("Не удалось записать {}: {error}", file.display()))
+}
+
+/// `judge.json` next to the report file `path`, if the judge ran.
+fn load_judge(path: &Path) -> Result<Option<judge::Judge>, String> {
+    let file = path.with_file_name(judge::JUDGE_FILE);
+    if !file.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&file)
+        .map_err(|error| format!("Не удалось прочитать {}: {error}", file.display()))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| format!("{} не по формату: {error}", file.display()))
+}
+
+/// A runtime for the agent call of a subcommand.
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn judge_command(args: &[String]) -> Result<ExitCode, String> {
+    let parsed = parse(args, &[], &[])?;
+    let path = report::file_of(Path::new(&one_positional(&parsed, "отчёт")?));
+    let report = Report::load(&path)?;
+    let corpus = Corpus::load(&corpus::resolve(&eval_dir()?, &report.corpus))?;
+
+    let scratch = Scratch::new()?;
+    let cli = ready_cli(&scratch.0)?;
+    let agent: Arc<dyn Agent> = Arc::new(ClaudeCodeCli::new(cli, &scratch.0));
+    let judged = runtime()?.block_on(judge::run(&corpus, &report, agent, &scratch.0))?;
+    let file = path.with_file_name(judge::JUDGE_FILE);
+    corpus::write_json(&file, &judged)?;
+    write_markdown(&path, &report, Some(&judged))?;
+
+    let cost = judged.cost_usd.unwrap_or(0.0);
+    if !judged.labeled {
+        eprintln!(
+            "grill-eval: прогон неразмечен: {}",
+            judged.error.as_deref().unwrap_or("ответ не по схеме")
+        );
+        println!("Судья: неразмечено, ${cost:.2} → {}", file.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+    let found = metrics::compute(&report, Some(&judged));
+    let labels = found.labels.unwrap_or_default();
+    let counts: Vec<String> = judge::Label::ALL
+        .into_iter()
+        .map(|label| format!("{} {}", label.title(), labels.count(label)))
+        .collect();
+    let coverage = found.coverage.map_or_else(String::new, |coverage| {
+        format!(", покрытие {} из {}", coverage.covered, coverage.total)
+    });
+    println!(
+        "Судья: размечено {} из {} ({}){coverage}, отброшено {}, ${cost:.2} → {}",
+        labels.labeled,
+        report.questions.len(),
+        counts.join(", "),
+        judged.dropped.len(),
+        file.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn compare_command(args: &[String]) -> Result<ExitCode, String> {
+    let parsed = parse(args, &[], &[])?;
+    let [a, b] = parsed.positional.as_slice() else {
+        return Err("Нужны два отчёта: grill-eval compare <отчёт A> <отчёт B>".to_owned());
+    };
+    let (path_a, path_b) = (report::file_of(Path::new(a)), report::file_of(Path::new(b)));
+    let (report_a, report_b) = (Report::load(&path_a)?, Report::load(&path_b)?);
+    let (judge_a, judge_b) = (load_judge(&path_a)?, load_judge(&path_b)?);
+    let text = compare::markdown(
+        &compare::Run {
+            report: &report_a,
+            judge: judge_a.as_ref(),
+            place: path_a.display().to_string(),
+        },
+        &compare::Run {
+            report: &report_b,
+            judge: judge_b.as_ref(),
+            place: path_b.display().to_string(),
+        },
+    );
+    print!("{text}");
+    let file = path_b.with_file_name(compare::COMPARE_FILE);
+    fs::write(&file, &text)
+        .map_err(|error| format!("Не удалось записать {}: {error}", file.display()))?;
+    eprintln!("→ {}", file.display());
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
@@ -386,9 +532,13 @@ mod tests {
 
     #[test]
     fn subcommands_not_built_yet_fail() {
-        assert_eq!(main(args(&["judge", "report.json"])), ExitCode::FAILURE);
+        assert_eq!(main(args(&["import", "call.ogg"])), ExitCode::FAILURE);
+        assert_eq!(main(args(&["compare", "only-one"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["what"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["--help"])), ExitCode::SUCCESS);
         assert_eq!(main(args(&["replay", "--help"])), ExitCode::SUCCESS);
+        for command in ["judge", "compare"] {
+            assert_eq!(main(args(&[command, "--help"])), ExitCode::SUCCESS);
+        }
     }
 }

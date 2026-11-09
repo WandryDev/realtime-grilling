@@ -60,6 +60,7 @@ fn corpus(live: Vec<Segment>) -> Corpus {
                 "glossary": [{ "term": "Первичка", "definition": "Пациент без карты" }],
                 "keyDocuments": [],
             })),
+            brief_previous: None,
             sources: Vec::new(),
         }),
         people: vec![Person {
@@ -425,4 +426,46 @@ async fn the_real_clock_gives_the_same_calls() {
     assert!(!message(&agent, 0).contains("Ночью никто не отвечает"));
     assert!(report.run.wall_ms < 2_000, "{}", report.run.wall_ms);
     assert!((200..400).contains(&report.calls[0].at_ms), "{report:#?}");
+}
+
+/// The state's hints run on the replay's clock: 7 minutes after the
+/// question, with the client talking, the next call is told so; with
+/// `--baseline-state` it is not, nor of the empty lenses.
+#[tokio::test(start_paused = true)]
+async fn the_pause_line_follows_the_replay_clock_and_the_baseline_drops_it() {
+    let corpus = corpus(vec![
+        segment(1, ME, 4_000, "Что будет, если все операторы заняты?"),
+        segment(
+            2,
+            OTHERS,
+            10_000,
+            "Если все заняты, тогда уже как получится",
+        ),
+        segment(3, OTHERS, 7 * 60_000 + 30_000, "Ещё у нас ночная смена"),
+    ]);
+    let pause = "7 мин без новых вопросов. Проверь:";
+
+    let agent = FakeAgent::new([Step::patch(question_patch("seg-2"))]);
+    let report = replay(&corpus, agent.clone(), &options(), FAST).await;
+    assert_eq!(agent.calls(), 2);
+    let second = message(&agent, 1);
+    assert!(second.contains(pause), "{second}");
+    assert!(
+        second.contains("Пустые линзы: цель, пользователи,"),
+        "{second}"
+    );
+    assert!(!report.flags.baseline_state);
+    let fed: Vec<&str> = report.phrases.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(fed, ["seg-1", "seg-2", "seg-3"]);
+
+    let agent = FakeAgent::new([Step::patch(question_patch("seg-2"))]);
+    let options = Options {
+        baseline_state: true,
+        ..options()
+    };
+    let report = replay(&corpus, agent.clone(), &options, FAST).await;
+    let second = message(&agent, 1);
+    assert!(!second.contains("мин без новых вопросов"), "{second}");
+    assert!(!second.contains("Пустые линзы"), "{second}");
+    assert!(report.flags.baseline_state);
 }
