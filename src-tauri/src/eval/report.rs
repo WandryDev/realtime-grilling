@@ -84,6 +84,9 @@ pub struct Flags {
     /// `--no-gaps`: the brief without its gaps.
     #[serde(default)]
     pub no_gaps: bool,
+    /// `--quiet-minutes`: the pause threshold; `null` for the built-in one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_minutes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

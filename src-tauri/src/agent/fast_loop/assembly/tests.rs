@@ -178,11 +178,11 @@ fn the_prefix_with_gaps_is_byte_identical_between_calls() {
     assert_eq!(second, first);
 }
 
-/// The measured variant `--rules spikes/question-quality/rules-full.md` is
-/// the rules the app runs: they don't drift apart.
+/// The adopted variant `--rules spikes/question-quality/rules-full-v2.md`
+/// (task 4.3) is the rules the app runs: they don't drift apart.
 #[test]
-fn the_full_rules_variant_is_the_rules() {
-    let full = include_str!("../../../../../spikes/question-quality/rules-full.md");
+fn the_adopted_rules_variant_is_the_rules() {
+    let full = include_str!("../../../../../spikes/question-quality/rules-full-v2.md");
     assert_eq!(full, RULES);
     for rule in [
         "`G1…Gn`",
@@ -390,7 +390,7 @@ fn the_message_has_the_mode_the_state_with_ids_the_transcript_and_the_last_line(
     call_state::act(&db, &hidden, call_state::QuestionAction::Hide).unwrap();
 
     let prefix = build_prefix(&db, &id).unwrap();
-    let assembled = assemble(&db, &id, &prefix, now_ms(), true).unwrap();
+    let assembled = assemble(&db, &id, &prefix, now_ms(), Some(QUIET_MINUTES)).unwrap();
     let message = &assembled.user_message;
     let topic = &applied.topic_ids[0];
     for part in [
@@ -437,7 +437,7 @@ fn the_message_has_the_mode_the_state_with_ids_the_transcript_and_the_last_line(
         },
     )
     .unwrap();
-    let message = assemble(&db, &id, &prefix, now_ms(), true)
+    let message = assemble(&db, &id, &prefix, now_ms(), Some(QUIET_MINUTES))
         .unwrap()
         .user_message;
     assert!(
@@ -451,7 +451,7 @@ fn an_empty_state_says_so() {
     let db = database();
     let id = recording(&db);
     let prefix = build_prefix(&db, &id).unwrap();
-    let message = assemble(&db, &id, &prefix, now_ms(), true)
+    let message = assemble(&db, &id, &prefix, now_ms(), Some(QUIET_MINUTES))
         .unwrap()
         .user_message;
     for part in [
@@ -543,7 +543,7 @@ fn the_state_cannot_forge_a_transcript_line() {
     )
     .unwrap();
     let prefix = build_prefix(&db, &id).unwrap();
-    let message = assemble(&db, &id, &prefix, now_ms(), true)
+    let message = assemble(&db, &id, &prefix, now_ms(), Some(QUIET_MINUTES))
         .unwrap()
         .user_message;
     assert!(
@@ -610,7 +610,7 @@ fn topic_with_a_question(db: &Connection, id: &str) {
 
 fn message_at(db: &Connection, id: &str, minutes: f64) -> String {
     let prefix = build_prefix(db, id).unwrap();
-    assemble(db, id, &prefix, wall(minutes), true)
+    assemble(db, id, &prefix, wall(minutes), Some(QUIET_MINUTES))
         .unwrap()
         .user_message
 }
@@ -818,8 +818,8 @@ fn the_hints_leave_the_prefix_alone_and_the_baseline_has_none() {
     // The rules name the line; the line itself is not in the prefix.
     assert!(!prefix.text.contains("Пустые линзы:"));
 
-    let with = assemble(&db, &id, &prefix, wall(9.5), true).unwrap();
-    let without = assemble(&db, &id, &prefix, wall(9.5), false).unwrap();
+    let with = assemble(&db, &id, &prefix, wall(9.5), Some(QUIET_MINUTES)).unwrap();
+    let without = assemble(&db, &id, &prefix, wall(9.5), None).unwrap();
     assert!(with.user_message.contains(PAUSE_LINE));
     assert!(!without.user_message.contains(PAUSE_LINE));
     assert!(!without.user_message.contains("Пустые линзы"));

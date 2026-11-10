@@ -84,9 +84,9 @@ pub const RULES: &str = r#"# Правила
 
 ## Качество вопросов
 
-- Вопрос рождается только там, где поле карточки текущей темы не раскрыто (пусто или общие слова), или в нём допущение или противоречие. Вопрос не о поле карточки текущей темы будет отброшен.
+- Вопрос рождается только там, где поле карточки текущей темы не раскрыто (пусто или общие слова), или в нём допущение или противоречие. Вопрос не о поле карточки текущей темы будет отброшен. Если клиент уже ответил «точно не знаю», «данных нет» или дал оценку («около трети»), поле раскрыто: не переспрашивай то же другими словами.
 - Первый вопрос темы — сразу. Как только у текущей темы есть цель, а у неё нет ни одного открытого вопроса, в том же патче предложи 1 вопрос по самому важному пустому полю: обычно `users`, `integrations` или `acceptance` — то, без чего задачу нельзя оценить. Пустое ключевое поле — настоящий пробел, а не повод ждать: не возвращай патч только из `card`, если такое поле пусто. Основание — фраза клиента, где он описал задачу; `gapType: "empty"`.
-- Пункт «Неясно до звонка» (`G…`) поднимай вопросом, когда клиент в текущей теме заговорил о его линзе: основание — пункт `G` и фраза клиента, `cardField` — линза пункта. Пункты, которых разговор не касался, не поднимай. Пункт, о котором уже есть вопрос звонка, не повторяй.
+- Пункт «Неясно до звонка» (`G…`) поднимай вопросом, когда клиент в текущей теме заговорил о его линзе: основание — пункт `G` и фраза клиента, `cardField` — линза пункта. Пункты, которых разговор не касался, не поднимай. Пункт, о котором уже есть вопрос звонка или на который клиент уже ответил в расшифровке, не поднимай.
 - Не больше 2 новых вопросов за вызов. В деталях сомневаешься — не спрашивай.
 - Не задавай вопрос, если ответ уже есть в расшифровке, в проекте или в карточке.
 - Не повторяй вопросы звонка — открытые, отвеченные, заданные и скрытые; сверяйся по смыслу, а не по словам. Скрытые менеджер отклонил: не предлагай их снова в другой формулировке.
@@ -449,8 +449,8 @@ fn question_line(question: &Question, state: &CallState) -> String {
 /// against (`grill-eval replay --baseline-state`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Hints {
-    /// Whole minutes without a new question, when at least
-    /// [`QUIET_MINUTES`] and the client spoke meanwhile.
+    /// Whole minutes without a new question, when at least the threshold
+    /// ([`QUIET_MINUTES`] in the app) and the client spoke meanwhile.
     pub quiet_minutes: Option<i64>,
 }
 
@@ -461,12 +461,14 @@ impl Hints {
     /// only when a live phrase of «Остальные» ended after it. None in the
     /// final check: it asks for no new topics, and the pause line would
     /// push towards them. `segments` are the recording's, their times from
-    /// `recording_started_at`.
+    /// `recording_started_at`. `threshold` is the pause in whole minutes
+    /// that the line starts at.
     pub fn at(
         state: &CallState,
         segments: &[TranscriptSegment],
         recording_started_at: i64,
         now_ms: i64,
+        threshold: i64,
     ) -> Self {
         if state.final_check.is_some() {
             return Self::default();
@@ -487,7 +489,7 @@ impl Hints {
         });
         let minutes = (now_ms - since) / MINUTE_MS;
         Self {
-            quiet_minutes: (client_spoke && minutes >= QUIET_MINUTES).then_some(minutes),
+            quiet_minutes: (client_spoke && minutes >= threshold).then_some(minutes),
         }
     }
 }
@@ -624,20 +626,21 @@ pub struct Assembled {
 }
 
 /// Reads the state and the transcript of `recording_id` and assembles a
-/// call with `prefix` at `now_ms` (Unix ms, the host's clock). Without
-/// `hints` the state leaves out the lines of decision 7.
+/// call with `prefix` at `now_ms` (Unix ms, the host's clock). `hints` is
+/// the pause threshold in minutes; without it the state leaves out the
+/// lines of decision 7.
 pub fn assemble(
     connection: &Connection,
     recording_id: &str,
     prefix: &Prefix,
     now_ms: i64,
-    hints: bool,
+    hints: Option<i64>,
 ) -> CommandResult<Assembled> {
     let state = call_state::get(connection, recording_id)?;
     let segments = transcript::for_recording(connection, recording_id)?;
-    let hints = if hints {
+    let hints = if let Some(threshold) = hints {
         let started_at = recordings::get(connection, recording_id)?.started_at;
-        Some(Hints::at(&state, &segments, started_at, now_ms))
+        Some(Hints::at(&state, &segments, started_at, now_ms, threshold))
     } else {
         None
     };

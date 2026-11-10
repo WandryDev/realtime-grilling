@@ -108,6 +108,10 @@ pub struct LoopConfig {
     /// decision 7): on in the app; a replay may leave them out to measure
     /// them (`grill-eval replay --baseline-state`).
     pub state_hints: bool,
+    /// Whole minutes without a new question before the pause line shows:
+    /// [`assembly::QUIET_MINUTES`] in the app; a replay may try another
+    /// value (`grill-eval replay --quiet-minutes`, question-quality task 4.4).
+    pub quiet_minutes: i64,
 }
 
 impl LoopConfig {
@@ -119,6 +123,7 @@ impl LoopConfig {
             cancel_wait: Duration::from_secs(5),
             rules: Cow::Borrowed(assembly::RULES),
             state_hints: true,
+            quiet_minutes: assembly::QUIET_MINUTES,
         }
     }
 }
@@ -718,7 +723,7 @@ async fn run_call(
     let started = Instant::now();
 
     let (id, prefix) = (call.recording_id.clone(), Arc::clone(&call.prefix));
-    let hints = config.state_hints;
+    let hints = config.state_hints.then_some(config.quiet_minutes);
     let assembled = match database(host, move |connection| {
         assembly::assemble(connection, &id, &prefix, started_at, hints)
     })

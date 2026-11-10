@@ -96,6 +96,9 @@ pub struct Options {
     /// `--no-gaps`: the brief without its gaps (decision 6), so the prefix
     /// says «Неясно до звонка: нет».
     pub no_gaps: bool,
+    /// `--quiet-minutes`: the pause threshold instead of
+    /// `assembly::QUIET_MINUTES` (task 4.4).
+    pub quiet_minutes: Option<i64>,
     /// Where the corpus was read from, for `judge`.
     pub corpus_path: Option<String>,
     /// Progress lines on stderr.
@@ -519,6 +522,9 @@ pub async fn run(
         config.rules = Cow::Owned(rules.text.clone());
     }
     config.state_hints = !options.baseline_state;
+    if let Some(minutes) = options.quiet_minutes {
+        config.quiet_minutes = minutes;
+    }
     let rules_sha256 = report::sha256_hex(&config.rules);
     let fast_loop = FastLoop::new(
         Arc::clone(&loop_host),
@@ -603,6 +609,7 @@ pub async fn run(
             rules_file: options.rules.as_ref().map(|rules| rules.file.clone()),
             baseline_state: options.baseline_state,
             no_gaps: options.no_gaps,
+            quiet_minutes: options.quiet_minutes,
         },
         run: Run {
             started_at: run_started_at,

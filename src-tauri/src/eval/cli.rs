@@ -49,7 +49,7 @@ grill-eval — прогон записанных звонков через бы�
   brief <набор>
       Пересобрать бриф набора нынешним промптом брифа; прежний остаётся в briefPrevious.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
-         [--baseline-state] [--no-gaps]
+         [--baseline-state] [--no-gaps] [--quiet-minutes N]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
       .grill-eval/reports/<время>-<L>-<n>/report.json и report.md.
   judge <отчёт>
@@ -115,7 +115,7 @@ grill-eval import <аудио> [--others <аудио>] [--channels left=me|right
 
 const REPLAY_USAGE: &str = "\
 grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
-                  [--baseline-state] [--no-gaps]
+                  [--baseline-state] [--no-gaps] [--quiet-minutes N]
 
 Прогоняет набор (имя в .grill-eval/corpus/ или путь к файлу) через быстрый контур
 приложения с настоящим Claude Code. Простой между фразами пропускается, во время
@@ -131,6 +131,8 @@ grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ
   --baseline-state  состояние вызова без строк «Пустые линзы» и «N мин без новых
                     вопросов»: базовая линия, с которой их сравнивают
   --no-gaps         бриф без пунктов «Неясно до звонка»
+  --quiet-minutes N строка «N мин без новых вопросов» с N минут паузы, а не с 5
+                    (подбор порога, задача 4.4)
 
 Базовая линия до изменения question-quality (правила, состояние и бриф как раньше):
   --rules spikes/question-quality/rules-baseline.md --baseline-state --no-gaps
@@ -339,6 +341,23 @@ fn minutes_arg(parsed: &Parsed, name: &str) -> Result<Option<f64>, String> {
         .transpose()
 }
 
+/// `--quiet-minutes`: whole minutes, at least 1.
+fn quiet_minutes_arg(parsed: &Parsed) -> Result<Option<i64>, String> {
+    parsed
+        .values
+        .get("quiet-minutes")
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .filter(|minutes| *minutes >= 1)
+                .ok_or_else(|| {
+                    format!("--quiet-minutes: нужно целое число минут от 1, а не «{value}»")
+                })
+        })
+        .transpose()
+}
+
 /// A folder in `.grill-eval/tmp/`, removed with everything in it when
 /// dropped: the prefix files hold the client's project, the import's work
 /// files their audio. After a Ctrl-C or a panic it stays there, inside the
@@ -414,7 +433,7 @@ fn ready_cli(cwd: &Path) -> Result<PathBuf, String> {
 fn replay_command(args: &[String]) -> Result<ExitCode, String> {
     let parsed = parse(
         args,
-        &["from", "to", "label", "rules"],
+        &["from", "to", "label", "rules", "quiet-minutes"],
         &["realtime", "baseline-state", "no-gaps"],
     )?;
     let argument = one_positional(&parsed, "набор")?;
@@ -447,6 +466,7 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         realtime: parsed.switches.contains("realtime"),
         baseline_state: parsed.switches.contains("baseline-state"),
         no_gaps: parsed.switches.contains("no-gaps"),
+        quiet_minutes: quiet_minutes_arg(&parsed)?,
         corpus_path: Some(corpus_path),
         progress: true,
     };
