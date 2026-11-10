@@ -79,6 +79,7 @@ fn corpus(live: Vec<Segment>) -> Corpus {
         live,
         refined: None,
         original: None,
+        discussion_end_ms: None,
     }
 }
 

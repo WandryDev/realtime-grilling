@@ -9,21 +9,30 @@
 //!   the run's start to the first, between two, from the last to the run's
 //!   last phrase) in which the client said at least
 //!   [`PAUSE_CLIENT_PHRASES`] phrases.
+//! - The latency of a question is from the end of the last phrase it
+//!   quotes to when it was first shown (question-volume, decision 5); a
+//!   question that quotes no phrase has none.
+//! - The pace by thirds splits the run's span in three equal parts.
 //! - Percentiles are nearest-rank.
 
-use std::{collections::BTreeMap, fmt::Write as _};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Write as _,
+};
 
 use serde_json::Value;
 
 use super::{
     corpus::Channels,
     judge::{Judge, Label, Pass},
-    report::{Report, ReportQuestion},
+    report::{CallKind, Report, ReportQuestion},
 };
-use crate::storage::transcript::TranscriptChannel;
+use crate::storage::{call_state::EvidenceSource, transcript::TranscriptChannel};
 
 /// A pause counts when the client said at least this many phrases in it.
 pub const PAUSE_CLIENT_PHRASES: usize = 5;
+/// A question shown later than this after its phrase counts as late.
+pub const LATE_MS: i64 = 15_000;
 /// Examples of a rejection reason or a label in `report.md`.
 const EXAMPLES: usize = 3;
 /// What a rules variant (`--rules`) leaves as it is, in `report.md`.
@@ -40,6 +49,10 @@ pub struct Metrics {
     /// The run's span: from its start to its last phrase, ms.
     pub span_ms: i64,
     pub per_ten_minutes: Option<f64>,
+    /// Questions per 10 minutes in each third of the span.
+    pub per_ten_minutes_by_third: Option<[f64; 3]>,
+    /// `None` without a shown question that quotes a phrase.
+    pub latency: Option<Latency>,
     /// `None` until the judge labeled the run.
     pub labels: Option<LabelCounts>,
     /// `None` until the judge labeled the run.
@@ -92,6 +105,23 @@ pub struct FirstQuestion {
     pub after_ms: Option<i64>,
 }
 
+/// From the phrase a question quotes to the question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Latency {
+    pub p50_ms: i64,
+    pub p90_ms: i64,
+    /// Shown later than [`LATE_MS`].
+    pub late: usize,
+    /// Questions with a phrase to measure from.
+    pub counted: usize,
+}
+
+impl Latency {
+    pub fn late_share(self) -> Option<f64> {
+        ratio(self.late, self.counted)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pause {
     pub from_ms: i64,
@@ -122,6 +152,9 @@ pub struct Calls {
     pub cache_read: i64,
     pub cache_write: i64,
     pub cost_usd: f64,
+    /// Topic-check calls, counted in `count` and `cost_usd` too.
+    pub topic_checks: usize,
+    pub topic_check_cost_usd: f64,
 }
 
 impl Metrics {
@@ -163,21 +196,35 @@ pub fn start_ms(report: &Report) -> i64 {
         .map_or(0, |minutes| (minutes * 60_000.0).round() as i64)
 }
 
+/// The corpus's end of the discussion, when it falls after the run's start.
+pub fn discussion_end(report: &Report) -> Option<i64> {
+    report
+        .discussion_end_ms
+        .filter(|mark| *mark > start_ms(report))
+}
+
 /// The metrics of `report`, with the judge's labels when it has them.
 pub fn compute(report: &Report, judge: Option<&Judge>) -> Metrics {
     let start = start_ms(report);
     let shown: Vec<(&ReportQuestion, i64)> = report.shown().collect();
     let last_question = shown.iter().map(|(_, at)| *at).max();
-    let end = report
+    let run_end = report
         .run
         .last_fed_ms
         .into_iter()
         .chain(last_question)
         .max()
         .unwrap_or(start);
+    let end = discussion_end(report).map_or(run_end, |mark| mark.min(run_end));
     let span_ms = (end - start).max(0);
+    // The pace and the pause stop at the end of the discussion.
+    let marks: Vec<i64> = shown
+        .iter()
+        .map(|(_, at)| *at)
+        .filter(|at| *at <= end)
+        .collect();
     #[allow(clippy::cast_precision_loss)]
-    let per_ten_minutes = (span_ms > 0).then(|| shown.len() as f64 * 600_000.0 / span_ms as f64);
+    let per_ten_minutes = (span_ms > 0).then(|| marks.len() as f64 * 600_000.0 / span_ms as f64);
 
     let judged = judge.filter(|judge| judge.labeled);
     let labels = judged.map(|judge| {
@@ -213,13 +260,15 @@ pub fn compute(report: &Report, judge: Option<&Judge>) -> Metrics {
         })
         .collect();
     let afters: Vec<i64> = first_questions.iter().filter_map(|f| f.after_ms).collect();
-    let marks: Vec<i64> = shown.iter().map(|(_, at)| *at).collect();
+    let per_ten_minutes_by_third = by_thirds(&marks, start, span_ms);
 
     Metrics {
         questions: shown.len(),
         never_shown: report.never_shown().count(),
         span_ms,
         per_ten_minutes,
+        per_ten_minutes_by_third,
+        latency: latency(report, &shown),
         labels,
         coverage,
         first_question_median_ms: percentile(&afters, 0.5),
@@ -229,6 +278,51 @@ pub fn compute(report: &Report, judge: Option<&Judge>) -> Metrics {
         rejected: rejected(report),
         calls: calls(report),
     }
+}
+
+/// Questions per 10 minutes in each third of `[start, start + span_ms]`;
+/// the last third keeps its end.
+#[allow(clippy::cast_precision_loss)]
+fn by_thirds(marks: &[i64], start: i64, span_ms: i64) -> Option<[f64; 3]> {
+    if span_ms <= 0 {
+        return None;
+    }
+    let mut counts = [0_usize; 3];
+    for at in marks {
+        let offset = (at - start).clamp(0, span_ms);
+        // 3 * offset / span_ms is 0..=3; the end belongs to the last third.
+        let third = usize::try_from(3 * offset / span_ms).unwrap_or(0).min(2);
+        counts[third] += 1;
+    }
+    let third_ms = span_ms as f64 / 3.0;
+    Some(counts.map(|count| count as f64 * 600_000.0 / third_ms))
+}
+
+/// `shown`: the shown questions with when they were first shown.
+fn latency(report: &Report, shown: &[(&ReportQuestion, i64)]) -> Option<Latency> {
+    let ends: HashMap<&str, i64> = report
+        .phrases
+        .iter()
+        .map(|phrase| (phrase.id.as_str(), phrase.end_ms))
+        .collect();
+    let delays: Vec<i64> = shown
+        .iter()
+        .filter_map(|(question, shown_at)| {
+            let phrase_end = question
+                .evidence
+                .iter()
+                .filter(|evidence| evidence.source == EvidenceSource::Segment)
+                .filter_map(|evidence| ends.get(evidence.id.as_str()).copied())
+                .max()?;
+            Some((shown_at - phrase_end).max(0))
+        })
+        .collect();
+    Some(Latency {
+        p50_ms: percentile(&delays, 0.5)?,
+        p90_ms: percentile(&delays, 0.9)?,
+        late: delays.iter().filter(|delay| **delay > LATE_MS).count(),
+        counted: delays.len(),
+    })
 }
 
 /// `marks`: when the shown questions were first shown.
@@ -322,6 +416,19 @@ fn calls(report: &Report) -> Calls {
         cache_read: sum(|call| call.cache_read),
         cache_write: sum(|call| call.cache_write),
         cost_usd: report.calls.iter().filter_map(|call| call.cost_usd).sum(),
+        topic_checks: report
+            .calls
+            .iter()
+            .filter(|call| call.kind == CallKind::TopicCheck)
+            .count(),
+        topic_check_cost_usd: report
+            .calls
+            .iter()
+            .filter(|call| call.kind == CallKind::TopicCheck)
+            .filter_map(|call| call.cost_usd)
+            // An empty sum of f64 is -0.0.
+            .sum::<f64>()
+            + 0.0,
     }
 }
 
@@ -409,6 +516,12 @@ pub fn header(report: &Report) -> Vec<String> {
              с такими же наборами"
                 .to_owned(),
         );
+    }
+    if let Some(mark) = discussion_end(report) {
+        lines.push(format!(
+            "Конец обсуждения: {} — пауза и вопросы на 10 минут считаются до него",
+            clock(mark)
+        ));
     }
     lines.push(match (&report.complete, &report.stopped) {
         (true, _) => "Прогон: завершён".to_owned(),
@@ -624,6 +737,12 @@ fn value(number: f64, kind: Kind, shown: String) -> Option<MetricValue> {
     })
 }
 
+const THIRDS: [&str; 3] = [
+    "Вопросов на 10 минут, 1-я треть",
+    "Вопросов на 10 минут, 2-я треть",
+    "Вопросов на 10 минут, 3-я треть",
+];
+
 /// The rows of the metrics table, in the order of decision 5.
 #[allow(clippy::cast_precision_loss)]
 pub fn rows(metrics: &Metrics) -> Vec<(&'static str, Option<MetricValue>)> {
@@ -640,6 +759,15 @@ pub fn rows(metrics: &Metrics) -> Vec<(&'static str, Option<MetricValue>)> {
         })
     };
     let calls = &metrics.calls;
+    let latency = metrics.latency;
+    let third = |index: usize| {
+        (
+            THIRDS[index],
+            metrics.per_ten_minutes_by_third.and_then(|rates| {
+                value(rates[index], Kind::Decimal, format!("{:.1}", rates[index]))
+            }),
+        )
+    };
     vec![
         (
             "Показано вопросов",
@@ -662,6 +790,38 @@ pub fn rows(metrics: &Metrics) -> Vec<(&'static str, Option<MetricValue>)> {
             metrics
                 .per_ten_minutes
                 .and_then(|rate| value(rate, Kind::Decimal, format!("{rate:.1}"))),
+        ),
+        third(0),
+        third(1),
+        third(2),
+        (
+            "От фразы до вопроса, p50",
+            latency.and_then(|latency| {
+                value(
+                    latency.p50_ms as f64,
+                    Kind::Seconds,
+                    seconds(latency.p50_ms),
+                )
+            }),
+        ),
+        (
+            "От фразы до вопроса, p90",
+            latency.and_then(|latency| {
+                value(
+                    latency.p90_ms as f64,
+                    Kind::Seconds,
+                    seconds(latency.p90_ms),
+                )
+            }),
+        ),
+        (
+            "Позже 15 с после фразы",
+            latency.and_then(|latency| {
+                share(
+                    latency.late_share(),
+                    format!("{} из {}", latency.late, latency.counted),
+                )
+            }),
         ),
         ("Доля полезных («задал бы»)", label_share(Label::WouldAsk)),
         ("Доля выдуманных", label_share(Label::Fabricated)),
@@ -715,6 +875,17 @@ pub fn rows(metrics: &Metrics) -> Vec<(&'static str, Option<MetricValue>)> {
         (
             "Вызовы",
             value(calls.count as f64, Kind::Count, calls.count.to_string()),
+        ),
+        (
+            "Вызовы проверки темы",
+            value(
+                calls.topic_checks as f64,
+                Kind::Count,
+                format!(
+                    "{} (${:.2})",
+                    calls.topic_checks, calls.topic_check_cost_usd
+                ),
+            ),
         ),
         (
             "Вызов p50",

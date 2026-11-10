@@ -597,6 +597,7 @@ pub async fn run(
         version: report::FORMAT,
         corpus: corpus.name.clone(),
         corpus_path: options.corpus_path.clone(),
+        discussion_end_ms: corpus.discussion_end_ms,
         label: options.label.clone(),
         complete: stopped.is_none(),
         stopped,

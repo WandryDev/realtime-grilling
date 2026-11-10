@@ -199,6 +199,7 @@ pub fn build(
         live,
         refined: (!refined.is_empty()).then_some(refined),
         original: Some(original(connection, recording_id)?),
+        discussion_end_ms: None,
     })
 }
 

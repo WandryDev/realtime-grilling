@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::corpus::Channels;
+use super::corpus::{Channels, Corpus};
 use crate::{
     agent::fast_loop::events::AgentLoopState,
     error::CommandResult,
@@ -65,6 +65,11 @@ pub struct Report {
     /// has none.
     #[serde(default)]
     pub phrases: Vec<Phrase>,
+    /// The corpus's end of the discussion, ms from the call's start. A
+    /// report without it takes the corpus's when loaded, so a mark set
+    /// later applies to the runs made before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_end_ms: Option<i64>,
 }
 
 /// How the run was started.
@@ -143,6 +148,10 @@ pub struct ReportQuestion {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportCall {
+    /// Fast loop or topic check; reports before the topic check have only
+    /// fast-loop calls.
+    #[serde(default)]
+    pub kind: CallKind,
     pub at_ms: i64,
     pub duration_ms: i64,
     pub outcome: AgentCallOutcome,
@@ -155,6 +164,15 @@ pub struct ReportCall {
     /// (`validate::Rejection`).
     pub rejected: Value,
     pub error: Option<String>,
+}
+
+/// What an agent call was for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CallKind {
+    #[default]
+    FastLoop,
+    TopicCheck,
 }
 
 /// A live segment fed to the loop.
@@ -196,6 +214,13 @@ impl Report {
             for question in &mut report.questions {
                 question.shown_at_ms = Some(question.at_ms);
             }
+        }
+        if report.discussion_end_ms.is_none() {
+            report.discussion_end_ms = report
+                .corpus_path
+                .as_deref()
+                .and_then(|corpus| Corpus::load(Path::new(corpus)).ok())
+                .and_then(|corpus| corpus.discussion_end_ms);
         }
         Ok(report)
     }
@@ -276,6 +301,7 @@ pub fn results(
     let calls = call_state::agent_calls(connection, recording_id)?
         .into_iter()
         .map(|call| ReportCall {
+            kind: CallKind::FastLoop,
             at_ms: since(call.started_at),
             duration_ms: call.duration_ms,
             outcome: call.outcome,

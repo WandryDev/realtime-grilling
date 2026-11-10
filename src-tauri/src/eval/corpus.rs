@@ -60,6 +60,10 @@ pub struct Corpus {
     /// What the live run of the call produced.
     #[serde(default)]
     pub original: Option<Original>,
+    /// Where the talk about the project ends, ms from the call's start
+    /// (`grill-eval mark`): the pause and the pace stop there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_end_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

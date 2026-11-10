@@ -303,3 +303,148 @@ fn an_empty_report_has_dashes() {
     assert!(text.contains("Тем нет."), "{text}");
     assert!(text.contains("Показанных вопросов нет."), "{text}");
 }
+
+fn quoting(id: &str, at_ms: i64, segments: &[&str]) -> ReportQuestion {
+    let mut question = question(id, at_ms, "t1", "Кто отвечает ночью?");
+    question.evidence = segments
+        .iter()
+        .map(|segment| {
+            let source = if segment.starts_with('G') {
+                EvidenceSource::Project
+            } else {
+                EvidenceSource::Segment
+            };
+            crate::storage::call_state::Evidence {
+                source,
+                id: (*segment).to_owned(),
+                quote: "звонки теряются в час пик".to_owned(),
+            }
+        })
+        .collect();
+    question
+}
+
+/// From the end of the last quoted phrase to when the question was shown.
+#[test]
+fn the_latency_runs_from_the_last_quoted_phrase() {
+    let phrases = vec![
+        phrase("s1", OTHERS, MINUTE),
+        phrase("s2", OTHERS, 2 * MINUTE),
+        phrase("s3", OTHERS, 3 * MINUTE),
+    ];
+    let mut waited = quoting("q3", 3 * MINUTE + 4_000, &["s3"]);
+    // Added 4 s after its phrase, shown 20 s later behind a full list.
+    waited.shown_at_ms = Some(3 * MINUTE + 24_000);
+    let questions = vec![
+        // Two phrases: from the later one, 2:00 → 2:06.
+        quoting("q1", 2 * MINUTE + 6_000, &["s1", "s2"]),
+        // Only a brief gap: no phrase to measure from.
+        quoting("q2", 2 * MINUTE + 30_000, &["G1"]),
+        waited,
+    ];
+    let report = report_with(vec![topic("t1", "Ночь", 0)], questions, phrases);
+    let latency = compute(&report, None).latency.unwrap();
+    assert_eq!(
+        latency,
+        Latency {
+            p50_ms: 6_000,
+            p90_ms: 24_000,
+            late: 1,
+            counted: 2,
+        }
+    );
+    assert_eq!(latency.late_share(), Some(0.5));
+
+    let text = markdown(&report, None);
+    for part in [
+        "| От фразы до вопроса, p50 | 6.0 с |",
+        "| От фразы до вопроса, p90 | 24.0 с |",
+        "| Позже 15 с после фразы | 50% (1 из 2) |",
+    ] {
+        assert!(text.contains(part), "no «{part}» in\n{text}");
+    }
+
+    let unquoted = report_with(
+        vec![topic("t1", "Ночь", 0)],
+        vec![quoting("q2", MINUTE, &["G1"])],
+        vec![phrase("s1", OTHERS, MINUTE)],
+    );
+    assert_eq!(compute(&unquoted, None).latency, None);
+}
+
+/// «Затухание на длинном звонке»: questions only in the first third.
+#[test]
+fn the_pace_by_thirds_shows_the_fading() {
+    let questions = (0..6)
+        .map(|n| question(&format!("q{n}"), (n * 4 + 1) * MINUTE, "t1", "Кто?"))
+        .collect();
+    let phrases = (1..=75)
+        .map(|n| phrase(&format!("c{n}"), OTHERS, n * MINUTE))
+        .collect();
+    let report = report_with(vec![topic("t1", "Бронь", 0)], questions, phrases);
+    let metrics = compute(&report, None);
+    assert_eq!(metrics.per_ten_minutes_by_third, Some([2.4, 0.0, 0.0]));
+    let text = markdown(&report, None);
+    for part in [
+        "| Вопросов на 10 минут, 1-я треть | 2.4 |",
+        "| Вопросов на 10 минут, 2-я треть | 0.0 |",
+        "| Вопросов на 10 минут, 3-я треть | 0.0 |",
+    ] {
+        assert!(text.contains(part), "no «{part}» in\n{text}");
+    }
+    assert_eq!(
+        compute(&report_with(Vec::new(), Vec::new(), Vec::new()), None).per_ten_minutes_by_third,
+        None
+    );
+}
+
+#[test]
+fn topic_checks_are_counted_apart() {
+    let mut report = run();
+    report.calls[3].kind = CallKind::TopicCheck;
+    report.calls[7].kind = CallKind::TopicCheck;
+    let calls = compute(&report, None).calls;
+    assert_eq!(calls.count, 20);
+    assert_eq!(calls.topic_checks, 2);
+    assert!((calls.topic_check_cost_usd - 0.1).abs() < 1e-9);
+    assert!(markdown(&report, None).contains("| Вызовы проверки темы | 2 ($0.10) |"));
+}
+
+/// «Разговор после конца обсуждения»: 12 minutes off the project, without
+/// questions, are not a pause.
+#[test]
+fn the_pause_and_the_pace_stop_at_the_end_of_the_discussion() {
+    let questions = vec![
+        question("q1", 50 * MINUTE, "t1", "Кто?"),
+        question("q2", 53 * MINUTE, "t1", "Сколько?"),
+    ];
+    let phrases = (40..=76)
+        .map(|n| phrase(&format!("c{n}"), OTHERS, n * MINUTE))
+        .collect();
+    let mut report = report_with(vec![topic("t1", "Бронь", 40 * MINUTE)], questions, phrases);
+    report.flags.from_min = Some(40.0);
+    let unmarked = compute(&report, None).longest_pause.unwrap();
+    assert_eq!(
+        (unmarked.from_ms, unmarked.to_ms),
+        (53 * MINUTE, 76 * MINUTE)
+    );
+
+    report.discussion_end_ms = Some(63 * MINUTE + 45_000);
+    let metrics = compute(&report, None);
+    let pause = metrics.longest_pause.unwrap();
+    assert_eq!(
+        (pause.from_ms, pause.to_ms),
+        (53 * MINUTE, 63 * MINUTE + 45_000)
+    );
+    assert_eq!(metrics.span_ms, 23 * MINUTE + 45_000);
+    let text = markdown(&report, None);
+    assert!(
+        text.contains("- Конец обсуждения: 63:45 — пауза и вопросы на 10 минут считаются до него"),
+        "{text}"
+    );
+
+    // A mark before the run's start does nothing.
+    report.discussion_end_ms = Some(30 * MINUTE);
+    assert_eq!(compute(&report, None).longest_pause, Some(unmarked));
+    assert!(!markdown(&report, None).contains("Конец обсуждения"));
+}

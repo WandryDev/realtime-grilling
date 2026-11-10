@@ -66,6 +66,7 @@ pub fn corpus(live: Vec<Segment>) -> Corpus {
         live,
         refined: None,
         original: None,
+        discussion_end_ms: None,
     }
 }
 
@@ -120,6 +121,7 @@ pub fn phrase(id: &str, channel: TranscriptChannel, end_ms: i64) -> Phrase {
 
 pub fn call(at_ms: i64, duration_ms: i64, cost_usd: f64, rejected: Value) -> ReportCall {
     ReportCall {
+        kind: report::CallKind::FastLoop,
         at_ms,
         duration_ms,
         outcome: AgentCallOutcome::Ok,
@@ -139,6 +141,7 @@ pub fn report() -> Report {
         version: report::FORMAT,
         corpus: "telemedia".to_owned(),
         corpus_path: None,
+        discussion_end_ms: None,
         label: "test".to_owned(),
         complete: true,
         stopped: None,

@@ -440,6 +440,7 @@ pub async fn run(
         live: Vec::new(),
         refined: None,
         original: None,
+        discussion_end_ms: None,
     };
 
     let transcribed = passes::transcribe(

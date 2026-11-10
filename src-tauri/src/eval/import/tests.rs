@@ -517,6 +517,7 @@ fn a_mono_recording_is_mixed_before_labeling() {
         live: Vec::new(),
         refined: None,
         original: None,
+        discussion_end_ms: None,
     };
 
     let transcribed = block_on(passes::transcribe(

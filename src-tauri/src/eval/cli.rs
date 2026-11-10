@@ -48,6 +48,10 @@ grill-eval — прогон записанных звонков через бы�
       копируется в .grill-eval/audio/<N>/. Нужен ffmpeg.
   brief <набор>
       Пересобрать бриф набора нынешним промптом брифа; прежний остаётся в briefPrevious.
+  report <отчёт>...
+      Пересчитать метрики готовых отчётов: report.md заново из report.json и judge.json.
+  mark <набор> --discussion-end ММ:СС|none
+      Отметить конец обсуждения проекта: пауза и темп в отчётах считаются до него.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
          [--baseline-state] [--no-gaps] [--quiet-minutes N]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
@@ -175,6 +179,15 @@ grill-eval brief <набор>
 бриф остаётся в поле briefPrevious.
 ";
 
+const MARK_USAGE: &str = "\
+grill-eval mark <набор> --discussion-end ММ:СС|none
+
+Записывает в набор, где кончается обсуждение проекта (минуты и секунды от начала
+звонка, минут может быть больше 59). Самая длинная пауза и вопросы на 10 минут в
+отчётах считаются до этой отметки; отчёт показывает, что она применена. Отметка
+действует и на отчёты, сделанные раньше: они берут её из набора. none — убрать.
+";
+
 /// The arguments after the subcommand.
 #[derive(Debug, Default)]
 struct Parsed {
@@ -272,12 +285,18 @@ pub fn main(args: Vec<String>) -> ExitCode {
             print!("{BRIEF_USAGE}");
             return ExitCode::SUCCESS;
         }
+        "mark" if wants_help(rest) => {
+            print!("{MARK_USAGE}");
+            return ExitCode::SUCCESS;
+        }
         "export" => export_command(rest),
         "import" => import_command(rest),
         "replay" => replay_command(rest),
         "judge" => judge_command(rest),
         "compare" => compare_command(rest),
         "brief" => brief_command(rest),
+        "mark" => mark_command(rest),
+        "report" => report_command(rest),
         other => Err(format!(
             "Неизвестная подкоманда «{other}». grill-eval --help — список подкоманд"
         )),
@@ -668,6 +687,65 @@ fn brief_command(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// `report.md` again for each report, with today's metrics and the
+/// corpus's mark; nothing is called.
+fn report_command(args: &[String]) -> Result<ExitCode, String> {
+    let parsed = parse(args, &[], &[])?;
+    if parsed.positional.is_empty() {
+        return Err("Нужен отчёт".to_owned());
+    }
+    for argument in &parsed.positional {
+        let path = report::file_of(Path::new(argument));
+        let report = Report::load(&path)?;
+        let judge = load_judge(&path)?;
+        write_markdown(&path, &report, judge.as_ref())?;
+        println!("{}", path.with_file_name(report::MARKDOWN_FILE).display());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn mark_command(args: &[String]) -> Result<ExitCode, String> {
+    let parsed = parse(args, &["discussion-end"], &[])?;
+    let path = corpus::resolve(&eval_dir()?, &one_positional(&parsed, "набор")?);
+    let value = parsed
+        .values
+        .get("discussion-end")
+        .ok_or("Нужен --discussion-end ММ:СС или none")?;
+    let mark = if value == "none" {
+        None
+    } else {
+        Some(clock_arg(value)?)
+    };
+    let mut corpus = Corpus::load(&path)?;
+    corpus.discussion_end_ms = mark;
+    corpus.save(&path)?;
+    match mark {
+        Some(ms) => println!(
+            "Набор {}: конец обсуждения {}",
+            corpus.name,
+            metrics::clock(ms)
+        ),
+        None => println!("Набор {}: отметка конца обсуждения убрана", corpus.name),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `ММ:СС` (minutes may pass 59) as ms.
+fn clock_arg(value: &str) -> Result<i64, String> {
+    let wrong = || format!("--discussion-end: «{value}» — нужно ММ:СС, например 63:45");
+    let (minutes, seconds) = value.split_once(':').ok_or_else(wrong)?;
+    let minutes: i64 = minutes.parse().map_err(|_| wrong())?;
+    let seconds: i64 = seconds.parse().map_err(|_| wrong())?;
+    if minutes < 0 || !(0..60).contains(&seconds) || seconds_len(value) != 2 {
+        return Err(wrong());
+    }
+    Ok((minutes * 60 + seconds) * 1000)
+}
+
+fn seconds_len(value: &str) -> usize {
+    value.rsplit(':').next().map_or(0, str::len)
+}
+
 /// `--docs` takes every file up to the next flag; the rest of `args` goes
 /// to [`parse`].
 fn split_docs(args: &[String]) -> (Vec<String>, Vec<PathBuf>) {
@@ -867,12 +945,71 @@ mod tests {
     }
 
     #[test]
+    fn the_clock_takes_minutes_past_an_hour() {
+        assert_eq!(clock_arg("63:45"), Ok(3_825_000));
+        assert_eq!(clock_arg("0:05"), Ok(5_000));
+        for wrong in ["63", "1:5", "a:10", "1:60", "-1:00", "1:0x"] {
+            assert!(clock_arg(wrong).is_err(), "{wrong}");
+        }
+    }
+
+    /// `mark` writes the corpus, and a report made before it takes the mark
+    /// from the corpus it read.
+    #[test]
+    fn a_mark_applies_to_earlier_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus_file = dir.path().join("obmennik.json");
+        crate::eval::testing::corpus(Vec::new())
+            .save(&corpus_file)
+            .unwrap();
+        let mut earlier = crate::eval::testing::report();
+        earlier.corpus_path = Some(corpus_file.display().to_string());
+        let report_file = dir.path().join("report.json");
+        corpus::write_json(&report_file, &earlier).unwrap();
+        assert_eq!(Report::load(&report_file).unwrap().discussion_end_ms, None);
+
+        let path = corpus_file.display().to_string();
+        assert_eq!(
+            main(args(&["mark", &path, "--discussion-end", "63:45"])),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            Corpus::load(&corpus_file).unwrap().discussion_end_ms,
+            Some(3_825_000)
+        );
+        assert_eq!(
+            Report::load(&report_file).unwrap().discussion_end_ms,
+            Some(3_825_000)
+        );
+        // `report` writes report.md again with the mark.
+        let report_arg = report_file.display().to_string();
+        assert_eq!(main(args(&["report", &report_arg])), ExitCode::SUCCESS);
+        let markdown = fs::read_to_string(dir.path().join(report::MARKDOWN_FILE)).unwrap();
+        assert!(markdown.contains("Конец обсуждения: 63:45"), "{markdown}");
+
+        assert_eq!(
+            main(args(&["mark", &path, "--discussion-end", "none"])),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(Corpus::load(&corpus_file).unwrap().discussion_end_ms, None);
+        // Without the field, the corpus file reads as before.
+        let text = fs::read_to_string(&corpus_file).unwrap();
+        assert!(!text.contains("discussionEndMs"));
+        assert_eq!(main(args(&["mark", &path])), ExitCode::FAILURE);
+        assert_eq!(
+            main(args(&["mark", &path, "--discussion-end", "63"])),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
     fn wrong_arguments_and_help() {
         assert_eq!(main(args(&["compare", "only-one"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["what"])), ExitCode::FAILURE);
         assert_eq!(main(args(&["--help"])), ExitCode::SUCCESS);
         assert_eq!(main(args(&["replay", "--help"])), ExitCode::SUCCESS);
-        for command in ["import", "judge", "compare", "brief"] {
+        assert_eq!(main(args(&["report"])), ExitCode::FAILURE);
+        for command in ["import", "judge", "compare", "brief", "mark"] {
             assert_eq!(main(args(&[command, "--help"])), ExitCode::SUCCESS);
         }
     }
