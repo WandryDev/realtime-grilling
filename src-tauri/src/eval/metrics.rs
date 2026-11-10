@@ -511,6 +511,9 @@ pub fn header(report: &Report) -> Vec<String> {
     if let Some(minutes) = report.flags.requeue_minutes {
         flags.push(format!("--requeue-minutes {minutes}"));
     }
+    if let Some(topic_check) = &report.flags.topic_check {
+        flags.push(format!("--topic-check {topic_check}"));
+    }
     lines.push(format!(
         "Флаги: {}",
         if flags.is_empty() {

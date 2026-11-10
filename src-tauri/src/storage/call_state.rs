@@ -441,10 +441,44 @@ impl AgentCallOutcome {
     }
 }
 
+/// What an agent call was for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentCallKind {
+    /// The fast loop's call that patches the call's state.
+    #[default]
+    FastLoop,
+    /// The short call that asks whether the topic changed
+    /// (question-volume design.md, decision 2).
+    TopicCheck,
+}
+
+impl AgentCallKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FastLoop => "fastLoop",
+            Self::TopicCheck => "topicCheck",
+        }
+    }
+
+    #[cfg(any(test, feature = "eval"))]
+    fn parse(text: &str) -> rusqlite::Result<Self> {
+        match text {
+            "fastLoop" => Ok(Self::FastLoop),
+            "topicCheck" => Ok(Self::TopicCheck),
+            other => Err(rusqlite::Error::InvalidColumnType(
+                0,
+                format!("kind {other}"),
+                rusqlite::types::Type::Text,
+            )),
+        }
+    }
+}
+
 /// One call of the agent, as the fast loop records it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AgentCallInput {
     pub recording_id: String,
+    pub kind: AgentCallKind,
     /// Milliseconds since the Unix epoch, UTC.
     pub started_at: i64,
     pub duration_ms: i64,
@@ -481,6 +515,7 @@ pub struct AgentCall {
     pub rejected: Value,
     pub error: Option<String>,
     pub created_at: i64,
+    pub kind: AgentCallKind,
 }
 
 /* Reading */
@@ -1271,8 +1306,8 @@ pub fn insert_agent_call_at(
     connection.execute(
         "INSERT INTO agent_calls
            (id, recording_id, started_at, duration_ms, outcome, input_tokens, output_tokens,
-            cache_read, cache_write, cost_usd, utilization, rejected, error, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            cache_read, cache_write, cost_usd, utilization, rejected, error, created_at, kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             id,
             call.recording_id,
@@ -1287,7 +1322,8 @@ pub fn insert_agent_call_at(
             call.utilization,
             Json(rejected),
             call.error,
-            now
+            now,
+            call.kind.as_str()
         ],
     )?;
     Ok(id)
@@ -1298,7 +1334,7 @@ pub fn insert_agent_call_at(
 pub fn agent_calls(connection: &Connection, recording_id: &str) -> CommandResult<Vec<AgentCall>> {
     let mut statement = connection.prepare(
         "SELECT id, recording_id, started_at, duration_ms, outcome, input_tokens, output_tokens,
-                cache_read, cache_write, cost_usd, utilization, rejected, error, created_at
+                cache_read, cache_write, cost_usd, utilization, rejected, error, created_at, kind
            FROM agent_calls WHERE recording_id = ?1 ORDER BY started_at, id",
     )?;
     let rows = statement.query_map([recording_id], |row| {
@@ -1319,6 +1355,7 @@ pub fn agent_calls(connection: &Connection, recording_id: &str) -> CommandResult
             rejected,
             error: row.get(12)?,
             created_at: row.get(13)?,
+            kind: AgentCallKind::parse(&row.get::<_, String>(14)?)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -2058,6 +2095,7 @@ mod tests {
         let connection = open_in_memory().unwrap();
         let id = recording(&connection);
         let call = AgentCallInput {
+            kind: AgentCallKind::FastLoop,
             recording_id: id.clone(),
             started_at: 1_000,
             duration_ms: 12_800,

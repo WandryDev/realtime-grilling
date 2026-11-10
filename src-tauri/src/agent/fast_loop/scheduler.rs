@@ -48,18 +48,18 @@ use super::{
     events::{AgentLoopState, AgentStatus},
     patch::{self, Patch},
     similarity::{QuestionSimilarity, TrigramSimilarity},
-    validate,
+    topic_check, validate,
 };
 use crate::{
     agent::{
-        claude_cli::{self, Agent, AgentError, AgentRequest, CallOptions},
+        claude_cli::{self, Agent, AgentError, AgentReply, AgentRequest, CallOptions, Usage},
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
     storage::{
-        call_state::{self, AgentCallInput, AgentCallOutcome},
-        now_ms, settings,
-        transcript::TranscriptChannel,
+        call_state::{self, AgentCallInput, AgentCallKind, AgentCallOutcome, ValidatedPatch},
+        now_ms, recordings, settings,
+        transcript::{self, TranscriptChannel, TranscriptPass},
     },
 };
 
@@ -118,6 +118,31 @@ pub struct LoopConfig {
     /// The least gap between call starts instead of `questionFrequency`'s:
     /// none in the app; a replay may try one (`grill-eval replay --min-gap`).
     pub min_gap: Option<Duration>,
+    /// When the topic is checked (question-volume design.md, decision 2);
+    /// `None` never. A replay may try others (`grill-eval replay
+    /// --topic-check`).
+    pub topic_check: Option<TopicCheckConfig>,
+}
+
+/// When the topic check runs and what it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TopicCheckConfig {
+    /// The current topic has gone on at least this long…
+    pub after: Duration,
+    /// … and the last check was at least this long ago.
+    pub every: Duration,
+    /// The transcript it reads.
+    pub window: Duration,
+}
+
+impl Default for TopicCheckConfig {
+    fn default() -> Self {
+        Self {
+            after: Duration::from_secs(8 * 60),
+            every: Duration::from_secs(3 * 60),
+            window: topic_check::WINDOW,
+        }
+    }
 }
 
 impl LoopConfig {
@@ -131,6 +156,7 @@ impl LoopConfig {
             state_hints: true,
             quiet_minutes: assembly::QUIET_MINUTES,
             min_gap: None,
+            topic_check: Some(TopicCheckConfig::default()),
         }
     }
 }
@@ -426,7 +452,7 @@ impl FastLoop {
 
     async fn start(self, recording_id: String, receiver: mpsc::UnboundedReceiver<Message>) {
         match self.prepare(&recording_id).await {
-            Ok((agent, prefix, prompt_file)) => {
+            Ok((agent, prefix, prompt_file, topic_prompt_file)) => {
                 if !self.has_session(&recording_id) {
                     let _ = std::fs::remove_file(&prompt_file);
                     self.forget(&recording_id);
@@ -440,6 +466,8 @@ impl FastLoop {
                         agent,
                         prefix: Arc::new(prefix),
                         prompt_file,
+                        topic_prompt_file,
+                        topic_clock: Arc::default(),
                     },
                     last_start: None,
                     client_since_last: false,
@@ -468,7 +496,7 @@ impl FastLoop {
     async fn prepare(
         &self,
         recording_id: &str,
-    ) -> Result<(Arc<dyn Agent>, Prefix, PathBuf), AgentLoopState> {
+    ) -> Result<(Arc<dyn Agent>, Prefix, PathBuf, Option<PathBuf>), AgentLoopState> {
         let agent = self.0.provider.provide().await?;
         let failed = |message: String| AgentLoopState::Error {
             message,
@@ -483,7 +511,15 @@ impl FastLoop {
         .map_err(|error| failed(format!("Не удалось собрать контекст звонка: {error}")))?;
         let prompt_file = assembly::write_prompt(&self.0.config.prompt_dir, recording_id, &prefix)
             .map_err(|error| failed(format!("Не удалось записать промпт агента: {error}")))?;
-        Ok((agent, prefix, prompt_file))
+        let topic_prompt_file = match self.0.config.topic_check {
+            Some(_) => Some(
+                topic_check::write_prompt(&self.0.config.prompt_dir).map_err(|error| {
+                    failed(format!("Не удалось записать промпт проверки темы: {error}"))
+                })?,
+            ),
+            None => None,
+        };
+        Ok((agent, prefix, prompt_file, topic_prompt_file))
     }
 }
 
@@ -540,6 +576,30 @@ struct CallContext {
     agent: Arc<dyn Agent>,
     prefix: Arc<Prefix>,
     prompt_file: PathBuf,
+    /// The topic check's prompt; `None` when it is off.
+    topic_prompt_file: Option<PathBuf>,
+    topic_clock: Arc<Mutex<TopicClock>>,
+}
+
+/// How long the current topic goes on, as the calls saw it: the storage
+/// keeps when a topic was created, not when the call switched back to it.
+#[derive(Debug, Default)]
+struct TopicClock {
+    topic_id: Option<String>,
+    /// When the calls first saw it current (host ms).
+    since_ms: i64,
+    last_check_ms: Option<i64>,
+}
+
+impl TopicClock {
+    /// The current topic is `topic_id` at `now`: a new one starts over.
+    fn observe(&mut self, topic_id: Option<&str>, now: i64) {
+        if self.topic_id.as_deref() != topic_id {
+            self.topic_id = topic_id.map(str::to_owned);
+            self.since_ms = now;
+            self.last_check_ms = None;
+        }
+    }
 }
 
 struct Scheduler {
@@ -737,6 +797,9 @@ async fn run_call(
         },
         _ = &mut stop => return CallEnd::Cancelled,
     };
+    if let Some(end) = run_topic_check(&call, &mut stop, &process).await {
+        return end;
+    }
     let started_at = host.now_ms();
     let started = Instant::now();
 
@@ -764,22 +827,7 @@ async fn run_call(
         process,
         options: CallOptions::default(),
     };
-    let (cancel, cancelled) = oneshot::channel();
-    let running = call.agent.run(request, cancelled);
-    tokio::pin!(running);
-    let interrupted = tokio::select! {
-        reply = &mut running => Ok(reply),
-        () = tokio::time::sleep(config.call_timeout) => Err(AgentError::Timeout),
-        _ = &mut stop => Err(AgentError::Cancelled),
-    };
-    let reply = match interrupted {
-        Ok(reply) => reply,
-        Err(error) => {
-            let _ = cancel.send(());
-            let _ = tokio::time::timeout(config.cancel_wait, &mut running).await;
-            Err(error)
-        }
-    };
+    let reply = ask(&call, request, &mut stop).await;
 
     let mut record = AgentCallInput {
         recording_id: call.recording_id.clone(),
@@ -790,27 +838,7 @@ async fn run_call(
     let reply = match reply {
         Ok(reply) => reply,
         Err(error) => {
-            let (outcome, end) = match &error {
-                AgentError::NotLoggedIn => (AgentCallOutcome::NotLoggedIn, CallEnd::NotLoggedIn),
-                AgentError::RateLimited { resets_at } => (
-                    AgentCallOutcome::RateLimited,
-                    CallEnd::RateLimited {
-                        resets_at: *resets_at,
-                    },
-                ),
-                AgentError::Timeout => (
-                    AgentCallOutcome::Timeout,
-                    CallEnd::Failed(error.to_string()),
-                ),
-                AgentError::InvalidOutput(_) => (
-                    AgentCallOutcome::Invalid,
-                    CallEnd::Failed(error.to_string()),
-                ),
-                AgentError::Process(_) => {
-                    (AgentCallOutcome::Error, CallEnd::Failed(error.to_string()))
-                }
-                AgentError::Cancelled => (AgentCallOutcome::Cancelled, CallEnd::Cancelled),
-            };
+            let (outcome, end) = failure(&error);
             eprintln!(
                 "grill: the agent call of {} failed: {error}",
                 call.recording_id
@@ -822,16 +850,8 @@ async fn run_call(
         }
     };
 
-    let usage = &reply.usage;
-    fast_loop.note_utilization(usage.utilization);
-    let tokens = |count: u64| Some(i64::try_from(count).unwrap_or(i64::MAX));
-    record.duration_ms = i64::try_from(usage.duration_ms).unwrap_or(i64::MAX);
-    record.input_tokens = tokens(usage.input_tokens);
-    record.output_tokens = tokens(usage.output_tokens);
-    record.cache_read = tokens(usage.cache_read);
-    record.cache_write = tokens(usage.cache_write);
-    record.cost_usd = usage.cost_usd;
-    record.utilization = usage.utilization;
+    fast_loop.note_utilization(reply.usage.utilization);
+    with_usage(&mut record, &reply.usage);
 
     let mut value = reply.patch;
     assembly::strip_id_prefixes(&mut value);
@@ -904,6 +924,243 @@ async fn run_call(
             CallEnd::Failed(format!("Не удалось применить ответ агента: {error}"))
         }
     }
+}
+
+/// Runs `request` on the agent: cancelled by `stop` or the call timeout.
+async fn ask(
+    call: &CallContext,
+    request: AgentRequest,
+    stop: &mut oneshot::Receiver<()>,
+) -> Result<AgentReply, AgentError> {
+    let config = &call.fast_loop.0.config;
+    let (cancel, cancelled) = oneshot::channel();
+    let running = call.agent.run(request, cancelled);
+    tokio::pin!(running);
+    let interrupted = tokio::select! {
+        reply = &mut running => Ok(reply),
+        () = tokio::time::sleep(config.call_timeout) => Err(AgentError::Timeout),
+        _ = &mut *stop => Err(AgentError::Cancelled),
+    };
+    match interrupted {
+        Ok(reply) => reply,
+        Err(error) => {
+            let _ = cancel.send(());
+            let _ = tokio::time::timeout(config.cancel_wait, &mut running).await;
+            Err(error)
+        }
+    }
+}
+
+/// How a failed agent call is recorded and what the scheduler does next.
+fn failure(error: &AgentError) -> (AgentCallOutcome, CallEnd) {
+    match error {
+        AgentError::NotLoggedIn => (AgentCallOutcome::NotLoggedIn, CallEnd::NotLoggedIn),
+        AgentError::RateLimited { resets_at } => (
+            AgentCallOutcome::RateLimited,
+            CallEnd::RateLimited {
+                resets_at: *resets_at,
+            },
+        ),
+        AgentError::Timeout => (
+            AgentCallOutcome::Timeout,
+            CallEnd::Failed(error.to_string()),
+        ),
+        AgentError::InvalidOutput(_) => (
+            AgentCallOutcome::Invalid,
+            CallEnd::Failed(error.to_string()),
+        ),
+        AgentError::Process(_) => (AgentCallOutcome::Error, CallEnd::Failed(error.to_string())),
+        AgentError::Cancelled => (AgentCallOutcome::Cancelled, CallEnd::Cancelled),
+    }
+}
+
+/// The reply's tokens, cost and time into its record.
+fn with_usage(record: &mut AgentCallInput, usage: &Usage) {
+    let tokens = |count: u64| Some(i64::try_from(count).unwrap_or(i64::MAX));
+    record.duration_ms = i64::try_from(usage.duration_ms).unwrap_or(i64::MAX);
+    record.input_tokens = tokens(usage.input_tokens);
+    record.output_tokens = tokens(usage.output_tokens);
+    record.cache_read = tokens(usage.cache_read);
+    record.cache_write = tokens(usage.cache_write);
+    record.cost_usd = usage.cost_usd;
+    record.utilization = usage.utilization;
+}
+
+/// The topic check before a fast-loop call, when it is due (question-volume
+/// design.md, decision 2): the current topic has gone on for
+/// `TopicCheckConfig::after`, the last check was `every` ago, and the
+/// client spoke since. A new topic or a switch is applied like the fast
+/// loop's `topic` operation. `Some` when the slot must end here (the agent
+/// is not signed in, the limit is used up, the call was cancelled); any
+/// other failure leaves the topic as it is and the fast-loop call goes on.
+async fn run_topic_check(
+    call: &CallContext,
+    stop: &mut oneshot::Receiver<()>,
+    process: &TreeSlot,
+) -> Option<CallEnd> {
+    let fast_loop = &call.fast_loop;
+    let host = &fast_loop.0.host;
+    let settings = fast_loop.0.config.topic_check?;
+    let prompt_file = call.topic_prompt_file.clone()?;
+    let now = host.now_ms();
+    let id = call.recording_id.clone();
+    let observed = database(host, move |connection| {
+        let state = call_state::get(connection, &id)?;
+        let started_at = recordings::get(connection, &id)?.started_at;
+        let last_client = transcript::for_recording(connection, &id)?
+            .iter()
+            .filter(|segment| {
+                segment.pass == TranscriptPass::Live && segment.channel == TranscriptChannel::Others
+            })
+            .map(|segment| started_at + segment.end_ms)
+            .max();
+        Ok((
+            state.current_topic_id,
+            state.final_check.is_some(),
+            last_client,
+        ))
+    })
+    .await;
+    let (topic_id, final_check, last_client) = match observed {
+        Ok(observed) => observed,
+        Err(error) => {
+            eprintln!(
+                "grill: the topic of {} was not read: {error}",
+                call.recording_id
+            );
+            return None;
+        }
+    };
+    let ms = |duration: Duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+    let minutes = {
+        let mut clock = lock(&call.topic_clock);
+        clock.observe(topic_id.as_deref(), now);
+        let due = topic_id.is_some()
+            && !final_check
+            && now - clock.since_ms >= ms(settings.after)
+            && clock
+                .last_check_ms
+                .is_none_or(|last| now - last >= ms(settings.every))
+            && last_client.is_some_and(|at| at > clock.last_check_ms.unwrap_or(clock.since_ms));
+        if !due {
+            return None;
+        }
+        clock.last_check_ms = Some(now);
+        (now - clock.since_ms) / 60_000
+    };
+
+    let id = call.recording_id.clone();
+    let window = settings.window;
+    let assembled = match database(host, move |connection| {
+        topic_check::assemble(connection, &id, minutes, window)
+    })
+    .await
+    {
+        Ok(assembled) => assembled,
+        Err(error) => {
+            eprintln!(
+                "grill: the topic check of {} was not assembled: {error}",
+                call.recording_id
+            );
+            return None;
+        }
+    };
+    let started_at = host.now_ms();
+    let started = Instant::now();
+    let request = AgentRequest {
+        system_prompt_file: prompt_file,
+        user_message: assembled.user_message.clone(),
+        schema: topic_check::SCHEMA.to_owned(),
+        process: process.clone(),
+        options: CallOptions::default(),
+    };
+    let reply = ask(call, request, stop).await;
+    let mut record = AgentCallInput {
+        recording_id: call.recording_id.clone(),
+        kind: AgentCallKind::TopicCheck,
+        started_at,
+        duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        ..AgentCallInput::default()
+    };
+    let reply = match reply {
+        Ok(reply) => reply,
+        Err(error) => {
+            let (outcome, end) = failure(&error);
+            eprintln!(
+                "grill: the topic check of {} failed: {error}",
+                call.recording_id
+            );
+            record.outcome = Some(outcome);
+            record.error = Some(error.to_string());
+            save(host, record).await;
+            return match end {
+                CallEnd::Failed(_) | CallEnd::Done => None,
+                end => Some(end),
+            };
+        }
+    };
+    fast_loop.note_utilization(reply.usage.utilization);
+    with_usage(&mut record, &reply.usage);
+    let decision = match topic_check::parse(&reply.patch) {
+        Ok(decision) => decision,
+        Err(reason) => {
+            let message = AgentError::InvalidOutput(reason).to_string();
+            eprintln!("grill: the topic check of {}: {message}", call.recording_id);
+            record.outcome = Some(AgentCallOutcome::Invalid);
+            record.error = Some(message);
+            save(host, record).await;
+            return None;
+        }
+    };
+
+    let id = call.recording_id.clone();
+    let now = host.now_ms();
+    let applied = database(host, move |connection| {
+        let mut current = None;
+        in_savepoint(connection, || {
+            let state = call_state::get(connection, &id)?;
+            let op = match topic_check::check(&decision, &assembled, &state) {
+                Ok(op) => op,
+                Err(reason) => {
+                    eprintln!("grill: the topic check's answer was rejected ({id}): {reason}");
+                    record.rejected = serde_json::json!([{ "op": "topic", "reason": reason }]);
+                    None
+                }
+            };
+            record.outcome = Some(if op.is_some() {
+                AgentCallOutcome::Ok
+            } else {
+                AgentCallOutcome::Empty
+            });
+            if let Some(op) = op {
+                call_state::apply_patch_at(
+                    connection,
+                    &id,
+                    &ValidatedPatch { ops: vec![op] },
+                    now,
+                )?;
+                current = call_state::get(connection, &id)?.current_topic_id;
+            }
+            call_state::insert_agent_call_at(connection, &record, now)?;
+            Ok(())
+        })?;
+        Ok(current)
+    })
+    .await;
+    match applied {
+        Ok(Some(topic_id)) => {
+            lock(&call.topic_clock).observe(Some(&topic_id), now);
+            host.call_state_changed(&call.recording_id);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!(
+                "grill: the topic check of {} was not applied: {error}",
+                call.recording_id
+            );
+        }
+    }
+    None
 }
 
 /// Records a call that brought no patch.

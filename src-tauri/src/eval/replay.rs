@@ -63,6 +63,7 @@ use crate::{
             events::{AgentLoopState, AgentStatus},
             scheduler::{
                 self, AgentProvider, DbWork, FastLoop, LoopConfig, LoopHost, ProvideFuture,
+                TopicCheckConfig,
             },
         },
     },
@@ -106,6 +107,11 @@ pub struct Options {
     /// while new ones wait, instead of the default (question-volume task
     /// 3.3); written to the run's settings.
     pub requeue_minutes: Option<i64>,
+    /// `--topic-check`: `Some(None)` off, `Some(Some(_))` other thresholds,
+    /// `None` the app's (question-volume task 4.3).
+    pub topic_check: Option<Option<TopicCheckConfig>>,
+    /// `--topic-check` as given, for the report.
+    pub topic_check_arg: Option<String>,
     /// Where the corpus was read from, for `judge`.
     pub corpus_path: Option<String>,
     /// Progress lines on stderr.
@@ -543,6 +549,9 @@ pub async fn run(
         config.quiet_minutes = minutes;
     }
     config.min_gap = options.min_gap_secs.map(Duration::from_secs);
+    if let Some(topic_check) = options.topic_check {
+        config.topic_check = topic_check;
+    }
     let rules_sha256 = report::sha256_hex(&config.rules);
     let fast_loop = FastLoop::new(
         Arc::clone(&loop_host),
@@ -631,6 +640,7 @@ pub async fn run(
             quiet_minutes: options.quiet_minutes,
             min_gap_secs: options.min_gap_secs,
             requeue_minutes: options.requeue_minutes,
+            topic_check: options.topic_check_arg.clone(),
         },
         run: Run {
             started_at: run_started_at,

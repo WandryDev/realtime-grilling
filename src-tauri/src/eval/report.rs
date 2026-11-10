@@ -96,6 +96,8 @@ pub struct Flags {
     pub min_gap_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requeue_minutes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_check: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -305,7 +307,10 @@ pub fn results(
     let calls = call_state::agent_calls(connection, recording_id)?
         .into_iter()
         .map(|call| ReportCall {
-            kind: CallKind::FastLoop,
+            kind: match call.kind {
+                call_state::AgentCallKind::FastLoop => CallKind::FastLoop,
+                call_state::AgentCallKind::TopicCheck => CallKind::TopicCheck,
+            },
             at_ms: since(call.started_at),
             duration_ms: call.duration_ms,
             outcome: call.outcome,

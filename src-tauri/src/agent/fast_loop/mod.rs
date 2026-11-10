@@ -9,6 +9,7 @@
 //!   rejected operations with their reasons;
 //! - [`assembly`]: the stable prefix and the volatile part of a call;
 //! - [`scheduler`]: when a call runs, one scheduler per recording;
+//! - [`topic_check`]: the call that asks whether the topic changed;
 //! - [`events`]: `CallStateChanged`, `AgentStatus`;
 //! - [`app`]: the fast loop in the app (storage, windows, Claude Code).
 
@@ -24,4 +25,5 @@ pub mod scheduler;
 pub mod similarity;
 #[cfg(test)]
 pub mod testing;
+pub mod topic_check;
 pub mod validate;

@@ -24,7 +24,7 @@ use crate::{
         self, AgentState,
         claude_cli::{Agent, ClaudeCodeCli},
         discover::{self, SearchEnv},
-        fast_loop::assembly,
+        fast_loop::{assembly, scheduler::TopicCheckConfig},
     },
     speech::recognizer::Recognizer,
     storage::{self, transcript::TranscriptChannel},
@@ -54,7 +54,7 @@ grill-eval — прогон записанных звонков через бы�
       Отметить конец обсуждения проекта: пауза и темп в отчётах считаются до него.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
          [--baseline-state] [--no-gaps] [--quiet-minutes N] [--min-gap S]
-         [--requeue-minutes N]
+         [--requeue-minutes N] [--topic-check off|М/М/М]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
       .grill-eval/reports/<время>-<L>-<n>/report.json и report.md.
   judge <отчёт>
@@ -121,7 +121,7 @@ grill-eval import <аудио> [--others <аудио>] [--channels left=me|right
 const REPLAY_USAGE: &str = "\
 grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
                   [--baseline-state] [--no-gaps] [--quiet-minutes N] [--min-gap S]
-                  [--requeue-minutes N]
+                  [--requeue-minutes N] [--topic-check off|М/М/М]
 
 Прогоняет набор (имя в .grill-eval/corpus/ или путь к файлу) через быстрый контур
 приложения с настоящим Claude Code. Простой между фразами пропускается, во время
@@ -144,6 +144,9 @@ grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ
                     (question-volume, задача 2.3)
   --requeue-minutes N видимый вопрос уступает место новым через N минут, а не
                     через 8 (question-volume, задача 3.3)
+  --topic-check П   проверка темы: off — без неё; М/М/М — длительность темы,
+                    интервал проверок и окно расшифровки в минутах вместо
+                    8/3/6 (question-volume, задача 4.3)
 
 Базовая линия до изменения question-quality (правила, состояние и бриф как раньше):
   --rules spikes/question-quality/rules-baseline.md --baseline-state --no-gaps
@@ -380,6 +383,29 @@ fn min_gap_arg(parsed: &Parsed) -> Result<Option<u64>, String> {
         .transpose()
 }
 
+/// `--topic-check`: `off`, or `ДЛИТЕЛЬНОСТЬ/ИНТЕРВАЛ/ОКНО` in whole minutes
+/// from 1.
+fn topic_check_arg(value: &str) -> Result<Option<TopicCheckConfig>, String> {
+    if value == "off" {
+        return Ok(None);
+    }
+    let wrong = || format!("--topic-check: «{value}» — нужно off или минуты М/М/М, например 8/3/6");
+    let minutes: Vec<u64> = value
+        .split('/')
+        .map(|part| part.parse::<u64>().ok().filter(|minutes| *minutes >= 1))
+        .collect::<Option<_>>()
+        .ok_or_else(wrong)?;
+    let [after, every, window] = minutes.as_slice() else {
+        return Err(wrong());
+    };
+    let minutes = |count: &u64| Duration::from_secs(count * 60);
+    Ok(Some(TopicCheckConfig {
+        after: minutes(after),
+        every: minutes(every),
+        window: minutes(window),
+    }))
+}
+
 /// `--<name>`: whole minutes, at least 1.
 fn whole_minutes_arg(parsed: &Parsed, name: &str) -> Result<Option<i64>, String> {
     parsed
@@ -478,6 +504,7 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
             "quiet-minutes",
             "min-gap",
             "requeue-minutes",
+            "topic-check",
         ],
         &["realtime", "baseline-state", "no-gaps"],
     )?;
@@ -514,6 +541,12 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         quiet_minutes: whole_minutes_arg(&parsed, "quiet-minutes")?,
         min_gap_secs: min_gap_arg(&parsed)?,
         requeue_minutes: whole_minutes_arg(&parsed, "requeue-minutes")?,
+        topic_check: parsed
+            .values
+            .get("topic-check")
+            .map(|value| topic_check_arg(value))
+            .transpose()?,
+        topic_check_arg: parsed.values.get("topic-check").cloned(),
         corpus_path: Some(corpus_path),
         progress: true,
     };
@@ -970,6 +1003,22 @@ mod tests {
         assert!(scratch.0.is_dir());
         drop(scratch);
         assert!(!dir.path().join("tmp").exists());
+    }
+
+    #[test]
+    fn the_topic_check_takes_off_or_three_numbers() {
+        assert_eq!(topic_check_arg("off"), Ok(None));
+        assert_eq!(
+            topic_check_arg("12/3/6"),
+            Ok(Some(TopicCheckConfig {
+                after: Duration::from_secs(720),
+                every: Duration::from_secs(180),
+                window: Duration::from_secs(360),
+            }))
+        );
+        for wrong in ["", "8/3", "8/3/6/1", "8/0/6", "a/3/6", "on"] {
+            assert!(topic_check_arg(wrong).is_err(), "{wrong}");
+        }
     }
 
     #[test]

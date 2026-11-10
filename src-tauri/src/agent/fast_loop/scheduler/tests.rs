@@ -997,3 +997,214 @@ async fn an_empty_patch_without_waiting_questions_changes_nothing() {
     assert_eq!(visible_texts(&rig), ["Первый", "Второй", "Третий"]);
     assert_eq!(rig.host.changes(), 0);
 }
+
+/* Проверка темы (question-volume, decision 2) */
+
+/// The host's clock from the recording's start (`testing::recording`
+/// starts at 1 s): the phrases' times and the loop's line up.
+fn align_host_clock(rig: &Rig) {
+    rig.host
+        .clock_shift
+        .store(1_000 - now_ms(), std::sync::atomic::Ordering::SeqCst);
+}
+
+fn move_host_clock(rig: &Rig, minutes: i64) {
+    rig.host
+        .clock_shift
+        .fetch_add(minutes * 60_000, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The indexes of the agent's requests that were topic checks.
+fn topic_checks(rig: &Rig) -> Vec<usize> {
+    (0..rig.agent.calls())
+        .filter(|index| rig.agent.received(*index).request.schema == topic_check::SCHEMA)
+        .collect()
+}
+
+/// Stores a phrase of the client now by the host's clock (aligned with
+/// the recording's start) without telling the loop yet.
+fn store(rig: &Rig, text: &str) -> TranscriptSegment {
+    let start_ms = rig.host.now_ms() - 1_000;
+    rig.host
+        .db(|db| say(db, &rig.recording, OTHERS, start_ms, text))
+}
+
+/// The client says `text` now by the host's clock.
+async fn client_says(rig: &Rig, text: &str) {
+    store(rig, text);
+    rig.fast_loop.phrase(&rig.recording, OTHERS);
+    settle().await;
+}
+
+/// A topic made by the first call and seen current by the second; then
+/// `minutes` of the host's clock pass.
+async fn long_topic(rig: &Rig, minutes: i64) {
+    align_host_clock(rig);
+    let first = store(rig, "Если все заняты, тогда уже как получится");
+    rig.agent
+        .push(Step::patch(applied_patch(&first, "если все заняты")));
+    rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.until(8).await;
+    move_host_clock(rig, 1);
+    client_says(rig, "Звонок ждёт свободного оператора").await;
+    rig.until(16).await;
+    move_host_clock(rig, minutes);
+}
+
+/// The client speaks of the operators, and the agent's next answer is
+/// `reply` (a topic check's, if one is due), given the phrase.
+async fn operators(rig: &Rig, reply: impl FnOnce(&TranscriptSegment) -> Step) -> TranscriptSegment {
+    let phrase = store(
+        rig,
+        "Операторы колл-центра сидят все под одним номером телефона",
+    );
+    rig.agent.push(reply(&phrase));
+    rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.until(30).await;
+    phrase
+}
+
+fn new_topic(phrase: &TranscriptSegment, quote: &str) -> Step {
+    Step::patch(json!({
+        "decision": "new",
+        "title": "Работа операторов в чатах",
+        "evidence": { "id": phrase.id, "quote": quote },
+    }))
+}
+
+fn topic_titles(rig: &Rig) -> (Vec<String>, Option<String>) {
+    let state = rig
+        .host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap();
+    let current = state.current_topic_id.as_deref().and_then(|id| {
+        state
+            .topics
+            .iter()
+            .find(|topic| topic.id == id)
+            .map(|topic| topic.title.clone())
+    });
+    (
+        state
+            .topics
+            .iter()
+            .map(|topic| topic.title.clone())
+            .collect(),
+        current,
+    )
+}
+
+fn topic_check_calls(rig: &Rig) -> Vec<call_state::AgentCall> {
+    rig.calls()
+        .into_iter()
+        .filter(|call| call.kind == call_state::AgentCallKind::TopicCheck)
+        .collect()
+}
+
+/// «Долгая тема ушла в другую подсистему»: a new topic with the quote of
+/// the phrase it began with; the fast-loop call that follows sees it.
+#[tokio::test(start_paused = true)]
+async fn a_long_topic_that_moved_on_gets_a_new_one() {
+    let rig = Rig::new([]).await;
+    long_topic(&rig, 12).await;
+    operators(&rig, |phrase| {
+        new_topic(phrase, "сидят все под одним номером")
+    })
+    .await;
+
+    assert_eq!(topic_checks(&rig).len(), 1);
+    let (titles, current) = topic_titles(&rig);
+    assert_eq!(titles, ["Очередь операторов", "Работа операторов в чатах"]);
+    assert_eq!(current.as_deref(), Some("Работа операторов в чатах"));
+    assert_eq!(topic_check_calls(&rig)[0].outcome, AgentCallOutcome::Ok);
+    // The fast-loop call right after it has the new topic as current.
+    let after = topic_checks(&rig)[0] + 1;
+    let message = rig.agent.received(after).request.user_message;
+    assert!(
+        message.contains("Работа операторов в чатах (текущая)"),
+        "{message}"
+    );
+    assert!(rig.host.changes() >= 2);
+}
+
+/// «Тема та же»: nothing changes, and the next check waits 3 minutes.
+#[tokio::test(start_paused = true)]
+async fn the_same_topic_stays() {
+    let rig = Rig::new([]).await;
+    long_topic(&rig, 10).await;
+    operators(&rig, |_| Step::patch(json!({ "decision": "same" }))).await;
+    assert_eq!(topic_checks(&rig).len(), 1);
+    assert_eq!(topic_titles(&rig).0, ["Очередь операторов"]);
+    assert_eq!(topic_check_calls(&rig)[0].outcome, AgentCallOutcome::Empty);
+
+    // A minute later: no check; three minutes after the last: one.
+    move_host_clock(&rig, 1);
+    client_says(&rig, "Ещё про очередь").await;
+    rig.until(40).await;
+    assert_eq!(topic_checks(&rig).len(), 1);
+    move_host_clock(&rig, 2);
+    client_says(&rig, "И снова про очередь").await;
+    rig.until(50).await;
+    assert_eq!(topic_checks(&rig).len(), 2);
+}
+
+/// «Короткая тема»: 5 minutes, no check.
+#[tokio::test(start_paused = true)]
+async fn a_short_topic_is_not_checked() {
+    let rig = Rig::new([]).await;
+    long_topic(&rig, 5).await;
+    operators(&rig, |_| Step::empty()).await;
+    assert_eq!(topic_checks(&rig), Vec::<usize>::new());
+    assert!(topic_check_calls(&rig).is_empty());
+}
+
+/// «Цитата не найдена»: the topic stays, the call is recorded with the
+/// reason; the next check comes 3 minutes later.
+#[tokio::test(start_paused = true)]
+async fn a_new_topic_without_its_quote_changes_nothing() {
+    let rig = Rig::new([]).await;
+    long_topic(&rig, 12).await;
+    operators(&rig, |phrase| {
+        new_topic(phrase, "у каждого оператора свой номер")
+    })
+    .await;
+    assert_eq!(topic_titles(&rig).0, ["Очередь операторов"]);
+    let check = &topic_check_calls(&rig)[0];
+    assert_eq!(check.outcome, AgentCallOutcome::Empty);
+    assert_eq!(check.rejected[0]["op"], json!("topic"));
+
+    move_host_clock(&rig, 3);
+    client_says(&rig, "Операторы отвечают по очереди").await;
+    rig.until(45).await;
+    assert_eq!(topic_checks(&rig).len(), 2);
+}
+
+/// A failed topic check leaves the topic and the fast loop goes on: the
+/// fast-loop call of the same slot runs, the state is not an error.
+#[tokio::test(start_paused = true)]
+async fn a_failed_topic_check_does_not_stop_the_loop() {
+    let rig = Rig::new([]).await;
+    long_topic(&rig, 12).await;
+    let calls_before = rig.agent.calls();
+    operators(&rig, |_| Step::fail(AgentError::Process("boom".to_owned()))).await;
+    assert_eq!(
+        rig.agent.calls(),
+        calls_before + 2,
+        "the check and the fast-loop call"
+    );
+    assert_eq!(topic_check_calls(&rig)[0].outcome, AgentCallOutcome::Error);
+    assert_eq!(rig.state(), AgentLoopState::Idle);
+    assert_eq!(topic_titles(&rig).0, ["Очередь операторов"]);
+
+    // A reply off its schema too.
+    move_host_clock(&rig, 3);
+    store(&rig, "Операторы отвечают по очереди");
+    rig.agent.push(Step::patch(json!({ "ops": [] })));
+    rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.until(50).await;
+    assert_eq!(
+        topic_check_calls(&rig)[1].outcome,
+        AgentCallOutcome::Invalid
+    );
+    assert_eq!(rig.state(), AgentLoopState::Idle);
+}
