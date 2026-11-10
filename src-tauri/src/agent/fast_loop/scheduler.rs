@@ -1,13 +1,16 @@
 //! One scheduler per recording (design.md, decision 2): a task that hears
 //! the live phrases and decides when the agent is called.
 //!
-//! A call starts when a phrase of «Остальные» came, no call runs, the
-//! interval of `questionFrequency` (read at every decision) has passed since
-//! the last call started, and there were phrases since then. Phrases during
-//! a call count for the next one. After a failed call the next starts by
-//! itself 30 s later (not before); `agent_retry` starts one at once.
+//! A call starts once a phrase of «Остальные» came since the last call
+//! started, no call runs, and the least gap of `questionFrequency` (read at
+//! every phrase of «Остальные») has passed since the last start
+//! (question-volume design.md, decision 1). A phrase that came during a call
+//! or before the gap passed starts the call by itself when both are over,
+//! without waiting for another phrase. After a failed call the next starts
+//! by itself 30 s later (not before); `agent_retry` starts one at once.
 //! `NotLoggedIn` stops the calls until a status check finds the agent ready;
-//! `RateLimited` until the limit resets.
+//! `RateLimited` until the limit resets; then the next phrase of «Остальные»
+//! starts one.
 //!
 //! A call: wait for the gate (one call at a time across all recordings) →
 //! assemble → run the agent → parse → validate → in one transaction check
@@ -112,6 +115,9 @@ pub struct LoopConfig {
     /// [`assembly::QUIET_MINUTES`] in the app; a replay may try another
     /// value (`grill-eval replay --quiet-minutes`, question-quality task 4.4).
     pub quiet_minutes: i64,
+    /// The least gap between call starts instead of `questionFrequency`'s:
+    /// none in the app; a replay may try one (`grill-eval replay --min-gap`).
+    pub min_gap: Option<Duration>,
 }
 
 impl LoopConfig {
@@ -124,12 +130,13 @@ impl LoopConfig {
             rules: Cow::Borrowed(assembly::RULES),
             state_hints: true,
             quiet_minutes: assembly::QUIET_MINUTES,
+            min_gap: None,
         }
     }
 }
 
-/// When `questionFrequency` can't be read.
-const DEFAULT_INTERVAL: Duration = Duration::from_secs(20);
+/// When `questionFrequency` can't be read: `normal`'s.
+const DEFAULT_GAP: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 enum Message {
@@ -435,7 +442,8 @@ impl FastLoop {
                         prompt_file,
                     },
                     last_start: None,
-                    new_since_last: false,
+                    client_since_last: false,
+                    gap: DEFAULT_GAP,
                     retry_at: None,
                     halt: None,
                 };
@@ -537,8 +545,11 @@ struct CallContext {
 struct Scheduler {
     call: CallContext,
     last_start: Option<Instant>,
-    /// Phrases came since the last call started (or it failed).
-    new_since_last: bool,
+    /// A phrase of «Остальные» came since the last call started: the next
+    /// call is due once the gap passes and no call runs.
+    client_since_last: bool,
+    /// The least gap between starts, as last read.
+    gap: Duration,
     retry_at: Option<Instant>,
     halt: Option<Halt>,
 }
@@ -575,13 +586,10 @@ impl Scheduler {
                 Some(Halt::RateLimited { until }) if !stopping => until,
                 _ => None,
             };
+            let due_at = self.due_at().filter(|_| idle);
             tokio::select! {
                 message = messages.recv(), if !stopping => match message {
-                    Some(Message::Phrase(channel)) => {
-                        if self.phrase_starts(channel, call.is_some()).await {
-                            call = Some(self.start_call());
-                        }
-                    }
+                    Some(Message::Phrase(channel)) => self.phrase(channel).await,
                     Some(Message::Retry) => {
                         if call.is_none() {
                             call = Some(self.start_call());
@@ -590,6 +598,8 @@ impl Scheduler {
                     Some(Message::Resume) => {
                         if self.halt == Some(Halt::NeedsLogin) {
                             self.halt = None;
+                            // The phrases of the halt wait for the next one.
+                            self.client_since_last = false;
                             self.report(AgentLoopState::Idle);
                         }
                     }
@@ -606,8 +616,10 @@ impl Scheduler {
                     }
                 }
                 () = sleep_until(retry_at) => call = Some(self.start_call()),
+                () = sleep_until(due_at) => call = Some(self.start_call()),
                 () = sleep_until(resets_at) => {
                     self.halt = None;
+                    self.client_since_last = false;
                     self.report(AgentLoopState::Idle);
                 }
             }
@@ -623,31 +635,40 @@ impl Scheduler {
         self.call.fast_loop.forget(&self.call.recording_id);
     }
 
-    /// The start rule: a phrase of «Остальные», no call running, not
-    /// stopped or waiting for a retry, the interval passed.
-    async fn phrase_starts(&mut self, channel: TranscriptChannel, busy: bool) -> bool {
-        self.new_since_last = true;
-        if channel != TranscriptChannel::Others
-            || busy
-            || self.halt.is_some()
-            || self.retry_at.is_some()
-        {
-            return false;
+    /// A phrase came: one of «Остальные» makes a call due and reads the
+    /// gap again.
+    async fn phrase(&mut self, channel: TranscriptChannel) {
+        if channel != TranscriptChannel::Others {
+            return;
         }
-        let Some(last_start) = self.last_start else {
-            return true;
+        self.client_since_last = true;
+        self.gap = match self.call.fast_loop.0.config.min_gap {
+            Some(gap) => gap,
+            None => database(&self.call.fast_loop.0.host, |connection| {
+                Ok(settings::question_gap(&settings::get(connection)?))
+            })
+            .await
+            .unwrap_or(DEFAULT_GAP),
         };
-        let interval = database(&self.call.fast_loop.0.host, |connection| {
-            Ok(settings::question_interval(&settings::get(connection)?))
-        })
-        .await
-        .unwrap_or(DEFAULT_INTERVAL);
-        last_start.elapsed() >= interval
+    }
+
+    /// When the next call is due, while no call runs: a phrase of
+    /// «Остальные» came since the last start, nothing stops the calls, no
+    /// retry is waited for; at once for the first call, else once the gap
+    /// passed since the last start.
+    fn due_at(&self) -> Option<Instant> {
+        if !self.client_since_last || self.halt.is_some() || self.retry_at.is_some() {
+            return None;
+        }
+        Some(
+            self.last_start
+                .map_or_else(Instant::now, |last| last + self.gap),
+        )
     }
 
     fn start_call(&mut self) -> JoinHandle<CallEnd> {
         self.last_start = Some(Instant::now());
-        self.new_since_last = false;
+        self.client_since_last = false;
         self.retry_at = None;
         self.halt = None;
         self.report(AgentLoopState::Thinking);
@@ -668,7 +689,6 @@ impl Scheduler {
         match end {
             CallEnd::Done => self.report(AgentLoopState::Idle),
             CallEnd::Failed(message) => {
-                self.new_since_last = true;
                 self.retry_at = Some(Instant::now() + retry_after);
                 let retry_ms = i64::try_from(retry_after.as_millis()).unwrap_or(i64::MAX);
                 let now = self.call.fast_loop.0.host.now_ms();
@@ -678,12 +698,10 @@ impl Scheduler {
                 });
             }
             CallEnd::NotLoggedIn => {
-                self.new_since_last = true;
                 self.halt = Some(Halt::NeedsLogin);
                 self.report(AgentLoopState::NeedsLogin);
             }
             CallEnd::RateLimited { resets_at } => {
-                self.new_since_last = true;
                 // The CLI's reset time is on the real wall clock, not the
                 // host's.
                 let until = resets_at.map(|resets_at| {
@@ -694,7 +712,7 @@ impl Scheduler {
                 self.report(AgentLoopState::RateLimited { resets_at });
             }
             // Only the end of the session cancels; it reports itself.
-            CallEnd::Cancelled => self.new_since_last = true,
+            CallEnd::Cancelled => {}
         }
     }
 }

@@ -255,13 +255,13 @@ pub fn compact_overlay(settings: &SettingsMap) -> bool {
 }
 
 /// The least time between the starts of two agent calls by
-/// `questionFrequency`: `rare` 45 s, `normal` 20 s, `often` 10 s. Anything
-/// else is `normal`.
-pub fn question_interval(settings: &SettingsMap) -> std::time::Duration {
+/// `questionFrequency` (question-volume design.md, decision 1): `rare`
+/// 30 s, `normal` 5 s, `often` none. Anything else is `normal`.
+pub fn question_gap(settings: &SettingsMap) -> std::time::Duration {
     let seconds = match settings.get(QUESTION_FREQUENCY).and_then(Value::as_str) {
-        Some("rare") => 45,
-        Some("often") => 10,
-        _ => 20,
+        Some("rare") => 30,
+        Some("often") => 0,
+        _ => 5,
     };
     std::time::Duration::from_secs(seconds)
 }

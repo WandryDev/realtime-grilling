@@ -142,29 +142,30 @@ async fn a_phrase_of_others_starts_a_call_one_of_me_does_not() {
     assert_eq!(rig.calls()[0].outcome, AgentCallOutcome::Empty);
 }
 
-/// «Клиент закончил фразу»: «обычно», the last call started 25 s ago and
-/// ended.
+/// «Клиент закончил фразу»: «обычно», the last call started 8 s ago and
+/// ended: a call at once.
 #[tokio::test(start_paused = true)]
-async fn the_client_finished_a_phrase_after_the_interval() {
-    let rig = Rig::new([]).await;
-    rig.say(OTHERS, "Первая фраза клиента").await;
-    rig.until(25).await;
-    rig.say(OTHERS, "Вторая фраза клиента").await;
-    assert_eq!(rig.starts(), [0, 25]);
-}
-
-/// «Слишком рано»: 8 s after the last start nothing; the next phrase after
-/// the interval starts it.
-#[tokio::test(start_paused = true)]
-async fn too_early_waits_for_the_next_phrase_after_the_interval() {
+async fn the_client_finished_a_phrase_after_the_gap() {
     let rig = Rig::new([]).await;
     rig.say(OTHERS, "Первая фраза клиента").await;
     rig.until(8).await;
+    rig.say(OTHERS, "Вторая фраза клиента").await;
+    assert_eq!(rig.starts(), [0, 8]);
+}
+
+/// «Слишком рано»: «реже», 12 s after the last start the call waits for the
+/// gap and starts at 30 s by itself, with no other phrase.
+#[tokio::test(start_paused = true)]
+async fn too_early_starts_by_itself_once_the_gap_passes() {
+    let rig = Rig::new([]).await;
+    rig.setting(settings::QUESTION_FREQUENCY, json!("rare"));
+    rig.say(OTHERS, "Первая фраза клиента").await;
+    rig.until(12).await;
     rig.say(OTHERS, "Слишком рано").await;
-    rig.until(21).await;
-    assert_eq!(rig.starts(), [0], "no phrase after the interval yet");
-    rig.say(OTHERS, "Уже можно").await;
-    assert_eq!(rig.starts(), [0, 21]);
+    rig.until(29).await;
+    assert_eq!(rig.starts(), [0], "the gap hasn't passed");
+    rig.until(31).await;
+    assert_eq!(rig.starts(), [0, 30]);
 }
 
 /// «Тишина»: no phrases since the last call, no call.
@@ -176,54 +177,79 @@ async fn silence_starts_nothing() {
     assert_eq!(rig.starts(), [0]);
 }
 
-/// One call at a time; phrases during a call count for the next.
+/// Phrases of the manager alone don't make a call due.
 #[tokio::test(start_paused = true)]
-async fn phrases_during_a_call_go_to_the_next_one() {
+async fn the_managers_phrases_make_no_call_due() {
+    let rig = Rig::new([]).await;
+    rig.say(OTHERS, "Фраза клиента").await;
+    rig.until(10).await;
+    rig.say(ME, "А сколько у вас операторов?").await;
+    rig.until(60).await;
+    assert_eq!(rig.starts(), [0]);
+}
+
+/// «Фраза во время вызова»: one call at a time; a phrase during the call
+/// starts the next one as soon as it ends (the gap passed), with no other
+/// phrase, and the next call gets it.
+#[tokio::test(start_paused = true)]
+async fn a_phrase_during_a_call_starts_the_next_when_it_ends() {
     let rig = Rig::new([Step::empty().after(Duration::from_secs(25))]).await;
     rig.say(OTHERS, "Первая фраза").await;
     rig.until(21).await;
     let during = rig.say(OTHERS, "Пока агент думает").await;
     assert_eq!(rig.starts(), [0], "a call is running");
-    rig.until(27).await;
-    rig.say(OTHERS, "После вызова").await;
-    assert_eq!(rig.starts(), [0, 27]);
+    rig.until(26).await;
+    assert_eq!(rig.starts(), [0, 25]);
     let message = rig.agent.received(1).request.user_message;
     assert!(message.contains(&during.id), "{message}");
 }
 
+/// «Фраза во время вызова» with the gap still running at the end of the
+/// call: the next starts when the gap passes.
 #[tokio::test(start_paused = true)]
-async fn the_frequency_is_read_at_every_decision() {
+async fn a_phrase_during_a_short_call_waits_for_the_gap() {
+    let rig = Rig::new([Step::empty().after(Duration::from_secs(2))]).await;
+    rig.say(OTHERS, "Первая фраза").await;
+    rig.until(1).await;
+    rig.say(OTHERS, "Пока агент думает").await;
+    rig.until(4).await;
+    assert_eq!(rig.starts(), [0], "the call ended at 2 s, the gap is 5 s");
+    rig.until(6).await;
+    assert_eq!(rig.starts(), [0, 5]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_frequency_is_read_at_every_phrase() {
     let rig = Rig::new([]).await;
     rig.setting(settings::QUESTION_FREQUENCY, json!("often"));
     rig.say(OTHERS, "Раз").await;
-    rig.until(11).await;
-    rig.say(OTHERS, "Два").await;
-    assert_eq!(rig.starts(), [0, 11]);
+    rig.until(6).await;
+    rig.say(OTHERS, "Два: вызов кончился, промежутка нет").await;
+    assert_eq!(rig.starts(), [0, 6]);
 
     rig.setting(settings::QUESTION_FREQUENCY, json!("rare"));
-    rig.until(50).await;
-    rig.say(OTHERS, "Три: 39 с после второго").await;
-    assert_eq!(rig.starts(), [0, 11]);
-    rig.until(57).await;
-    rig.say(OTHERS, "Четыре: 46 с после второго").await;
-    assert_eq!(rig.starts(), [0, 11, 57]);
+    rig.until(20).await;
+    rig.say(OTHERS, "Три: 14 с после второго").await;
+    assert_eq!(rig.starts(), [0, 6]);
+    rig.until(37).await;
+    assert_eq!(rig.starts(), [0, 6, 36]);
 }
 
 #[test]
-fn intervals_by_frequency() {
-    let interval = |value: Value| {
-        settings::question_interval(&settings::SettingsMap::from([(
+fn gaps_by_frequency() {
+    let gap = |value: Value| {
+        settings::question_gap(&settings::SettingsMap::from([(
             settings::QUESTION_FREQUENCY.to_owned(),
             value,
         )]))
     };
-    assert_eq!(interval(json!("rare")), Duration::from_secs(45));
-    assert_eq!(interval(json!("normal")), Duration::from_secs(20));
-    assert_eq!(interval(json!("often")), Duration::from_secs(10));
-    assert_eq!(interval(json!("sometimes")), Duration::from_secs(20));
+    assert_eq!(gap(json!("rare")), Duration::from_secs(30));
+    assert_eq!(gap(json!("normal")), Duration::from_secs(5));
+    assert_eq!(gap(json!("often")), Duration::ZERO);
+    assert_eq!(gap(json!("sometimes")), Duration::from_secs(5));
     assert_eq!(
-        settings::question_interval(&settings::SettingsMap::new()),
-        Duration::from_secs(20)
+        settings::question_gap(&settings::SettingsMap::new()),
+        Duration::from_secs(5)
     );
 }
 

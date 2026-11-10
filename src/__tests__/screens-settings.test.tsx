@@ -61,6 +61,11 @@ describe("settings screens", () => {
     ).toBeTruthy();
     expect(screen.getByText("/opt/homebrew/bin/claude")).toBeTruthy();
     expect(screen.getByRole("progressbar")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Обычно агент смотрит разговор после каждой фразы клиента. Реже — раз в полминуты, лимит подписки расходуется медленнее"
+      )
+    ).toBeTruthy();
   });
 
   it("shows the shortcut being recorded", () => {

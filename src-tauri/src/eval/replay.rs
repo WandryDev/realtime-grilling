@@ -99,6 +99,9 @@ pub struct Options {
     /// `--quiet-minutes`: the pause threshold instead of
     /// `assembly::QUIET_MINUTES` (task 4.4).
     pub quiet_minutes: Option<i64>,
+    /// `--min-gap`: the least gap between call starts, seconds, instead of
+    /// the corpus's `questionFrequency` (question-volume task 2.3).
+    pub min_gap_secs: Option<u64>,
     /// Where the corpus was read from, for `judge`.
     pub corpus_path: Option<String>,
     /// Progress lines on stderr.
@@ -525,6 +528,7 @@ pub async fn run(
     if let Some(minutes) = options.quiet_minutes {
         config.quiet_minutes = minutes;
     }
+    config.min_gap = options.min_gap_secs.map(Duration::from_secs);
     let rules_sha256 = report::sha256_hex(&config.rules);
     let fast_loop = FastLoop::new(
         Arc::clone(&loop_host),
@@ -611,6 +615,7 @@ pub async fn run(
             baseline_state: options.baseline_state,
             no_gaps: options.no_gaps,
             quiet_minutes: options.quiet_minutes,
+            min_gap_secs: options.min_gap_secs,
         },
         run: Run {
             started_at: run_started_at,

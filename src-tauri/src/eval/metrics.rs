@@ -502,6 +502,12 @@ pub fn header(report: &Report) -> Vec<String> {
     if report.flags.no_gaps {
         flags.push("--no-gaps".to_owned());
     }
+    if let Some(minutes) = report.flags.quiet_minutes {
+        flags.push(format!("--quiet-minutes {minutes}"));
+    }
+    if let Some(seconds) = report.flags.min_gap_secs {
+        flags.push(format!("--min-gap {seconds}"));
+    }
     lines.push(format!(
         "Флаги: {}",
         if flags.is_empty() {

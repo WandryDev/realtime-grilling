@@ -109,7 +109,7 @@ fn message(agent: &FakeAgent, index: usize) -> String {
 }
 
 /// «Фраза во время вызова»: the call takes 8 s; a phrase of the client
-/// meanwhile is not in it, and is in the next one.
+/// meanwhile is not in it, and starts the next one when it ends.
 #[tokio::test(start_paused = true)]
 async fn a_phrase_during_a_call_goes_to_the_next_one() {
     let agent = FakeAgent::new([Step::empty().after(Duration::from_secs(8))]);
@@ -120,18 +120,25 @@ async fn a_phrase_during_a_call_goes_to_the_next_one() {
     ]);
     let report = replay(&corpus, agent.clone(), &options(), FAST).await;
 
-    assert_eq!(agent.calls(), 2);
+    assert_eq!(agent.calls(), 3);
     let first = message(&agent, 0);
     assert!(first.contains("Звонки идут на личные телефоны"), "{first}");
     assert!(!first.contains("Ночью никто не отвечает"), "{first}");
     let second = message(&agent, 1);
     assert!(second.contains("[S:seg-2]"), "{second}");
-    assert!(second.contains("Пациенты ждут по десять минут"), "{second}");
+    assert!(
+        !second.contains("Пациенты ждут по десять минут"),
+        "{second}"
+    );
+    let third = message(&agent, 2);
+    assert!(third.contains("Пациенты ждут по десять минут"), "{third}");
 
     assert!(report.complete);
     let starts: Vec<i64> = report.calls.iter().map(|call| call.at_ms).collect();
     assert!((2_000..2_200).contains(&starts[0]), "{starts:?}");
-    assert!((30_000..30_200).contains(&starts[1]), "{starts:?}");
+    // The first call ends at 10 s, past the 5 s gap: the next at once.
+    assert!((10_000..10_300).contains(&starts[1]), "{starts:?}");
+    assert!((30_000..30_200).contains(&starts[2]), "{starts:?}");
     assert_eq!(report.run.segments_fed, 3);
 }
 
@@ -175,11 +182,7 @@ async fn the_clock_follows_a_call_that_waits_on_the_real_world() {
     let report = replay(&corpus, agent.clone(), &options(), FOLLOW).await;
 
     let outcomes: Vec<_> = report.calls.iter().map(|call| call.outcome).collect();
-    assert_eq!(
-        outcomes,
-        [AgentCallOutcome::Empty, AgentCallOutcome::Empty],
-        "{report:#?}"
-    );
+    assert_eq!(outcomes, [AgentCallOutcome::Empty; 3], "{report:#?}");
     // The first call took ~0.7 s of the run's clock, not 0 and not 32.
     let idle_after_first = report
         .log
@@ -194,7 +197,14 @@ async fn the_clock_follows_a_call_that_waits_on_the_real_world() {
         (2_500..4_000).contains(&idle_after_first),
         "{idle_after_first}"
     );
-    assert!((30_000..30_300).contains(&report.calls[1].at_ms));
+    // The phrase during the first call starts the next when the 5 s gap
+    // passes, at 7 s.
+    assert!(
+        (7_000..7_300).contains(&report.calls[1].at_ms),
+        "{:?}",
+        report.calls[1].at_ms
+    );
+    assert!((30_000..30_300).contains(&report.calls[2].at_ms));
     let received = agent.received.lock().unwrap();
     assert!(!received[0].contains("Ночью никто не отвечает"));
     assert!(received[1].contains("Ночью никто не отвечает"));
