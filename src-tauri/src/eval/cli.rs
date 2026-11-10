@@ -54,6 +54,7 @@ grill-eval — прогон записанных звонков через бы�
       Отметить конец обсуждения проекта: пауза и темп в отчётах считаются до него.
   replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
          [--baseline-state] [--no-gaps] [--quiet-minutes N] [--min-gap S]
+         [--requeue-minutes N]
       Прогон набора через быстрый контур с настоящим Claude Code. Отчёт —
       .grill-eval/reports/<время>-<L>-<n>/report.json и report.md.
   judge <отчёт>
@@ -120,6 +121,7 @@ grill-eval import <аудио> [--others <аудио>] [--channels left=me|right
 const REPLAY_USAGE: &str = "\
 grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ] [--realtime]
                   [--baseline-state] [--no-gaps] [--quiet-minutes N] [--min-gap S]
+                  [--requeue-minutes N]
 
 Прогоняет набор (имя в .grill-eval/corpus/ или путь к файлу) через быстрый контур
 приложения с настоящим Claude Code. Простой между фразами пропускается, во время
@@ -140,6 +142,8 @@ grill-eval replay <набор> [--from M] [--to M] [--label L] [--rules ФАЙЛ
   --min-gap S       наименьший промежуток между началами вызовов, секунды, вместо
                     настройки «Как часто предлагать вопросы» набора
                     (question-volume, задача 2.3)
+  --requeue-minutes N видимый вопрос уступает место новым через N минут, а не
+                    через 8 (question-volume, задача 3.3)
 
 Базовая линия до изменения question-quality (правила, состояние и бриф как раньше):
   --rules spikes/question-quality/rules-baseline.md --baseline-state --no-gaps
@@ -376,19 +380,17 @@ fn min_gap_arg(parsed: &Parsed) -> Result<Option<u64>, String> {
         .transpose()
 }
 
-/// `--quiet-minutes`: whole minutes, at least 1.
-fn quiet_minutes_arg(parsed: &Parsed) -> Result<Option<i64>, String> {
+/// `--<name>`: whole minutes, at least 1.
+fn whole_minutes_arg(parsed: &Parsed, name: &str) -> Result<Option<i64>, String> {
     parsed
         .values
-        .get("quiet-minutes")
+        .get(name)
         .map(|value| {
             value
                 .parse::<i64>()
                 .ok()
                 .filter(|minutes| *minutes >= 1)
-                .ok_or_else(|| {
-                    format!("--quiet-minutes: нужно целое число минут от 1, а не «{value}»")
-                })
+                .ok_or_else(|| format!("--{name}: нужно целое число минут от 1, а не «{value}»"))
         })
         .transpose()
 }
@@ -468,7 +470,15 @@ fn ready_cli(cwd: &Path) -> Result<PathBuf, String> {
 fn replay_command(args: &[String]) -> Result<ExitCode, String> {
     let parsed = parse(
         args,
-        &["from", "to", "label", "rules", "quiet-minutes", "min-gap"],
+        &[
+            "from",
+            "to",
+            "label",
+            "rules",
+            "quiet-minutes",
+            "min-gap",
+            "requeue-minutes",
+        ],
         &["realtime", "baseline-state", "no-gaps"],
     )?;
     let argument = one_positional(&parsed, "набор")?;
@@ -501,8 +511,9 @@ fn replay_command(args: &[String]) -> Result<ExitCode, String> {
         realtime: parsed.switches.contains("realtime"),
         baseline_state: parsed.switches.contains("baseline-state"),
         no_gaps: parsed.switches.contains("no-gaps"),
-        quiet_minutes: quiet_minutes_arg(&parsed)?,
+        quiet_minutes: whole_minutes_arg(&parsed, "quiet-minutes")?,
         min_gap_secs: min_gap_arg(&parsed)?,
+        requeue_minutes: whole_minutes_arg(&parsed, "requeue-minutes")?,
         corpus_path: Some(corpus_path),
         progress: true,
     };

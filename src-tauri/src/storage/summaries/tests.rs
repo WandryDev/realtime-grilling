@@ -96,6 +96,21 @@ fn questions(connection: &Connection, call_id: &str, texts: &[&str]) -> Vec<Stri
         .question_ids
 }
 
+/// An open question of a new recording of the call, written as a version 6
+/// database stores it.
+fn v6_question(connection: &Connection, call_id: &str, text: &str) -> String {
+    let recording_id = recording(connection, call_id);
+    let id = format!("q-{recording_id}");
+    connection
+        .execute(
+            "INSERT INTO questions (id, recording_id, call_id, text, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 1000, 1000)",
+            rusqlite::params![id, recording_id, call_id, text],
+        )
+        .unwrap();
+    id
+}
+
 fn status(connection: &Connection, question_id: &str) -> QuestionStatus {
     let recording_id: String = connection
         .query_row(
@@ -241,7 +256,9 @@ fn migration_0007_keeps_a_version_6_database() {
         let igor = person(&connection, &acme, "Игорь");
         let finished = call(&connection, Some(&acme), CallStatus::Finished);
         let live = call(&connection, None, CallStatus::Live);
-        let question_ids = questions(&connection, &finished, &["Сколько звонков?"]);
+        // Not `questions`: the visible list reads columns a version 6
+        // database lacks.
+        let question_ids = vec![v6_question(&connection, &finished, "Сколько звонков?")];
         let recording_id = recording(&connection, &live);
         (acme, igor, finished, live, question_ids, recording_id)
     };
@@ -769,4 +786,48 @@ fn summaries_and_proposals_follow_their_call_project_and_person() {
     assert_eq!(rows(&theirs), (1, 1), "another project's stay");
     assert_eq!(rows(&loose), (1, 0), "a call without a project stays");
     assert_eq!(count(&connection, "pragma_foreign_key_check"), 0);
+}
+
+/// Migration 0008 (question-volume): a version 7 database with an open
+/// question keeps it; the question has never given its place, and the
+/// visible list works on it.
+#[test]
+fn migration_0008_keeps_a_version_7_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DATABASE_FILE);
+    let (finished, question_id) = {
+        let v7 = Migrations::from_slice(&MIGRATION_LIST[..7]);
+        let connection = open(&path, &v7).unwrap();
+        let acme = project(&connection, "Acme");
+        let finished = call(&connection, Some(&acme), CallStatus::Finished);
+        let question_id = v6_question(&connection, &finished, "Сколько звонков?");
+        (finished, question_id)
+    };
+
+    let connection = open(&path, &MIGRATIONS).unwrap();
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION as i64);
+    let requeued: Option<i64> = connection
+        .query_row(
+            "SELECT requeued_at FROM questions WHERE id = ?1",
+            [&question_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(requeued, None);
+    assert_eq!(status(&connection, &question_id), QuestionStatus::Open);
+    assert_eq!(
+        calls::get(&connection, &finished).unwrap().open_questions,
+        1
+    );
+    let recording_id: String = connection
+        .query_row(
+            "SELECT recording_id FROM questions WHERE id = ?1",
+            [&question_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    call_state::recompute_visible(&connection, &recording_id).unwrap();
 }

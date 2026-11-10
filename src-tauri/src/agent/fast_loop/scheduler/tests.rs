@@ -917,3 +917,83 @@ async fn the_second_call_gets_the_state_of_the_first() {
         assert!(message.contains(part), "no «{part}» in\n{message}");
     }
 }
+
+/* Старый вопрос уступает место (question-volume, decision 3) */
+
+/// A topic with three questions shown 9 minutes ago by the host's clock,
+/// and, with `waiting`, a fourth that waits behind them.
+fn shown_long_ago(rig: &Rig, waiting: bool) {
+    use call_state::{
+        CardLens, Evidence, EvidenceSource, GapType, NewQuestion, ValidatedOp, ValidatedPatch,
+    };
+    let ask = |text: &str| {
+        ValidatedOp::AddQuestion(NewQuestion {
+            text: text.to_owned(),
+            description: String::new(),
+            card_field: CardLens::Goal,
+            gap_type: GapType::Empty,
+            priority: 2,
+            evidence: vec![Evidence {
+                source: EvidenceSource::Segment,
+                id: "S1".to_owned(),
+                quote: "цитата".to_owned(),
+            }],
+        })
+    };
+    let then = rig.host.now_ms() - 9 * 60_000;
+    let mut ops = vec![ValidatedOp::CreateTopic {
+        title: "Очередь".to_owned(),
+    }];
+    ops.extend(["Первый", "Второй", "Третий"].map(ask));
+    rig.host
+        .db(|db| call_state::apply_patch_at(db, &rig.recording, &ValidatedPatch { ops }, then))
+        .unwrap();
+    if waiting {
+        let ops = vec![ask("Новый")];
+        rig.host
+            .db(|db| {
+                call_state::apply_patch_at(
+                    db,
+                    &rig.recording,
+                    &ValidatedPatch { ops },
+                    then + 1_000,
+                )
+            })
+            .unwrap();
+    }
+}
+
+fn visible_texts(rig: &Rig) -> Vec<String> {
+    rig.host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap()
+        .visible()
+        .into_iter()
+        .map(|question| question.text.clone())
+        .collect()
+}
+
+/// An empty patch 9 minutes after the list filled, with a question
+/// waiting: the oldest gives its place, the windows hear it once.
+#[tokio::test(start_paused = true)]
+async fn an_empty_patch_lets_a_waiting_question_in() {
+    let rig = Rig::new([]).await;
+    shown_long_ago(&rig, true);
+    assert_eq!(visible_texts(&rig), ["Первый", "Второй", "Третий"]);
+    rig.say(OTHERS, "Клиент говорит дальше").await;
+    rig.until(6).await;
+    assert_eq!(rig.calls()[0].outcome, AgentCallOutcome::Empty);
+    assert_eq!(visible_texts(&rig), ["Второй", "Третий", "Новый"]);
+    assert_eq!(rig.host.changes(), 1);
+}
+
+/// Nobody waits: the old questions stay, no event.
+#[tokio::test(start_paused = true)]
+async fn an_empty_patch_without_waiting_questions_changes_nothing() {
+    let rig = Rig::new([]).await;
+    shown_long_ago(&rig, false);
+    rig.say(OTHERS, "Клиент говорит дальше").await;
+    rig.until(6).await;
+    assert_eq!(visible_texts(&rig), ["Первый", "Второй", "Третий"]);
+    assert_eq!(rig.host.changes(), 0);
+}

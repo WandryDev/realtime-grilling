@@ -266,6 +266,27 @@ pub fn question_gap(settings: &SettingsMap) -> std::time::Duration {
     std::time::Duration::from_secs(seconds)
 }
 
+/// Minutes a visible question keeps its place while questions never shown
+/// wait (question-volume design.md, decision 3). Not on the settings
+/// screen: a replay tries other values (`grill-eval replay
+/// --requeue-minutes`).
+pub const QUESTION_REQUEUE_MINUTES: &str = "questionRequeueMinutes";
+pub const DEFAULT_REQUEUE_MINUTES: i64 = 8;
+
+/// `questionRequeueMinutes` in ms: a whole number of minutes from 1, as a
+/// number or a string; anything else is [`DEFAULT_REQUEUE_MINUTES`].
+pub fn question_requeue_ms(settings: &SettingsMap) -> i64 {
+    let minutes = match settings.get(QUESTION_REQUEUE_MINUTES) {
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        Some(Value::Number(number)) => number.as_i64(),
+        _ => None,
+    };
+    minutes
+        .filter(|minutes| *minutes >= 1)
+        .unwrap_or(DEFAULT_REQUEUE_MINUTES)
+        * 60_000
+}
+
 /// `questionCount` as a number of visible questions: `1`, `3` or `5`, as a
 /// string (how the frontend stores it) or a number. Anything else is 3.
 pub fn question_count(settings: &SettingsMap) -> usize {

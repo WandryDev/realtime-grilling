@@ -635,9 +635,26 @@ fn question(connection: &Connection, id: &str) -> CommandResult<Question> {
         .ok_or_else(|| CommandError::not_found(format!("Вопрос {id} не найден")))
 }
 
+/// How the visible list is made, from the settings.
+#[derive(Debug, Clone, Copy)]
+struct ListRules {
+    /// `questionCount`.
+    count: usize,
+    /// `questionRequeueMinutes`, ms.
+    requeue_after_ms: i64,
+}
+
+fn list_rules(connection: &Connection) -> CommandResult<ListRules> {
+    let settings = settings::get(connection)?;
+    Ok(ListRules {
+        count: settings::question_count(&settings),
+        requeue_after_ms: settings::question_requeue_ms(&settings),
+    })
+}
+
 /// `questionCount` from the settings.
 fn question_count(connection: &Connection) -> CommandResult<usize> {
-    Ok(settings::question_count(&settings::get(connection)?))
+    Ok(list_rules(connection)?.count)
 }
 
 /// The whole state of a recording's call. `NotFound` for an unknown
@@ -752,7 +769,7 @@ pub fn apply_patch_at(
     if patch.ops.is_empty() {
         return Ok(AppliedPatch::default());
     }
-    let count = question_count(connection)?;
+    let rules = list_rules(connection)?;
     in_savepoint(connection, || {
         let mut applied = AppliedPatch::default();
         let mut current = recording.current_topic_id.clone();
@@ -808,7 +825,7 @@ pub fn apply_patch_at(
                 }
             }
         }
-        recompute(connection, recording_id, count, now)?;
+        recompute(connection, recording_id, rules, now)?;
         Ok(applied)
     })
 }
@@ -1022,7 +1039,7 @@ pub fn act(
     action: QuestionAction,
 ) -> CommandResult<String> {
     let current = question(connection, question_id)?;
-    let count = question_count(connection)?;
+    let rules = list_rules(connection)?;
     let status = current.status;
     let refuse = |message: &str| Err(CommandError::invalid(message));
     let (status, pinned) = match action {
@@ -1054,7 +1071,7 @@ pub fn act(
               WHERE id = ?1",
             params![question_id, status.as_str(), pinned, now],
         )?;
-        recompute(connection, &current.recording_id, count, now)?;
+        recompute(connection, &current.recording_id, rules, now)?;
         Ok(current.recording_id.clone())
     })
 }
@@ -1063,10 +1080,21 @@ pub fn act(
 /// `questionCount` (after a change of the setting, say). `NotFound` for an
 /// unknown recording.
 pub fn recompute_visible(connection: &Connection, recording_id: &str) -> CommandResult<()> {
+    recompute_visible_at(connection, recording_id, now_ms()).map(|_| ())
+}
+
+/// [`recompute_visible`] at `now` (the fast loop's host clock); whether the
+/// visible list changed: a question that was visible too long gave its
+/// place (question-volume design.md, decision 3).
+pub fn recompute_visible_at(
+    connection: &Connection,
+    recording_id: &str,
+    now: i64,
+) -> CommandResult<bool> {
     recording_row(connection, recording_id)?;
-    let count = question_count(connection)?;
+    let rules = list_rules(connection)?;
     in_savepoint(connection, || {
-        recompute(connection, recording_id, count, now_ms())
+        recompute(connection, recording_id, rules, now)
     })
 }
 
@@ -1087,6 +1115,7 @@ struct Slot {
     open: bool,
     pinned: bool,
     shown_at: Option<i64>,
+    requeued_at: Option<i64>,
     priority: i32,
     created_at: i64,
 }
@@ -1094,21 +1123,28 @@ struct Slot {
 /// Decision 7: every pinned open question (of any topic; never cut, so
 /// there may be more of them than `count`), then the open questions of the
 /// current topic already visible in their `shown_at` order, then free
-/// places up to `count` go to the waiting ones by priority, then oldest
-/// first. A question that leaves (answered, hidden, asked, of
-/// another topic, no room) loses its `shown_at`; one that comes gets a
-/// `shown_at` after every other, so a new question never moves the visible
-/// ones.
+/// places up to `count` go to the waiting ones: first those never shown, by
+/// priority, then oldest first; then those that gave their place, by when.
+/// A question that leaves (answered, hidden, asked, of another topic, no
+/// room) loses its `shown_at`; one that comes gets a `shown_at` after every
+/// other, so a new question never moves the visible ones.
+///
+/// Question-volume decision 3: when questions never shown wait and there is
+/// no free place for them, the visible ones (not pinned) shown at least
+/// `requeue_after_ms` ago give theirs, the longest shown first, one per
+/// waiting question: they go back to the queue (`requeued_at`).
+///
+/// Whether the visible list changed.
 fn recompute(
     connection: &Connection,
     recording_id: &str,
-    count: usize,
+    rules: ListRules,
     now: i64,
-) -> CommandResult<()> {
+) -> CommandResult<bool> {
     let current: Option<String> = recording_row(connection, recording_id)?.current_topic_id;
     let slots: Vec<Slot> = {
         let mut statement = connection.prepare(
-            "SELECT id, topic_id, status, pinned, shown_at, priority, created_at
+            "SELECT id, topic_id, status, pinned, shown_at, requeued_at, priority, created_at
                FROM questions WHERE recording_id = ?1",
         )?;
         let rows = statement.query_map([recording_id], |row| {
@@ -1118,8 +1154,9 @@ fn recompute(
                 open: row.get::<_, String>(2)? == QuestionStatus::Open.as_str(),
                 pinned: row.get(3)?,
                 shown_at: row.get(4)?,
-                priority: row.get(5)?,
-                created_at: row.get(6)?,
+                requeued_at: row.get(5)?,
+                priority: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?;
         rows.collect::<Result<_, _>>()?
@@ -1138,12 +1175,30 @@ fn recompute(
         .filter(|s| s.open && !s.pinned && s.shown_at.is_none() && of_current(s))
         .collect();
     waiting.sort_by(|a, b| {
-        b.priority
-            .cmp(&a.priority)
+        a.requeued_at
+            .is_some()
+            .cmp(&b.requeued_at.is_some())
+            .then(a.requeued_at.cmp(&b.requeued_at))
+            .then(b.priority.cmp(&a.priority))
             .then(a.created_at.cmp(&b.created_at))
             .then(a.id.cmp(&b.id))
     });
-    let room = count.saturating_sub(pinned.len());
+    let room = rules.count.saturating_sub(pinned.len());
+
+    // Questions never shown that find no free place.
+    let never_shown = waiting.iter().filter(|s| s.requeued_at.is_none()).count();
+    let short = never_shown.saturating_sub(room.saturating_sub(kept.len()));
+    let stale: Vec<&str> = kept
+        .iter()
+        .filter(|s| {
+            s.shown_at
+                .is_some_and(|at| now - at >= rules.requeue_after_ms)
+        })
+        .take(short)
+        .map(|s| s.id.as_str())
+        .collect();
+    kept.retain(|s| !stale.contains(&s.id.as_str()));
+
     let order: Vec<&Slot> = pinned
         .into_iter()
         .chain(kept.into_iter().chain(waiting).take(room))
@@ -1157,6 +1212,7 @@ fn recompute(
         )?;
         Ok(())
     };
+    let mut changed = false;
     // The ones that come get a `shown_at` after every other, in the order
     // they were picked.
     let latest = slots.iter().filter_map(|slot| slot.shown_at).max();
@@ -1164,13 +1220,21 @@ fn recompute(
     let coming = order.iter().filter(|slot| slot.shown_at.is_none());
     for (shown_at, slot) in (first..).zip(coming) {
         show(&slot.id, Some(shown_at))?;
+        changed = true;
     }
     for slot in &slots {
         if slot.shown_at.is_some() && !visible.contains(slot.id.as_str()) {
             show(&slot.id, None)?;
+            changed = true;
         }
     }
-    Ok(())
+    for id in &stale {
+        connection.execute(
+            "UPDATE questions SET requeued_at = ?2 WHERE id = ?1",
+            params![id, now],
+        )?;
+    }
+    Ok(changed)
 }
 
 /* Agent calls */
@@ -1544,6 +1608,129 @@ mod tests {
             visible(&connection, &id),
             vec!["Низкий", "Высокий", "Средний"]
         );
+    }
+
+    const MIN: i64 = 60_000;
+
+    fn apply_at(connection: &Connection, recording_id: &str, ops: Vec<ValidatedOp>, now: i64) {
+        apply_patch_at(connection, recording_id, &ValidatedPatch { ops }, now).unwrap();
+    }
+
+    fn requeued_at(connection: &Connection, question_id: &str) -> Option<i64> {
+        connection
+            .query_row(
+                "SELECT requeued_at FROM questions WHERE id = ?1",
+                [question_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// «Старый вопрос уступает место»: three visible, one shown 9 minutes
+    /// ago, a new one comes: the old one goes back to the queue, the other
+    /// two keep their order.
+    #[test]
+    fn an_old_question_gives_its_place_to_a_new_one() {
+        let connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        let t0 = now_ms();
+        apply_at(&connection, &id, vec![ask("Старый", 2)], t0);
+        apply_at(
+            &connection,
+            &id,
+            vec![ask("Второй", 2), ask("Третий", 2)],
+            t0 + 5 * MIN,
+        );
+        apply_at(&connection, &id, vec![ask("Новый", 1)], t0 + 9 * MIN);
+        assert_eq!(visible(&connection, &id), vec!["Второй", "Третий", "Новый"]);
+        let old = id_of(&connection, &id, "Старый");
+        let state = get(&connection, &id).unwrap();
+        let question = state.questions.iter().find(|q| q.id == old).unwrap();
+        assert_eq!(question.status, QuestionStatus::Open);
+        assert_eq!(question.shown_at, None);
+        assert_eq!(requeued_at(&connection, &old), Some(t0 + 9 * MIN));
+    }
+
+    /// «Ждать некому»: a question visible 15 minutes keeps its place when
+    /// nothing never shown waits.
+    #[test]
+    fn nothing_waiting_keeps_the_old_question() {
+        let connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        let t0 = now_ms();
+        apply_at(
+            &connection,
+            &id,
+            vec![ask("Первый", 2), ask("Второй", 2), ask("Третий", 2)],
+            t0,
+        );
+        assert!(!recompute_visible_at(&connection, &id, t0 + 15 * MIN).unwrap());
+        assert_eq!(
+            visible(&connection, &id),
+            vec!["Первый", "Второй", "Третий"]
+        );
+        // Not visible long enough yet: the new one waits.
+        apply_at(&connection, &id, vec![ask("Новый", 3)], t0 + 7 * MIN);
+        assert_eq!(
+            visible(&connection, &id),
+            vec!["Первый", "Второй", "Третий"]
+        );
+        // The pass after the threshold lets it in, without a patch.
+        assert!(recompute_visible_at(&connection, &id, t0 + 8 * MIN).unwrap());
+        assert_eq!(visible(&connection, &id), vec!["Второй", "Третий", "Новый"]);
+    }
+
+    /// A pinned question never gives its place; a returned question doesn't
+    /// pass a new one of lower priority.
+    #[test]
+    fn pinned_stay_and_returned_wait_behind_new_ones() {
+        let connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        let t0 = now_ms();
+        apply_at(&connection, &id, vec![ask("Закреплён", 2)], t0);
+        let pinned = id_of(&connection, &id, "Закреплён");
+        act(&connection, &pinned, QuestionAction::Pin).unwrap();
+        apply_at(&connection, &id, vec![ask("Старый", 3)], t0);
+        apply_at(&connection, &id, vec![ask("Свежий", 2)], t0 + 5 * MIN);
+        apply_at(&connection, &id, vec![ask("Новый", 2)], t0 + 9 * MIN);
+        let state = get(&connection, &id).unwrap();
+        let shown: Vec<&str> = state
+            .questions
+            .iter()
+            .filter(|q| q.visible)
+            .map(|q| q.text.as_str())
+            .collect();
+        assert!(shown.contains(&"Закреплён"), "{shown:?}");
+        assert!(!shown.contains(&"Старый"), "{shown:?}");
+
+        // A new one of lower priority waits; a place frees: it goes first.
+        apply_at(&connection, &id, vec![ask("Низкий", 1)], t0 + 9 * MIN);
+        let fresh = id_of(&connection, &id, "Свежий");
+        act(&connection, &fresh, QuestionAction::Hide).unwrap();
+        let state = get(&connection, &id).unwrap();
+        let shown: Vec<&str> = state
+            .questions
+            .iter()
+            .filter(|q| q.visible)
+            .map(|q| q.text.as_str())
+            .collect();
+        assert!(shown.contains(&"Низкий"), "{shown:?}");
+        assert!(!shown.contains(&"Старый"), "{shown:?}");
+    }
+
+    #[test]
+    fn the_requeue_minutes_come_from_the_settings() {
+        let setting = |value: Value| {
+            settings::question_requeue_ms(&SettingsMap::from([(
+                settings::QUESTION_REQUEUE_MINUTES.to_owned(),
+                value,
+            )]))
+        };
+        assert_eq!(setting(json!(5)), 5 * MIN);
+        assert_eq!(setting(json!("12")), 12 * MIN);
+        assert_eq!(setting(json!(0)), 8 * MIN);
+        assert_eq!(setting(json!("скоро")), 8 * MIN);
+        assert_eq!(settings::question_requeue_ms(&SettingsMap::new()), 8 * MIN);
     }
 
     /// «Лимит видимых»: 5 open with `questionCount` 3 → the 3 most important.

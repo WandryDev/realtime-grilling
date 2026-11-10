@@ -69,6 +69,7 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!(
         "../../migrations/0007_call_summaries_and_proposals.sql"
     )),
+    M::up(include_str!("../../migrations/0008_question_volume.sql")),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);

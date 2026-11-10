@@ -508,6 +508,9 @@ pub fn header(report: &Report) -> Vec<String> {
     if let Some(seconds) = report.flags.min_gap_secs {
         flags.push(format!("--min-gap {seconds}"));
     }
+    if let Some(minutes) = report.flags.requeue_minutes {
+        flags.push(format!("--requeue-minutes {minutes}"));
+    }
     lines.push(format!(
         "Флаги: {}",
         if flags.is_empty() {

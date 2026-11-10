@@ -856,14 +856,14 @@ async fn run_call(
     let given = assembled.context;
     let now = host.now_ms();
     let applied = database(host, move |connection| {
-        let mut has_ops = false;
+        let mut changed = false;
         in_savepoint(connection, || {
             let fresh = given.with_state(&call_state::get(connection, &id)?);
             let validation = validate::recheck(&parsed, checked, &fresh, similarity.as_ref());
             for rejection in &validation.rejected {
                 eprintln!("grill: the agent's operation was rejected ({id}): {rejection}");
             }
-            has_ops = !validation.patch.ops.is_empty();
+            let has_ops = !validation.patch.ops.is_empty();
             record.rejected = validation.rejected_json();
             record.outcome = Some(if has_ops {
                 AgentCallOutcome::Ok
@@ -871,6 +871,10 @@ async fn run_call(
                 AgentCallOutcome::Empty
             });
             call_state::apply_patch_at(connection, &id, &validation.patch, now)?;
+            // An empty patch writes nothing, but time passed: a question
+            // visible too long may give its place (question-volume design.md,
+            // decision 3).
+            changed = has_ops || call_state::recompute_visible_at(connection, &id, now)?;
             call_state::insert_agent_call_at(connection, &record, now)?;
             Ok(())
         })
@@ -882,12 +886,12 @@ async fn run_call(
             call_state::insert_agent_call_at(connection, &record, now)?;
             Err(error)
         })?;
-        Ok(has_ops)
+        Ok(changed)
     })
     .await;
     match applied {
-        Ok(has_ops) => {
-            if has_ops {
+        Ok(changed) => {
+            if changed {
                 host.call_state_changed(&call.recording_id);
             }
             CallEnd::Done

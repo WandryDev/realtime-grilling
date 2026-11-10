@@ -102,6 +102,10 @@ pub struct Options {
     /// `--min-gap`: the least gap between call starts, seconds, instead of
     /// the corpus's `questionFrequency` (question-volume task 2.3).
     pub min_gap_secs: Option<u64>,
+    /// `--requeue-minutes`: how long a visible question keeps its place
+    /// while new ones wait, instead of the default (question-volume task
+    /// 3.3); written to the run's settings.
+    pub requeue_minutes: Option<i64>,
     /// Where the corpus was read from, for `judge`.
     pub corpus_path: Option<String>,
     /// Progress lines on stderr.
@@ -490,6 +494,16 @@ pub async fn run(
     };
     let connection = storage::open_in_memory()?;
     let recording_id = seed(&connection, corpus).map_err(|error| error.to_string())?;
+    if let Some(minutes) = options.requeue_minutes {
+        settings::put(
+            &connection,
+            &settings::SettingsMap::from([(
+                settings::QUESTION_REQUEUE_MINUTES.to_owned(),
+                serde_json::json!(minutes),
+            )]),
+        )
+        .map_err(|error| error.to_string())?;
+    }
     let glossary = context::load(&connection, &recording_id)
         .map_err(|error| error.to_string())?
         .glossary;
@@ -616,6 +630,7 @@ pub async fn run(
             no_gaps: options.no_gaps,
             quiet_minutes: options.quiet_minutes,
             min_gap_secs: options.min_gap_secs,
+            requeue_minutes: options.requeue_minutes,
         },
         run: Run {
             started_at: run_started_at,

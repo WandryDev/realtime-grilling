@@ -151,6 +151,25 @@ describe("toAgentQuestions", () => {
     expect(old.current?.main?.status).toBe("Сейчас важнее всего");
   });
 
+  it("highlights a returned question again: it was shown anew", () => {
+    // Asked 20 minutes ago, gave its place, came back (question-volume):
+    // the backend gave it a new `shownAt`.
+    const state = callState({
+      currentTopicId: CRM.id,
+      questions: [
+        visible("q-back", "Вернулся", CRM.id, 0, {
+          createdAt: at(10),
+          shownAt: LATER - 3000,
+        }),
+      ],
+      topics: [CRM],
+    });
+
+    const { current } = toAgentQuestions(state, { now: LATER });
+
+    expect(current?.main?.status).toBe("Новый, только что");
+  });
+
   it("keeps the history: the answer with its quote, «Вернуть» for hidden and asked", () => {
     const state = callState({
       currentTopicId: CRM.id,

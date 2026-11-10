@@ -94,6 +94,8 @@ pub struct Flags {
     pub quiet_minutes: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_gap_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requeue_minutes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
