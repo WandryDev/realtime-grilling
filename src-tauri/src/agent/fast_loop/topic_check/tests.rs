@@ -118,8 +118,8 @@ fn a_reply_off_the_schema_is_an_error() {
     );
 }
 
-/// The message has the topics, the current one with its card and how long
-/// it goes, and only the last 6 minutes of the transcript.
+/// The message has the topics, the current one and how long it goes, and
+/// only the last 6 minutes of the transcript; not the card.
 #[test]
 fn the_message_reads_the_last_six_minutes() {
     let connection = database();
@@ -129,7 +129,6 @@ fn the_message_reads_the_last_six_minutes() {
     for part in [
         "Бронь через бот (текущая)",
         "# Текущая тема: Бронь через бот, идёт 12 мин",
-        "- goal: Клиент бронирует обмен в Телеграме",
         &segments[1].id,
         &segments[2].id,
         &segments[3].id,
@@ -137,6 +136,7 @@ fn the_message_reads_the_last_six_minutes() {
         assert!(message.contains(part), "no «{part}» in\n{message}");
     }
     assert!(!message.contains(&segments[0].id), "{message}");
+    assert!(!message.contains("Клиент бронирует обмен"), "{message}");
     assert!(message.ends_with("StructuredOutput."));
     // Only the client's phrases can be quoted.
     let ids: Vec<&str> = assembled
