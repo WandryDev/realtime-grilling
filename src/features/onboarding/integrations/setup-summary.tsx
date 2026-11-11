@@ -117,7 +117,7 @@ function SummaryRow({
       >
         {item.value}
       </span>
-      {item.skipped ? (
+      {item.skipped && !item.soon ? (
         <Button
           aria-label={`Подключить ${item.label}`}
           className="-my-1"

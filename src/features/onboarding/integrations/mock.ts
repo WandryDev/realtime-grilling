@@ -3,11 +3,18 @@
  * verbatim from Paper.
  */
 
+import { MOCK_CONNECT_DELAY_MS } from "@/data/services/connectors";
 import type { IntegrationService } from "@/lib/routes";
 
 export type ServiceId = "github" | "outline" | "clickup";
 
-export type ServiceConnection = "idle" | "connected" | "waiting" | "error";
+/** `soon`: not in the app yet (GitHub, ClickUp), nothing to connect. */
+export type ServiceConnection =
+  | "idle"
+  | "connected"
+  | "waiting"
+  | "error"
+  | "soon";
 
 export interface ServiceListItem {
   /** What the service is for, the account, or what went wrong. */
@@ -111,6 +118,8 @@ export interface SetupSummaryItem {
   label: string;
   /** Skipped integrations are gray and offer "Подключить". */
   skipped?: boolean;
+  /** Not in the app yet: gray, «скоро», nothing to connect. */
+  soon?: boolean;
   value: string;
   /** Versions are set in mono. */
   valueMono?: boolean;
@@ -139,7 +148,7 @@ export const SETUP_SUMMARY_INTEGRATIONS: SetupSummaryItem[] = [
 export const CONNECT_DELAY_MS = {
   clickup: 2200,
   github: 2500,
-  outline: 1200,
+  outline: MOCK_CONNECT_DELAY_MS,
 } as const satisfies Record<IntegrationService, number>;
 
 /** What the list shows for each service once it is connected. */

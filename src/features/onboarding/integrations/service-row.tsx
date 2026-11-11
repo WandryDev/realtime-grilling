@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Item,
@@ -24,6 +25,7 @@ import type { ServiceConnection } from "./mock";
  * - connected: green check, "Подключено"
  * - waiting: spinner, "Ждём браузер"
  * - error: the reason in red, "Исправить" on soft red
+ * - soon: not in the app yet, a gray «скоро» and nothing to press
  * With `href` the action is a link to the service step; while waiting the
  * status itself links there.
  */
@@ -58,7 +60,14 @@ export function ServiceRow({
     >
       <ItemMedia>{icon}</ItemMedia>
       <ItemContent className="gap-0.5">
-        <ItemTitle className="font-semibold">{name}</ItemTitle>
+        <ItemTitle
+          className={cn(
+            "font-semibold",
+            status === "soon" && "text-muted-foreground"
+          )}
+        >
+          {name}
+        </ItemTitle>
         <ItemDescription
           className={cn(status === "error" && "text-contradiction")}
         >
@@ -91,6 +100,12 @@ function ServiceRowStatus({
   switch (status) {
     case "connected":
       return <ConnectedMark />;
+    case "soon":
+      return (
+        <Badge className="text-xs" size="sm" variant="neutral">
+          скоро
+        </Badge>
+      );
     case "waiting": {
       const content = (
         <>

@@ -163,17 +163,20 @@ export function DisconnectServiceDialog({
  * keeps the dialog closed.
  */
 export function DisconnectServiceAlertDialog({
+  contents,
   onConfirm,
   onOpenChange,
   service,
 }: {
+  /** Texts that differ from the defaults (Outline names its projects). */
+  contents?: Partial<Record<IntegrationService, DisconnectContent>>;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
   service: IntegrationService | null;
 }) {
   // Keep the last content while the dialog animates out.
   const shown = service ?? "github";
-  const content = DISCONNECT_CONTENT[shown];
+  const content = contents?.[shown] ?? DISCONNECT_CONTENT[shown];
   return (
     <AlertDialog onOpenChange={onOpenChange} open={service !== null}>
       <AlertDialogContent className="p-7 sm:max-w-120">

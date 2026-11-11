@@ -55,7 +55,9 @@ export function IntegrationsScreen({
   state?: IntegrationsScreenState;
 }) {
   const rows = items ?? ITEMS[state];
-  const touched = rows.some((row) => row.status !== "idle");
+  const touched = rows.some(
+    (row) => row.status !== "idle" && row.status !== "soon"
+  );
 
   return (
     <OnboardingWindow className={className} step="integrations">
@@ -68,7 +70,7 @@ export function IntegrationsScreen({
           {rows.map((row) => (
             <ServiceRow
               description={row.description}
-              href={serviceHref?.(row.id)}
+              href={row.status === "soon" ? undefined : serviceHref?.(row.id)}
               icon={<ServiceTile service={row.id} />}
               key={row.id}
               name={SERVICE_NAMES[row.id]}

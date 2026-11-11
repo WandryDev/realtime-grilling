@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ClickUpConnectScreen } from "@/features/onboarding/screens/clickup-connect-screen";
@@ -11,6 +11,8 @@ const CHECKING_KEY = /Проверяем ключ/u;
 
 const heading = (name: string) =>
   screen.getByRole("heading", { level: 1, name });
+
+const MASKED_KEY = /^ol_api_•+7Xk2$/u;
 
 describe("IntegrationsScreen", () => {
   it("offers to connect every service and to skip the step", () => {
@@ -91,10 +93,11 @@ describe("OutlineConnectScreen", () => {
       "value",
       "https://docs.pixel.agency"
     );
-    expect(screen.getByLabelText("API-ключ")).toHaveProperty(
-      "type",
-      "password"
-    );
+    // Masked: the start and the last 4 characters.
+    const key = screen.getByLabelText("API-ключ") as HTMLInputElement;
+    expect(key.value).toMatch(MASKED_KEY);
+    fireEvent.click(screen.getByRole("button", { name: "Показать ключ" }));
+    expect(key.value).toBe("ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2");
   });
 
   it("locks the form while the key is checked", () => {

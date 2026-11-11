@@ -6,6 +6,7 @@ import {
   type ReactNode,
   useCallback,
   useId,
+  useRef,
   useState,
 } from "react";
 
@@ -26,28 +27,27 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { PasswordInput } from "@/components/ui/password-input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
-import {
-  type IntegrationState,
-  setIntegration,
-  useIntegration,
-} from "@/data/integrations";
+import { connectWithKey, useIntegration } from "@/data/integrations";
+import { MaskedKeyInput } from "@/features/connectors/masked-key-input";
+import { connectDemoService } from "@/features/onboarding/integrations/api";
+import { checkOutlineUrl } from "@/features/onboarding/integrations/outline-url";
 import type { IntegrationService } from "@/lib/routes";
 
-import { connectService } from "../api";
-import { OUTLINE, SERVICE_NAMES } from "../mock";
-import { showErrorToast } from "../toasts";
+import { SERVICE_NAMES } from "../mock";
 
 /*
- * Connecting a service from Settings → Интеграции.
- * - GitHub and ClickUp sign in through the browser: the dialog explains what
- *   Grill will read, "Продолжить в браузере" closes it and the row shows
- *   "Подключаем…" until the (simulated) OAuth answers.
- * - Outline takes an address and an API key; "Обновить ключ" on a broken
- *   Outline opens the same form with the address filled in. The key is
- *   checked inside the dialog, a rejected key stays on the form.
+ * Connecting a service from Settings → Интеграции (or from the project
+ * wizard, over its Sources step).
+ * - GitHub and ClickUp sign in through the browser: the dialog explains
+ *   what Grill will read, "Продолжить в браузере" closes it and the row
+ *   shows "Подключаем…" until the demo sign-in answers. In the app they are
+ *   «скоро» and never open it.
+ * - Outline takes an address and an API key (`connectWithKey`); "Обновить
+ *   ключ" on a broken Outline opens the same form with the address filled
+ *   in. The key is checked inside the dialog: a refusal shows at the field
+ *   it belongs to and the dialog stays, the key stays too.
  */
 
 const BROWSER_COPY: Record<
@@ -66,27 +66,6 @@ const BROWSER_COPY: Record<
   },
 };
 
-/** Runs the connection and keeps the store in step; shared by both forms. */
-async function connect(
-  service: IntegrationService,
-  previous: IntegrationState,
-  input?: { host?: string; key?: string }
-) {
-  setIntegration(service, { ...previous, status: "connecting" });
-  try {
-    const next = await connectService(service, input);
-    setIntegration(service, next);
-    toast.add({
-      title: `${SERVICE_NAMES[service]} подключён`,
-      type: "success",
-    });
-    return true;
-  } catch (error) {
-    setIntegration(service, previous);
-    return error instanceof Error ? error : new Error("Не получилось");
-  }
-}
-
 function BrowserConnect({
   onDone,
   service,
@@ -94,20 +73,17 @@ function BrowserConnect({
   onDone: () => void;
   service: Exclude<IntegrationService, "outline">;
 }) {
-  const previous = useIntegration(service);
   const copy = BROWSER_COPY[service];
 
   const handleContinue = useCallback(async () => {
     onDone();
     // The connection outlives the dialog: the row shows its progress.
-    const result = await connect(service, previous);
-    if (result !== true) {
-      showErrorToast(
-        `Не получилось подключить ${SERVICE_NAMES[service]}`,
-        result
-      );
-    }
-  }, [onDone, previous, service]);
+    await connectDemoService(service);
+    toast.add({
+      title: `${SERVICE_NAMES[service]} подключён`,
+      type: "success",
+    });
+  }, [onDone, service]);
 
   return (
     <>
@@ -128,48 +104,70 @@ function BrowserConnect({
   );
 }
 
+const KEY_REFUSED =
+  "Ключ не подошёл. Скопируйте его целиком или создайте новый.";
+
 function OutlineConnect({
+  onConnected,
   onDone,
   reconnect,
 }: {
+  onConnected?: () => void;
   onDone: () => void;
   reconnect: boolean;
 }) {
   const previous = useIntegration("outline");
   const hostId = useId();
   const keyId = useId();
+  const keyRef = useRef<HTMLInputElement>(null);
   const [host, setHost] = useState(
-    reconnect ? (previous.account ?? OUTLINE.host) : ""
+    reconnect || previous.status === "connected" ? (previous.host ?? "") : ""
   );
   const [key, setKey] = useState("");
-  const [error, setError] = useState<string>();
+  const [hostError, setHostError] = useState<string>();
+  const [keyError, setKeyError] = useState<string>();
   const [checking, setChecking] = useState(false);
 
   const handleHostChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => setHost(event.target.value),
-    []
-  );
-  const handleKeyChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      setKey(event.target.value);
-      setError(undefined);
+      setHost(event.target.value);
+      setHostError(undefined);
     },
     []
   );
+  const handleKeyChange = useCallback((value: string) => {
+    setKey(value);
+    setKeyError(undefined);
+  }, []);
 
   const handleSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
+      const address = checkOutlineUrl(host);
+      if (!address.ok) {
+        setHostError(address.message);
+        return;
+      }
+      setHost(address.origin);
       setChecking(true);
-      const result = await connect("outline", previous, { host, key });
-      if (result === true) {
+      const result = await connectWithKey("outline", address.origin, key);
+      setChecking(false);
+      if (result.ok) {
+        toast.add({ title: "Outline подключён", type: "success" });
+        onConnected?.();
         onDone();
         return;
       }
-      setChecking(false);
-      setError(result.message);
+      if (result.field === "host") {
+        setHostError(result.message);
+        return;
+      }
+      setKeyError(
+        result.message === "Ключ не подошёл" ? KEY_REFUSED : result.message
+      );
+      keyRef.current?.focus();
     },
-    [host, key, onDone, previous]
+    [host, key, onConnected, onDone]
   );
 
   return (
@@ -188,11 +186,12 @@ function OutlineConnect({
       </DialogHeader>
       <form
         aria-busy={checking || undefined}
+        aria-label="Подключение Outline"
         className="flex flex-col gap-5"
         noValidate
         onSubmit={handleSubmit}
       >
-        <Field>
+        <Field invalid={Boolean(hostError)}>
           <FieldLabel htmlFor={hostId}>Адрес Outline</FieldLabel>
           <Input
             className="font-mono text-sm"
@@ -204,18 +203,20 @@ function OutlineConnect({
             spellCheck={false}
             value={host}
           />
+          {hostError ? <FieldError>{hostError}</FieldError> : null}
         </Field>
-        <Field invalid={Boolean(error)}>
+        <Field invalid={Boolean(keyError)}>
           <FieldLabel htmlFor={keyId}>API-ключ</FieldLabel>
-          <PasswordInput
+          <MaskedKeyInput
             autoFocus
             id={keyId}
-            onChange={handleKeyChange}
+            onValueChange={handleKeyChange}
             placeholder="ol_api_…"
             readOnly={checking}
+            ref={keyRef}
             value={key}
           />
-          {error ? <FieldError>{error}</FieldError> : null}
+          {keyError ? <FieldError>{keyError}</FieldError> : null}
         </Field>
         <DialogFooter>
           <DialogClose render={<Button variant="secondary" />}>
@@ -238,9 +239,12 @@ export interface ConnectTarget {
 }
 
 export function ConnectServiceDialog({
+  onConnected,
   onOpenChange,
   target,
 }: {
+  /** Outline connected (the wizard opens its picker then). */
+  onConnected?: () => void;
   onOpenChange: (open: boolean) => void;
   /** `null` keeps the dialog closed. */
   target: ConnectTarget | null;
@@ -253,7 +257,13 @@ export function ConnectServiceDialog({
   }
   let body: ReactNode = null;
   if (shown?.service === "outline") {
-    body = <OutlineConnect onDone={close} reconnect={shown.reconnect} />;
+    body = (
+      <OutlineConnect
+        onConnected={onConnected}
+        onDone={close}
+        reconnect={shown.reconnect}
+      />
+    );
   } else if (shown) {
     body = <BrowserConnect onDone={close} service={shown.service} />;
   }

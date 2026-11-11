@@ -44,25 +44,6 @@ describe("SettingsBackend.layerMock", () => {
     }).pipe(Effect.provide(SettingsBackend.layerMock))
   );
 
-  it.effect("connects GitHub and refuses a short Outline key", () =>
-    Effect.gen(function* () {
-      const backend = yield* SettingsBackend;
-      const fiber = yield* Effect.forkChild(
-        Effect.all(
-          [
-            backend.connectService("github", {}),
-            Effect.flip(backend.connectService("outline", { key: "short" })),
-          ],
-          { concurrency: "unbounded" }
-        )
-      );
-      yield* TestClock.adjust("2 seconds");
-      const [github, outline] = yield* Fiber.join(fiber);
-      assert.strictEqual(github.status, "connected");
-      assert.strictEqual(outline._tag, "ConnectError");
-    }).pipe(Effect.provide(SettingsBackend.layerMock))
-  );
-
   it.effect("records a sound check", () =>
     Effect.gen(function* () {
       const backend = yield* SettingsBackend;

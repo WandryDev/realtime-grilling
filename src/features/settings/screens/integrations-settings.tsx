@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { type ReactNode, useCallback } from "react";
-
+import { Badge } from "@/components/ui/badge";
 import {
   ClaudeIcon,
   ClickUpIcon,
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import type { IntegrationState, IntegrationsState } from "@/data/integrations";
+import { relativeTime } from "@/features/projects/project-data";
 import { type IntegrationService, routes } from "@/lib/routes";
 
 import {
@@ -36,7 +37,10 @@ import { AGENT_MCP, CLICKUP, GITHUB, OUTLINE, SERVICE_NAMES } from "../mock";
  * - default: GitHub connected, Outline's key broken, ClickUp read-only
  * - confirm-disconnect: the "Отключить GitHub?" dialog over the window
  * - github-disconnected: GitHub back to "Не подключено", undo toast
- * In the app the rows follow the integrations store (`services`).
+ * In the app the rows follow the integrations store (`services`): GitHub
+ * and ClickUp are «скоро» there, Outline shows its team, when it last
+ * answered, «не удалось обновить» with «Повторить» when it did not, and
+ * «Обновить ключ» when the key no longer works.
  */
 type IntegrationsScreenState =
   | "default"
@@ -66,13 +70,36 @@ function previewServices(githubConnected: boolean): IntegrationsState {
   };
 }
 
-/** "2 из 3 работают", "1 из 3 работает". */
+/** "2 из 3 работают", "1 из 3 работает"; «скоро» doesn't count. */
 export function workingSummary(services: IntegrationsState) {
-  const working = SERVICE_ORDER.filter(
+  const available = SERVICE_ORDER.filter(
+    (service) => services[service].available !== false
+  );
+  const working = available.filter(
     (service) => services[service].status === "connected"
   ).length;
   const verb = working === 1 ? "работает" : "работают";
-  return `${working} из ${SERVICE_ORDER.length} ${verb}`;
+  return `${working} из ${available.length} ${verb}`;
+}
+
+/** «14 октября, 09:30» or «5 мин назад». */
+function since(at: number | null | undefined) {
+  return at ? relativeTime(at) : "давно";
+}
+
+/** What a broken Outline means for the projects. */
+function outlineImpact(state: IntegrationState, projects?: string[]) {
+  if (!projects) {
+    return OUTLINE.impact;
+  }
+  const where =
+    projects.length > 0
+      ? `документы Outline в проектах (${projects.map((name) => `«${name}»`).join(", ")}) остаются с последним текстом`
+      : "документы Outline не обновляются";
+  const last = state.lastOkAt
+    ? ` Последний раз работало ${relativeTime(state.lastOkAt)}.`
+    : "";
+  return `Пока ключ не обновлён, ${where}.${last}`;
 }
 
 export interface IntegrationHandlers {
@@ -83,6 +110,12 @@ export interface IntegrationHandlers {
   onDisconnect?: (service: IntegrationService) => void;
   /** "Обновить ключ" / "Подключить заново" on a broken service. */
   onReconnect?: (service: IntegrationService) => void;
+  /** «Повторить» after the service did not answer. */
+  onRetry?: (service: IntegrationService) => void;
+  /** Projects that picked Outline's documents; the previews leave it out. */
+  outlineProjects?: string[];
+  /** «Повторить» is running. */
+  retrying?: boolean;
 }
 
 /** Second line of a connected service: repositories, host, read-only chip. */
@@ -108,7 +141,25 @@ function ConnectedDetails({
     );
   }
   if (service === "outline") {
-    return <p className="font-mono text-xs">{state.account ?? OUTLINE.host}</p>;
+    const stale = state.errorKind === "unreachable";
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="font-mono text-xs">{state.account ?? OUTLINE.host}</p>
+        {state.lastOkAt === undefined ? null : (
+          <p
+            className={
+              stale
+                ? "text-contradiction text-sm"
+                : "text-muted-foreground text-sm"
+            }
+          >
+            {stale
+              ? `Не удалось обновить: Outline не ответил. Последний раз отвечал ${since(state.lastOkAt)}`
+              : `Обновлено ${since(state.lastOkAt)}`}
+          </p>
+        )}
+      </div>
+    );
   }
   return (
     <div className="flex items-center gap-1.5">
@@ -140,7 +191,15 @@ function IntegrationServiceRow({
   service: IntegrationService;
   state: IntegrationState;
 }) {
-  const { onChangeAccess, onConnect, onDisconnect, onReconnect } = handlers;
+  const {
+    onChangeAccess,
+    onConnect,
+    onDisconnect,
+    onReconnect,
+    onRetry,
+    outlineProjects,
+    retrying,
+  } = handlers;
   const name = SERVICE_NAMES[service];
   const icon = SERVICE_ICONS[service];
 
@@ -157,6 +216,22 @@ function IntegrationServiceRow({
     () => onReconnect?.(service),
     [onReconnect, service]
   );
+  const retry = useCallback(() => onRetry?.(service), [onRetry, service]);
+
+  if (state.available === false) {
+    return (
+      <ServiceRow
+        description={`${SERVICE_PITCH[service]}. Подключится позже`}
+        icon={icon}
+        name={name}
+        status={
+          <Badge className="text-xs" size="sm" variant="neutral">
+            скоро
+          </Badge>
+        }
+      />
+    );
+  }
 
   if (state.status === "disconnected" || state.status === "connecting") {
     return (
@@ -195,7 +270,9 @@ function IntegrationServiceRow({
               <p className="font-mono text-xs">
                 {state.account ?? OUTLINE.host}
               </p>
-              <p className="text-muted-foreground text-sm">{OUTLINE.impact}</p>
+              <p className="text-muted-foreground text-sm">
+                {outlineImpact(state, outlineProjects)}
+              </p>
             </div>
           ) : undefined
         }
@@ -216,10 +293,19 @@ function IntegrationServiceRow({
               Изменить доступ
             </ServiceTextAction>
           ) : null}
+          {service === "outline" && state.errorKind === "unreachable" ? (
+            <ServiceTextAction disabled={retrying} emphasis onClick={retry}>
+              {retrying ? "Проверяем…" : "Повторить"}
+            </ServiceTextAction>
+          ) : null}
           <ServiceTextAction onClick={disconnect}>Отключить</ServiceTextAction>
         </>
       }
-      description={CONNECTED_DESCRIPTION[service]}
+      description={
+        service === "outline" && state.team
+          ? `Команда ${state.team}, только чтение документов`
+          : CONNECTED_DESCRIPTION[service]
+      }
       details={<ConnectedDetails service={service} state={state} />}
       icon={icon}
       name={name}

@@ -31,6 +31,10 @@ export const settingsDemo: DemoGroup = {
       label: "Интеграции: ключ Outline не работает",
     },
     {
+      href: withDemo(routes.settings("integrations"), "outline-unreachable"),
+      label: "Интеграции: Outline не ответил, «Повторить»",
+    },
+    {
       href: withDemo(routes.settings("integrations"), "confirm-disconnect"),
       label: "Интеграции: отключить GitHub?",
     },

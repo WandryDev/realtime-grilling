@@ -23,3 +23,31 @@ export function normalizeOutlineUrl(input: string): string | null {
     return null;
   }
 }
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+export type OutlineUrlCheck =
+  | { ok: true; origin: string }
+  | { message: string; ok: false };
+
+/*
+ * The address before the check (outline-connector spec, «Адрес Outline»):
+ * its root, or why the check doesn't start. `http` only for localhost.
+ */
+export function checkOutlineUrl(input: string): OutlineUrlCheck {
+  if (!input.trim()) {
+    return { message: "Укажите адрес вашего Outline.", ok: false };
+  }
+  const origin = normalizeOutlineUrl(input);
+  if (!origin) {
+    return {
+      message: "Это не похоже на адрес. Например, docs.pixel.agency",
+      ok: false,
+    };
+  }
+  const url = new URL(origin);
+  if (url.protocol === "http:" && !LOCAL_HOSTS.has(url.hostname)) {
+    return { message: "Нужен адрес с https", ok: false };
+  }
+  return { ok: true, origin };
+}

@@ -8,7 +8,7 @@ import {
 } from "@/bindings";
 import { type BackendError, call } from "@/effect/tauri";
 
-import { compareIds, MockDatabase, notFound } from "./mock-database";
+import { compareIds, invalid, MockDatabase, notFound } from "./mock-database";
 
 /*
  * Documents of a project from the manager's computer (project-sources
@@ -123,6 +123,12 @@ export class ProjectSourcesData extends Context.Service<
         const stored = tables.sources.get(id);
         if (!stored) {
           return yield* notFound(`Документ ${id} не найден`);
+        }
+        // As in Rust: a connector's document leaves with its selection.
+        if (stored.source.origin) {
+          return yield* invalid(
+            "Документ Outline убирается из проекта через выбор в Outline"
+          );
         }
         tables.sources.delete(id);
         const { projectId } = stored.source;

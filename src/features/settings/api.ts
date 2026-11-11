@@ -2,13 +2,10 @@
 
 import { Cause, Effect, Exit, Stream } from "effect";
 
-import type { IntegrationState } from "@/data/integrations";
 import { type AppServices, appRuntime, runCancelable } from "@/effect/runtime";
-import type { IntegrationService } from "@/lib/routes";
 
 import {
   type AudioChannel,
-  type ConnectInput,
   type ExportOptions,
   SettingsBackend,
   type SoundCheckResult,
@@ -160,22 +157,6 @@ export function deleteAllData(signal?: AbortSignal) {
 }
 
 /* ----------------------------------------------------------- Интеграции */
-
-/**
- * Connects a service: OAuth in the browser for GitHub and ClickUp, an API
- * key for Outline. Resolves with the connected state, rejects with a reason
- * the user can act on.
- */
-export function connectService(
-  service: IntegrationService,
-  input: ConnectInput = {},
-  signal?: AbortSignal
-): Promise<IntegrationState> {
-  return run(
-    SettingsBackend.use((backend) => backend.connectService(service, input)),
-    signal
-  );
-}
 
 /** Opens a page in the browser. */
 export function openExternal(url: string) {

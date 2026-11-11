@@ -1,14 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { toast } from "@/components/ui/toast";
+import { useConnectorSelections } from "@/data/connector-selections";
 import {
   disconnectIntegration,
   getIntegrations,
+  retryIntegration,
   setIntegration,
   useIntegrations,
 } from "@/data/integrations";
+import { useProjects } from "@/data/projects";
 import type { IntegrationService } from "@/lib/routes";
 
 import { openExternal } from "../api";
@@ -17,22 +20,60 @@ import {
   ConnectServiceDialog,
   type ConnectTarget,
 } from "../dialogs/connect-service-dialog";
-import { GITHUB, OUTLINE, SERVICE_NAMES } from "../mock";
+import {
+  disconnectOutlineContent,
+  GITHUB,
+  OUTLINE,
+  SERVICE_NAMES,
+} from "../mock";
 import { IntegrationsSettings } from "../screens/integrations-settings";
 import { showUndoToast } from "../toasts";
 
 export type IntegrationsDemo =
   | "outline-broken"
+  | "outline-unreachable"
   | "confirm-disconnect"
   | "github-disconnected";
 
-/** Disconnects and offers "Вернуть" with the state from before. */
-function disconnectWithUndo(service: IntegrationService) {
+const HOUR_MS = 3_600_000;
+
+/**
+ * Disconnects. A demo service offers "Вернуть" with the state from
+ * before; Outline's key is gone from Keychain, so it only says so.
+ */
+async function disconnectWithUndo(service: IntegrationService) {
   const previous = getIntegrations()[service];
-  disconnectIntegration(service);
+  const done = await disconnectIntegration(service);
+  if (!done) {
+    return;
+  }
+  if (service === "outline") {
+    toast.add({
+      description: "Документы Outline остались в проектах с последним текстом",
+      title: "Outline отключён",
+      type: "success",
+    });
+    return;
+  }
   showUndoToast(`${SERVICE_NAMES[service]} отключён`, () => {
     setIntegration(service, previous);
   });
+}
+
+/** Names of the projects that picked Outline's documents. */
+function useOutlineProjects() {
+  const selections = useConnectorSelections();
+  const projects = useProjects();
+  return useMemo(() => {
+    const ids = new Set(
+      selections
+        .filter((view) => view.kind === "outline" && view.items.length > 0)
+        .map((view) => view.projectId)
+    );
+    return projects
+      .filter((project) => ids.has(project.id))
+      .map((project) => project.name);
+  }, [projects, selections]);
 }
 
 /**
@@ -60,7 +101,16 @@ export function IntegrationsSection({ demo }: { demo?: IntegrationsDemo }) {
       setIntegration("outline", {
         account: OUTLINE.host,
         error: OUTLINE.error,
+        errorKind: "unauthorized",
         status: "error",
+      });
+    } else if (demo === "outline-unreachable") {
+      setIntegration("outline", {
+        account: OUTLINE.host,
+        errorKind: "unreachable",
+        lastOkAt: Date.now() - 3 * HOUR_MS,
+        status: "connected",
+        team: "Pixel Agency",
       });
     } else if (demo === "github-disconnected") {
       disconnectWithUndo("github");
@@ -96,6 +146,18 @@ export function IntegrationsSection({ demo }: { demo?: IntegrationsDemo }) {
     setConnectTarget({ reconnect: true, service });
   }, []);
 
+  const outlineProjects = useOutlineProjects();
+  const disconnectContents = useMemo(
+    () => ({ outline: disconnectOutlineContent(outlineProjects) }),
+    [outlineProjects]
+  );
+  const [retrying, setRetrying] = useState(false);
+  const retry = useCallback(async (service: IntegrationService) => {
+    setRetrying(true);
+    await retryIntegration(service);
+    setRetrying(false);
+  }, []);
+
   const changeAccess = useCallback(async (service: IntegrationService) => {
     if (service !== "github") {
       return;
@@ -115,9 +177,13 @@ export function IntegrationsSection({ demo }: { demo?: IntegrationsDemo }) {
         onConnect={connect}
         onDisconnect={setDisconnecting}
         onReconnect={reconnect}
+        onRetry={retry}
+        outlineProjects={outlineProjects}
+        retrying={retrying}
         services={services}
       />
       <DisconnectServiceAlertDialog
+        contents={disconnectContents}
         onConfirm={confirmDisconnect}
         onOpenChange={handleDisconnectOpenChange}
         service={disconnecting}

@@ -7,18 +7,26 @@ import type {
   CallRecording,
   CallSummary,
   Change,
+  ConnectorKind,
+  ConnectorView,
   DataChanged,
   Entity,
   Person,
   Project,
   ProjectSource,
   Proposal,
+  SelectionItem,
   SummaryProgress,
+  SyncState,
   Value,
 } from "@/bindings";
 import { charCount } from "@/data/project-limits";
 import { BackendError } from "@/effect/tauri";
-
+import {
+  MOCK_OUTLINE_ACCOUNT,
+  type MockOutlineCollection,
+  mockOutlineCollections,
+} from "./mock-outline";
 import { mockSeed } from "./mock-seed";
 
 /*
@@ -54,12 +62,28 @@ export interface MockSource {
   readonly source: ProjectSource;
 }
 
+/** A project's selection in a connector (`connector_selections`). */
+export interface MockSelection {
+  /** The team it was picked in: another team's items are «недоступно». */
+  readonly accountRef: string;
+  readonly items: SelectionItem[];
+  readonly kind: ConnectorKind;
+  /** Items the last sync could not find. */
+  readonly missing: ReadonlySet<string>;
+  readonly projectId: string;
+  readonly sync: SyncState | null;
+}
+
 export interface MockTables {
   /** The fingerprint each project's brief was built from. */
   briefInputs: Map<string, string>;
   /** Projects whose brief is being built now. */
   building: Set<string>;
   calls: Map<string, Call>;
+  /** The connectors' connections, as `connectors_list` gives them. */
+  connections: Map<ConnectorKind, ConnectorView>;
+  /** The demo Outline the connector reads. */
+  outline: MockOutlineCollection[];
   people: Map<string, Person>;
   projects: Map<string, Project>;
   /** By id; `proposals_list` reads them by call. */
@@ -67,6 +91,8 @@ export interface MockTables {
   /** The questions of the recordings, by id. */
   questions: Map<string, CallQuestion>;
   recordings: Map<string, MockRecording>;
+  /** By `${projectId}:${kind}`. */
+  selections: Map<string, MockSelection>;
   settings: Map<string, Value>;
   sources: Map<string, MockSource>;
   /** The stored summary of a call, by call id. */
@@ -173,12 +199,55 @@ export function briefStateOf(tables: MockTables, project: Project): BriefState {
     : "outdated";
 }
 
+const MOCK_CONNECTED_AT = Date.UTC(2026, 9, 1, 10);
+const MOCK_CHECKED_AT = Date.UTC(2026, 9, 14, 9, 30);
+
+/**
+ * The demo connections: Outline connected to Pixel Agency; GitHub and
+ * ClickUp connect only through their demo flows (the integrations store).
+ */
+export function mockConnections(): Map<ConnectorKind, ConnectorView> {
+  const none = {
+    account: null,
+    available: true,
+    capabilities: [] as ConnectorView["capabilities"],
+    connectedAt: null,
+    error: null,
+    errorKind: null,
+    lastAttemptAt: null,
+    lastOkAt: null,
+    status: "disconnected" as const,
+  };
+  return new Map<ConnectorKind, ConnectorView>([
+    [
+      "outline",
+      {
+        account: MOCK_OUTLINE_ACCOUNT,
+        auth: { host: true, type: "apiKey" },
+        available: true,
+        capabilities: ["projectSources"],
+        connectedAt: MOCK_CONNECTED_AT,
+        error: null,
+        errorKind: null,
+        kind: "outline",
+        lastAttemptAt: MOCK_CHECKED_AT,
+        lastOkAt: MOCK_CHECKED_AT,
+        status: "connected",
+      },
+    ],
+    ["github", { ...none, auth: { type: "deviceCode" }, kind: "github" }],
+    ["clickup", { ...none, auth: { type: "browserOAuth" }, kind: "clickup" }],
+  ]);
+}
+
 function seedTables(): MockTables {
   const seed = mockSeed();
   const tables: MockTables = {
     briefInputs: new Map(),
     building: new Set(),
     calls: new Map(seed.calls.map((call) => [call.id, call])),
+    connections: mockConnections(),
+    outline: mockOutlineCollections(),
     people: new Map(seed.people.map((person) => [person.id, person])),
     projects: new Map(seed.projects.map((project) => [project.id, project])),
     proposals: new Map(seed.proposals.map((item) => [item.id, item])),
@@ -186,6 +255,7 @@ function seedTables(): MockTables {
     recordings: new Map(
       seed.recordings.map((item) => [item.recording.id, item])
     ),
+    selections: new Map(),
     settings: storedSettings(),
     sources: new Map(),
     summaries: new Map(seed.summaries.map((item) => [item.callId, item])),
@@ -331,6 +401,9 @@ export class MockDatabase extends Context.Service<
           const seed = seedTables();
           tables.briefInputs = seed.briefInputs;
           tables.building = seed.building;
+          tables.connections = seed.connections;
+          tables.outline = seed.outline;
+          tables.selections = seed.selections;
           tables.people = seed.people;
           tables.projects = seed.projects;
           tables.settings = new Map();

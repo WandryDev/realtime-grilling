@@ -16,10 +16,10 @@ import { IntegrationsBackend } from "./backend";
 import { GITHUB_DEVICE } from "./mock";
 
 /*
- * React-facing side of the onboarding integration steps. The round trips
- * live in the IntegrationsBackend Effect service (`./backend.ts`), the
- * clipboard in OnboardingBackend; this module runs them through the app
- * runtime.
+ * React-facing side of the onboarding integration steps. The GitHub and
+ * ClickUp round trips live in the IntegrationsBackend Effect service
+ * (`./backend.ts`), the clipboard in OnboardingBackend; this module runs
+ * them through the app runtime.
  *
  * Connections write to the integrations store (`src/data/integrations.ts`),
  * so the list, the service steps and the summary all read the same state.
@@ -136,52 +136,42 @@ export function startGitHubAuthorization() {
   );
 }
 
-/* Outline: address and API key ---------------------------------------- */
+/* Settings: the browser sign-ins of the demo -------------------------- */
 
-export type OutlineCheckResult =
-  | { ok: true }
-  | { field: "url" | "key"; message: string; ok: false };
-
-/** List line of a service whose key was rejected. */
-export const OUTLINE_REJECTED_SUMMARY = "Ключ не подошёл, проверьте его";
-const OUTLINE_UNREACHABLE_SUMMARY = "Адрес не отвечает, проверьте его";
-
-/*
- * One auth.info request with the key: a 401 marks the key, an address that
- * doesn't answer marks the address. Never resolves when cancelled.
+/**
+ * GitHub or ClickUp from Settings in the browser demo: the row shows
+ * «Подключаем…» until the (simulated) sign-in answers. They are «скоро»
+ * in the app, which never gets here.
  */
-export function connectOutline(
-  url: string,
-  apiKey: string
-): Promise<OutlineCheckResult> {
-  setIntegration("outline", { status: "connecting" });
-  return new Promise((resolve) => {
+export function connectDemoService(service: "github" | "clickup") {
+  setIntegration(service, { status: "connecting" });
+  return new Promise<void>((resolve) => {
     schedule(
-      "outline",
+      service,
       IntegrationsBackend.use((backend) =>
-        backend.connectOutline(url, apiKey)
+        service === "github"
+          ? backend.authorizeGitHub
+          : backend.authorizeClickUp
       ).pipe(
-        Effect.map((account): OutlineCheckResult => {
-          setIntegration("outline", connected(account));
-          return { ok: true };
-        }),
-        Effect.catchTag("OutlineCheckError", ({ field, message }) =>
-          Effect.sync((): OutlineCheckResult => {
-            setIntegration("outline", {
-              error:
-                field === "url"
-                  ? OUTLINE_UNREACHABLE_SUMMARY
-                  : OUTLINE_REJECTED_SUMMARY,
-              status: "error",
-            });
-            return { field, message, ok: false };
+        Effect.andThen((account) =>
+          Effect.sync(() => {
+            setIntegration(service, connected(account));
+            resolve();
           })
-        ),
-        Effect.map(resolve)
+        )
       )
     );
   });
 }
+
+/* Outline: address and API key ---------------------------------------- */
+
+/*
+ * Outline connects through `connectWithKey` (`src/data/integrations.ts`).
+ * A refused key leaves this line on the onboarding list, «Исправить».
+ */
+export const OUTLINE_REJECTED_SUMMARY = "Ключ не подошёл, проверьте его";
+export const OUTLINE_UNREACHABLE_SUMMARY = "Адрес не отвечает, проверьте его";
 
 /* ClickUp: OAuth in the browser ---------------------------------------- */
 

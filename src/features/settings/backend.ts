@@ -1,8 +1,5 @@
 import { Context, Effect, Layer, Random, Schema, Stream } from "effect";
 
-import type { IntegrationState } from "@/data/integrations";
-import type { IntegrationService } from "@/lib/routes";
-
 /*
  * Backend contract of every Settings operation that needs the system or the
  * network. Long operations are streams of progress, 0 to 100, that complete
@@ -16,24 +13,11 @@ export class AgentCheckError extends Schema.TaggedError<AgentCheckError>()(
   { message: Schema.String }
 ) {}
 
-/** The service refused the connection; the message says what to fix. */
-export class ConnectError extends Schema.TaggedError<ConnectError>()(
-  "ConnectError",
-  { message: Schema.String }
-) {}
-
 export type AudioChannel = "microphone" | "system";
 
 export interface SoundCheckResult {
   client: string;
   you: string;
-}
-
-export interface ConnectInput {
-  /** Outline: workspace address. */
-  host?: string;
-  /** Outline: API key. */
-  key?: string;
 }
 
 export interface ExportOptions {
@@ -43,13 +27,6 @@ export interface ExportOptions {
 
 const PROGRESS_STEP_MS = 100;
 const LEVEL_TICK_MS = 160;
-const MIN_OUTLINE_KEY_LENGTH = 8;
-
-const CONNECTED_ACCOUNTS: Record<IntegrationService, string> = {
-  clickup: "Workspace «Wandry»",
-  github: "dima-kapish, доступ к 12 репозиториям",
-  outline: "wandry.getoutline.com",
-};
 
 /** Ticks up to 100 over `durationMs`. */
 function simulateProgress(durationMs: number): Stream.Stream<number> {
@@ -83,22 +60,14 @@ export class SettingsBackend extends Context.Service<
     readonly exportData: (options: ExportOptions) => Stream.Stream<number>;
     /** Deletes calls, audio, projects and people from the computer. */
     readonly deleteAllData: Effect.Effect<void>;
-    /**
-     * Connects a service: OAuth in the browser for GitHub and ClickUp, an
-     * API key for Outline.
-     */
-    readonly connectService: (
-      service: IntegrationService,
-      input: ConnectInput
-    ) => Effect.Effect<IntegrationState, ConnectError>;
     /** Opens a page in the browser. */
     readonly openExternal: (url: string) => Effect.Effect<void>;
   }
 >()("grill/features/settings/SettingsBackend") {
   /*
    * Speech-like noise on the microphone, near silence on the system audio.
-   * The agent is found when the path ends with `claude`; an Outline key
-   * shorter than 8 characters is refused.
+   * The agent is found when the path ends with `claude`. The services
+   * connect through the `Connectors` data service.
    */
   static readonly layerMock = Layer.succeed(SettingsBackend, {
     checkAgent: Effect.fn("SettingsBackend.checkAgent")(function* (
@@ -110,28 +79,6 @@ export class SettingsBackend extends Context.Service<
           message: `По пути ${path} нет Claude Code`,
         });
       }
-    }),
-    connectService: Effect.fn("SettingsBackend.connectService")(function* (
-      service: IntegrationService,
-      input: ConnectInput
-    ) {
-      yield* Effect.sleep("1500 millis");
-      if (service !== "outline") {
-        return {
-          account: CONNECTED_ACCOUNTS[service],
-          status: "connected",
-        } satisfies IntegrationState;
-      }
-      const key = input.key?.trim() ?? "";
-      if (key.length < MIN_OUTLINE_KEY_LENGTH) {
-        return yield* new ConnectError({
-          message: "Ключ не подошёл: проверьте, что скопировали его целиком",
-        });
-      }
-      return {
-        account: input.host?.trim() || CONNECTED_ACCOUNTS.outline,
-        status: "connected",
-      } satisfies IntegrationState;
     }),
     deleteAllData: Effect.sleep("1500 millis"),
     exportData: (_options: ExportOptions) => simulateProgress(2000),

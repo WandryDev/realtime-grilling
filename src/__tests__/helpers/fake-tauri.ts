@@ -1,14 +1,19 @@
 import type {
+  BrowseNode,
   Call,
   CallOverview,
   CallSession,
   CommandError,
+  ConnectorKind,
+  ConnectorView,
   DataChanged,
   MicActivityChanged,
   Person,
   Project,
+  ProjectConnectorView,
   ProjectSource,
   RecordingStatus,
+  SelectionItem,
   SourceAddResult,
   Value,
 } from "@/bindings";
@@ -24,6 +29,12 @@ import { mergePatch } from "@/lib/merge-patch";
  * commands play the backend's `CallManager` (`session`): `call_start`
  * stores the call and records it, each change sends `DataChanged` of the
  * call, then `CallSessionChanged`.
+ *
+ * The connectors play Rust's (`connectors_*`): Outline is the only one
+ * available, a key starting with `bad` is refused at the key, a host with
+ * `nowhere` at the address; the picker's tree is `outline`, and a saved
+ * selection syncs at once: the documents of the picked collections and
+ * documents become sources with `origin`, less the excluded ones.
  *
  * Use with `vi.hoisted` + `vi.mock` of `@tauri-apps/api/core`,
  * `@tauri-apps/api/event` and `@tauri-apps/api/window`, and
@@ -42,8 +53,11 @@ export interface FakeTauri {
   dataChanged: (change: DataChanged) => void;
   readonly db: {
     calls: Call[];
+    connections: ConnectorView[];
     people: Person[];
     projects: Project[];
+    /** The saved selections; a project without one reads as empty. */
+    selections: ProjectConnectorView[];
     settings: { [key: string]: Value };
     sources: ProjectSource[];
   };
@@ -58,6 +72,8 @@ export interface FakeTauri {
   listen: (event: string, handler: Handler) => Promise<() => void>;
   /** What `mic_activity_get` answers. */
   micActivity: MicActivityChanged;
+  /** The Outline the picker browses: collections, and each one's tree. */
+  outline: { containers: BrowseNode[]; trees: Record<string, BrowseNode[]> };
   /**
    * What the recording of a call fails with (`call_start`, `call_resume`);
    * null: it starts.
@@ -182,6 +198,67 @@ export function fakeCall(
   };
 }
 
+/** A connector of the catalog, not connected. */
+export function fakeConnector(
+  kind: ConnectorKind,
+  view: Partial<ConnectorView> = {}
+): ConnectorView {
+  return {
+    account: null,
+    auth:
+      kind === "outline"
+        ? { host: true, type: "apiKey" }
+        : { type: "deviceCode" },
+    available: kind === "outline",
+    capabilities: kind === "outline" ? ["projectSources"] : [],
+    connectedAt: null,
+    error: null,
+    errorKind: null,
+    kind,
+    lastAttemptAt: null,
+    lastOkAt: null,
+    status: "disconnected",
+    ...view,
+  };
+}
+
+export const FAKE_OUTLINE_ACCOUNT = {
+  host: "https://docs.pixel.agency",
+  teamId: "team-pixel",
+  teamName: "Pixel Agency",
+  userName: "Дима",
+};
+
+/** Outline connected to Pixel Agency, answered at `at`. */
+export function connectedOutline(at: number = Date.now()): ConnectorView {
+  return fakeConnector("outline", {
+    account: FAKE_OUTLINE_ACCOUNT,
+    connectedAt: at,
+    lastAttemptAt: at,
+    lastOkAt: at,
+    status: "connected",
+  });
+}
+
+/** A node of the picker's tree. */
+export function fakeNode(
+  id: string,
+  title: string,
+  kind: BrowseNode["kind"] = "document",
+  children: BrowseNode[] = []
+): BrowseNode {
+  const nested = children.reduce((sum, child) => sum + child.documentCount, 0);
+  return {
+    children,
+    documentCount: kind === "document" ? 1 + nested : nested,
+    hasChildren: children.length > 0,
+    id,
+    kind,
+    title,
+    url: `https://docs.pixel.agency/${kind === "container" ? "collection" : "doc"}/${id}`,
+  };
+}
+
 /** Ids `recording_start` gives: "fake-recording-1", "-2"… */
 export const FAKE_RECORDING_PREFIX = "fake-recording-";
 
@@ -194,8 +271,14 @@ export const IDLE_RECORDING: RecordingStatus = {
 export function createFakeTauri(): FakeTauri {
   const db: FakeTauri["db"] = {
     calls: [],
+    connections: [
+      fakeConnector("outline"),
+      fakeConnector("github"),
+      fakeConnector("clickup"),
+    ],
     people: [],
     projects: [],
+    selections: [],
     settings: { onboardingCompleted: true },
     sources: [],
   };
@@ -358,7 +441,181 @@ export function createFakeTauri(): FakeTauri {
     }
   };
 
+  const outlineView = () =>
+    db.connections.find((view) => view.kind === "outline") ??
+    fakeConnector("outline");
+
+  const selectionOf = (projectId: string): ProjectConnectorView =>
+    db.selections.find((view) => view.projectId === projectId) ?? {
+      connected: outlineView().status !== "disconnected",
+      items: [],
+      kind: "outline",
+      projectId,
+      sync: null,
+      syncing: false,
+    };
+
+  /** The documents a selection brings, by id. */
+  const resolve = (items: SelectionItem[]) => {
+    const flat = (nodes: BrowseNode[]): BrowseNode[] =>
+      nodes.flatMap((node) => [node, ...flat(node.children)]);
+    const all = Object.values(fake.outline.trees).flatMap(flat);
+    const excluded = new Set(
+      items
+        .filter((item) => item.itemKind === "exclude")
+        .map((item) => item.externalId)
+    );
+    const documents = new Map<string, BrowseNode>();
+    for (const item of items) {
+      const picked =
+        item.itemKind === "container"
+          ? flat(fake.outline.trees[item.externalId] ?? [])
+          : flat(all.filter((node) => node.id === item.externalId));
+      for (const node of picked) {
+        if (!excluded.has(node.id)) {
+          documents.set(node.id, node);
+        }
+      }
+    }
+    return documents;
+  };
+
+  /** Rust's sync: the project's Outline sources become the selection's. */
+  const syncOutline = (projectId: string) => {
+    const view = selectionOf(projectId);
+    const now = Date.now();
+    if (outlineView().status !== "connected") {
+      view.sync = {
+        error: "Ключ больше не подходит",
+        errorKind:
+          outlineView().status === "error" ? "unauthorized" : "disconnected",
+        lastAttemptAt: now,
+        lastOkAt: view.sync?.lastOkAt ?? null,
+        skipped: 0,
+      };
+      changed("connectorSelections", "outline", projectId, "updated");
+      return;
+    }
+    const documents = resolve(view.items);
+    const before = JSON.stringify(db.sources);
+    db.sources = db.sources.filter(
+      (source) =>
+        source.projectId !== projectId ||
+        !source.origin ||
+        documents.has(source.origin.externalId)
+    );
+    for (const node of documents.values()) {
+      if (
+        !db.sources.some(
+          (source) =>
+            source.projectId === projectId &&
+            source.origin?.externalId === node.id
+        )
+      ) {
+        created += 1;
+        db.sources.push({
+          ...fakeSource(`fake-source-${created}`, projectId, node.title),
+          extension: "md",
+          origin: {
+            connector: "outline",
+            externalId: node.id,
+            updatedAt: now,
+            url: node.url,
+          },
+        });
+      }
+    }
+    // The brief depends on the texts: a change makes it «мог устареть».
+    const project = db.projects.find((item) => item.id === projectId);
+    if (project?.brief && JSON.stringify(db.sources) !== before) {
+      project.briefState = "outdated";
+    }
+    view.sync = {
+      error: null,
+      errorKind: null,
+      lastAttemptAt: now,
+      lastOkAt: now,
+      skipped: 0,
+    };
+    changed("project", projectId, projectId, "updated");
+  };
+
+  const connectorCommand = (
+    command: string,
+    args: Record<string, unknown>
+  ): unknown => {
+    switch (command) {
+      case "connectors_list":
+        return db.connections;
+      case "connector_connect_api_key": {
+        const host = String(args.host);
+        const key = String(args.key);
+        if (key.startsWith("bad")) {
+          return { rejected: { field: "key", reason: "Ключ не подошёл" } };
+        }
+        if (host.includes("nowhere")) {
+          return {
+            rejected: {
+              field: "host",
+              reason: "Не удалось подключиться к Outline",
+            },
+          };
+        }
+        const view = {
+          ...connectedOutline(),
+          account: { ...FAKE_OUTLINE_ACCOUNT, host: new URL(host).origin },
+        };
+        db.connections = db.connections.map((item) =>
+          item.kind === "outline" ? view : item
+        );
+        changed("connections", "outline", null, "updated");
+        return { connected: view };
+      }
+      case "connector_disconnect":
+        db.connections = db.connections.map((item) =>
+          item.kind === args.kind ? fakeConnector(item.kind) : item
+        );
+        changed("connections", String(args.kind), null, "deleted");
+        return null;
+      case "connector_browse": {
+        const parent = args.parent as { id: string } | null;
+        return parent
+          ? (fake.outline.trees[parent.id] ?? [])
+          : fake.outline.containers;
+      }
+      case "connector_selection_get":
+        return [selectionOf(String(args.projectId))];
+      case "connector_selection_set": {
+        const projectId = String(args.projectId);
+        const view = {
+          ...selectionOf(projectId),
+          items: (args.items as SelectionItem[]).map((item) => ({
+            ...item,
+            otherAccount: false,
+            status: "ok" as const,
+            url: item.url ?? null,
+          })),
+        };
+        db.selections = [
+          ...db.selections.filter((item) => item.projectId !== projectId),
+          view,
+        ];
+        changed("connectorSelections", "outline", projectId, "updated");
+        syncOutline(projectId);
+        return view;
+      }
+      case "connector_sync":
+        syncOutline(String(args.projectId));
+        return null;
+      default:
+        return undefined;
+    }
+  };
+
   const answer = (command: string, args: Record<string, unknown>): unknown => {
+    if (command.startsWith("connector")) {
+      return connectorCommand(command, args);
+    }
     switch (command) {
       case "projects_list":
         return db.projects;
@@ -477,6 +734,12 @@ export function createFakeTauri(): FakeTauri {
       }
       case "project_sources_remove": {
         const index = db.sources.findIndex((item) => item.id === args.id);
+        if (db.sources[index]?.origin) {
+          throw commandError(
+            "Invalid",
+            "Документ Outline убирается из проекта через выбор в Outline"
+          );
+        }
         const [removed] = db.sources.splice(index, 1);
         if (removed) {
           changed("project", removed.projectId, removed.projectId, "updated");
@@ -624,6 +887,7 @@ export function createFakeTauri(): FakeTauri {
       });
     },
     micActivity: { app: "Zoom", busy: true, since: created },
+    outline: { containers: [], trees: {} },
     recordFailure: null,
     recording: IDLE_RECORDING,
     session: IDLE_SESSION,

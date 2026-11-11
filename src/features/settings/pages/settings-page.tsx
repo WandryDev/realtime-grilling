@@ -25,6 +25,7 @@ export const SETTINGS_DEMO_STATES = [
   "limit-low",
   "recording",
   "outline-broken",
+  "outline-unreachable",
   "confirm-disconnect",
   "github-disconnected",
 ] as const;
@@ -83,6 +84,7 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
         <IntegrationsSection
           demo={
             demo === "outline-broken" ||
+            demo === "outline-unreachable" ||
             demo === "confirm-disconnect" ||
             demo === "github-disconnected"
               ? demo

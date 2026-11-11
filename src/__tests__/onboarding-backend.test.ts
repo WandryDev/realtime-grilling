@@ -18,8 +18,6 @@ import {
   CONNECTED_ACCOUNTS,
 } from "@/features/onboarding/integrations/mock";
 
-const VALID_KEY = "ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2";
-
 afterEach(() => {
   vi.unstubAllGlobals();
   mockComputer.reset();
@@ -157,33 +155,6 @@ describe("IntegrationsBackend.layerMock", () => {
       const fiber = yield* Effect.forkChild(backend.authorizeGitHub);
       yield* TestClock.adjust(CONNECT_DELAY_MS.github);
       assert.strictEqual(yield* Fiber.join(fiber), CONNECTED_ACCOUNTS.github);
-    }).pipe(Effect.provide(IntegrationsBackend.layerMock))
-  );
-
-  it.effect("connects Outline with a valid key", () =>
-    Effect.gen(function* () {
-      const backend = yield* IntegrationsBackend;
-      const fiber = yield* Effect.forkChild(
-        backend.connectOutline("https://docs.pixel.agency", VALID_KEY)
-      );
-      yield* TestClock.adjust(CONNECT_DELAY_MS.outline);
-      assert.strictEqual(yield* Fiber.join(fiber), CONNECTED_ACCOUNTS.outline);
-    }).pipe(Effect.provide(IntegrationsBackend.layerMock))
-  );
-
-  it.effect.each([
-    { field: "url", key: VALID_KEY, url: "https://localhost" },
-    { field: "key", key: "ol_api_short", url: "https://docs.pixel.agency" },
-  ] as const)("rejects Outline on the $field", ({ field, key, url }) =>
-    Effect.gen(function* () {
-      const backend = yield* IntegrationsBackend;
-      const fiber = yield* Effect.forkChild(
-        Effect.flip(backend.connectOutline(url, key))
-      );
-      yield* TestClock.adjust(CONNECT_DELAY_MS.outline);
-      const error = yield* Fiber.join(fiber);
-      assert.strictEqual(error._tag, "OutlineCheckError");
-      assert.strictEqual(error.field, field);
     }).pipe(Effect.provide(IntegrationsBackend.layerMock))
   );
 

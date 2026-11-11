@@ -152,6 +152,11 @@ export class ProjectsData extends Context.Service<
         yield* stored(id);
         tables.projects.delete(id);
         tables.briefInputs.delete(id);
+        for (const [key, selection] of tables.selections) {
+          if (selection.projectId === id) {
+            tables.selections.delete(key);
+          }
+        }
         for (const [sourceId, { source }] of tables.sources) {
           if (source.projectId === id) {
             tables.sources.delete(sourceId);

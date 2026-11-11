@@ -27,6 +27,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const CHECKING_KEY = /Проверяем ключ/u;
+const KEY_TAIL = /Xk2$/u;
 const VALID_KEY = "ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2";
 
 function hrefOf(name: string) {
@@ -195,7 +196,13 @@ describe("Outline step", () => {
       "https://intranet"
     );
     await advance(CONNECT_DELAY_MS.outline);
-    expect(screen.getByRole("alert").textContent).toContain("не отвечает");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Не удалось подключиться к Outline"
+    );
+    // The key stays.
+    expect(
+      (screen.getByLabelText("API-ключ") as HTMLInputElement).value
+    ).toMatch(KEY_TAIL);
   });
 
   it("normalizes pasted addresses to the root", () => {

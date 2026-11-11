@@ -1,10 +1,10 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent, useCallback } from "react";
+import { type ChangeEvent, type FormEvent, type Ref, useCallback } from "react";
 
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { PasswordInput } from "@/components/ui/password-input";
+import { MaskedKeyInput } from "@/features/connectors/masked-key-input";
 import { ExternalArrowIcon } from "@/features/onboarding/components/icons";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +16,8 @@ import { normalizeOutlineUrl } from "./outline-url";
  * - checking: both fields are locked and dimmed while auth.info answers
  * - rejected: red key field with the reason under it
  * "Открыть страницу ключей" leads to <address>/settings/api-and-apps and is
- * inactive while the address is empty.
+ * inactive while the address is empty. The key shows its start and its
+ * last 4 characters, the eye shows it whole.
  */
 export type OutlineKeyFormState = "editing" | "checking" | "rejected";
 
@@ -28,6 +29,7 @@ export function OutlineKeyForm({
   className,
   error = "Ключ не подошёл. Скопируйте его целиком или создайте новый.",
   id,
+  keyRef,
   onApiKeyChange,
   onSubmit,
   onUrlChange,
@@ -40,6 +42,8 @@ export function OutlineKeyForm({
   error?: string;
   /** Lets a submit button outside the form (the footer) point at it. */
   id?: string;
+  /** The key field: focus stays in it after a refusal. */
+  keyRef?: Ref<HTMLInputElement>;
   /** Makes the fields controlled; without it they show the static values. */
   onApiKeyChange?: (value: string) => void;
   onSubmit?: (event: FormEvent<HTMLFormElement>) => void;
@@ -58,8 +62,7 @@ export function OutlineKeyForm({
     [onUrlChange]
   );
   const handleApiKeyChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) =>
-      onApiKeyChange?.(event.target.value),
+    (value: string) => onApiKeyChange?.(value),
     [onApiKeyChange]
   );
 
@@ -112,15 +115,13 @@ export function OutlineKeyForm({
             </span>
           )}
         </div>
-        <PasswordInput
-          className={cn(FIELD_CLASS, "pl-3.5")}
-          data-preview={
-            state === "editing" && !interactive ? "focus" : undefined
-          }
-          onChange={interactive ? handleApiKeyChange : undefined}
+        <MaskedKeyInput
+          className={FIELD_CLASS}
+          onValueChange={handleApiKeyChange}
           placeholder="ol_api_…"
-          readOnly={checking}
-          {...(interactive ? { value: apiKey } : { defaultValue: apiKey })}
+          readOnly={checking || !interactive}
+          ref={keyRef}
+          value={apiKey}
         />
         {state === "rejected" ? (
           <FieldError className="pt-0.5">{error}</FieldError>

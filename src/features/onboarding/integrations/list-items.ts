@@ -41,14 +41,27 @@ function describe(service: IntegrationService, state: IntegrationState) {
   }
 }
 
+/** What a service that isn't in the app yet will do. */
+const SOON_DESCRIPTION: Record<IntegrationService, string> = {
+  clickup: "Задачи и комментарии, подключится позже",
+  github: "Код проектов, подключится позже",
+  outline: "Документация, подключится позже",
+};
+
 export function toServiceListItems(
   integrations: IntegrationsState
 ): ServiceListItem[] {
-  return SERVICES_NOTHING_CONNECTED.map(({ id }) => ({
-    description: describe(id, integrations[id]),
-    id,
-    status: ROW_STATUS[integrations[id].status],
-  }));
+  return SERVICES_NOTHING_CONNECTED.map(({ id }) => {
+    const state = integrations[id];
+    if (state.available === false) {
+      return { description: SOON_DESCRIPTION[id], id, status: "soon" };
+    }
+    return {
+      description: describe(id, state),
+      id,
+      status: ROW_STATUS[state.status],
+    };
+  });
 }
 
 /** What the summary says about a connected service. */
@@ -58,6 +71,18 @@ const SUMMARY_VALUE: Record<IntegrationService, string> = {
   outline: "docs.pixel.agency",
 };
 
+function summaryValue(service: IntegrationService, state: IntegrationState) {
+  if (state.available === false) {
+    return "скоро";
+  }
+  if (state.status !== "connected") {
+    return "пропущено";
+  }
+  return (
+    (service === "outline" ? state.team : undefined) ?? SUMMARY_VALUE[service]
+  );
+}
+
 /*
  * Integrations of the summary. A service that failed or is still waiting
  * counts as skipped: the error isn't carried past the list.
@@ -66,12 +91,13 @@ export function toSetupSummaryItems(
   integrations: IntegrationsState
 ): SetupSummaryItem[] {
   return SERVICES_NOTHING_CONNECTED.map(({ id }) => {
-    const connected = integrations[id].status === "connected";
+    const state = integrations[id];
     return {
       icon: id,
       label: SERVICE_NAMES[id],
-      skipped: !connected,
-      value: connected ? SUMMARY_VALUE[id] : "пропущено",
+      skipped: state.status !== "connected",
+      soon: state.available === false,
+      value: summaryValue(id, state),
     };
   });
 }

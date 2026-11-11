@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useId } from "react";
+import { type FormEvent, type Ref, useId } from "react";
 
 import { Button } from "@/components/ui/button";
 import { OnboardingBackButton } from "@/features/onboarding/components/onboarding-actions";
@@ -46,6 +46,8 @@ export interface OutlineConnectForm {
   apiKey: string;
   /** Why the key was rejected, shown in the "rejected" state. */
   keyError?: string;
+  /** The key field: focus stays in it after a refusal. */
+  keyRef?: Ref<HTMLInputElement>;
   onApiKeyChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onUrlChange: (value: string) => void;
@@ -103,6 +105,7 @@ export function OutlineConnectScreen({
               }
               error={form?.keyError}
               id={formId}
+              keyRef={form?.keyRef}
               onApiKeyChange={form?.onApiKeyChange}
               onSubmit={form?.onSubmit}
               onUrlChange={form?.onUrlChange}

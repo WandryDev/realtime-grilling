@@ -296,7 +296,7 @@ export const OUTLINE = {
   error: "Ключ больше не подходит: истёк или был отозван",
   host: "docs.pixel.agency",
   impact:
-    "Пока ключ не обновлён, на звонках не будет документации из коллекции «Телемедиа». Последний раз работало 14 октября.",
+    "Пока ключ не обновлён, документы Outline в проектах остаются с последним текстом. Последний раз работало 14 октября.",
   pitch: "Документация и договорённости из базы знаний",
 };
 
@@ -312,9 +312,13 @@ export const SERVICE_NAMES = {
   outline: "Outline",
 } as const;
 
+/**
+ * How the services' data reaches the agent (connectors spec, «Данные
+ * коннекторов и агент»): Grill reads them itself, the agent gets the text.
+ */
 export const AGENT_MCP = {
   description:
-    "Сервисы выше передаются агенту сами, через MCP. Отдельно настраивать ничего не нужно.",
+    "Grill сам загружает документы выбранных в проекте коллекций и передаёт агенту их текст. Доступа к сервисам и ключей у агента нет.",
   version: "2.1.4",
 };
 
@@ -339,15 +343,41 @@ export const DISCONNECT_GITHUB: DisconnectContent = {
 
 export const DISCONNECT_OUTLINE: DisconnectContent = {
   consequences: [
-    "Выбранные в проектах коллекции запомнятся",
-    "Итоги прошлых звонков останутся как есть",
+    "Выбранные в проектах коллекции и документы запомнятся",
+    "Документы Outline останутся в проектах с последним текстом",
+    "Обновляться они снова начнут, когда Outline подключат",
   ],
   description:
-    "На звонках Grill перестанет заглядывать в документацию. Это коснётся проекта «Телемедиа».",
+    "Grill перестанет обновлять документы из Outline. Это коснётся проекта «Телемедиа».",
   footnote:
     "Ключ удалится из Keychain. Отозвать его можно в настройках Outline, раздел API.",
   title: "Отключить Outline?",
 };
+
+/** «Телемедиа», «Телемедиа» и «Лапа», «А», «Б» и «В». */
+function quotedList(names: string[]) {
+  const quoted = names.map((name) => `«${name}»`);
+  if (quoted.length < 2) {
+    return quoted.join("");
+  }
+  return `${quoted.slice(0, -1).join(", ")} и ${quoted.at(-1)}`;
+}
+
+/** «Отключить Outline?» naming the projects that picked its documents. */
+export function disconnectOutlineContent(
+  projects: string[]
+): DisconnectContent {
+  let touches = "Ни один проект пока не выбрал документы Outline.";
+  if (projects.length === 1) {
+    touches = `Это коснётся проекта ${quotedList(projects)}.`;
+  } else if (projects.length > 1) {
+    touches = `Это коснётся проектов ${quotedList(projects)}.`;
+  }
+  return {
+    ...DISCONNECT_OUTLINE,
+    description: `Grill перестанет обновлять документы из Outline. ${touches}`,
+  };
+}
 
 export const DISCONNECT_CLICKUP: DisconnectContent = {
   consequences: [
