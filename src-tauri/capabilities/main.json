@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Main window and onboarding: all data commands (projects' documents included), settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call in progress (call_*, discarded before «Удалить все данные» with call_discard; no window closes a finishing call: its summary build does, so call_close is no window's), reading the call's summary (summary_get), the recording's status (the call starts and stops it; recording_start and recording_stop are no window's), the call's questions and the agent's calls, the speech models, the hardware check and the mic check, the project brief (build, cancel, prepare, export), the open dialog (documents and the export folder) and the OS name (the Windows variant of onboarding). A finished call's records are the main window's only: post-call.json.",
+  "description": "Main window and onboarding: all data commands (projects' documents included), settings, window controls, the storage retry, OS permissions, the agent CLI setup, the level meters, the microphone activity, the call in progress (call_*, discarded before «Удалить все данные» with call_discard; no window closes a finishing call: its summary build does, so call_close is no window's), reading the call's summary (summary_get), the recording's status (the call starts and stops it; recording_start and recording_stop are no window's), the call's questions and the agent's calls, the speech models, the hardware check and the mic check, the project brief (build, cancel, prepare, export), the connectors (connectors_list, connect by key, disconnect, browse, the projects' selection and its sync; no window ever gets a secret), the open dialog (documents and the export folder) and the OS name (the Windows variant of onboarding). A finished call's records are the main window's only: post-call.json.",
   "windows": ["main", "onboarding"],
   "permissions": [
     "core:default",
@@ -27,6 +27,13 @@
     "allow-brief-cancel",
     "allow-brief-prepare",
     "allow-brief-export",
+    "allow-connectors-list",
+    "allow-connector-connect-api-key",
+    "allow-connector-disconnect",
+    "allow-connector-browse",
+    "allow-connector-selection-get",
+    "allow-connector-selection-set",
+    "allow-connector-sync",
     "allow-projects-create",
     "allow-projects-update",
     "allow-projects-delete",

@@ -1292,6 +1292,34 @@ mod acl {
         }
     }
 
+    const CONNECTOR_COMMANDS: [&str; 7] = [
+        "connectors_list",
+        "connector_connect_api_key",
+        "connector_disconnect",
+        "connector_browse",
+        "connector_selection_get",
+        "connector_selection_set",
+        "connector_sync",
+    ];
+
+    /// The connectors are set up in onboarding and the settings and picked
+    /// in the main window (connectors-outline task 3.4); the floating
+    /// windows never reach them (the widget's `brief_prepare` syncs inside
+    /// Rust).
+    #[test]
+    fn connectors_are_for_main_and_onboarding_only() {
+        for command in CONNECTOR_COMMANDS {
+            for label in ["overlay", "widget"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+            for label in ["main", "onboarding"] {
+                let result = invoke(label, command);
+                assert!(!denied(&result), "{label} → {command}: {result:?}");
+            }
+        }
+    }
+
     #[test]
     fn allowed_commands_pass_the_acl() {
         // The mock app has no command handlers: an allowed command gets past

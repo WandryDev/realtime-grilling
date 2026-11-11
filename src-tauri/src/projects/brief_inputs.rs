@@ -3,7 +3,10 @@
 //!
 //! The fingerprint is the SHA-256 of a canonical JSON of the description,
 //! the notes, the people (sorted by id: name, role, profile) and the sorted
-//! `sha256` of the `ready` documents. The project's name is not part of it:
+//! `sha256` of the `ready` files; when the project has `ready` documents of
+//! connectors, also their id, external id and `sha256` (connectors-outline
+//! design.md, decision 8), so a project of files only keeps its old
+//! fingerprint. The project's name is not part of it:
 //! renaming leaves the brief fresh. The brief build (group 2) reads
 //! [`read`] before calling the agent and stores [`BriefInputs::fingerprint`]
 //! with the brief ([`crate::storage::projects::save_brief`]); the project
@@ -17,7 +20,7 @@ use crate::{
     error::{CommandError, CommandResult},
     storage::{
         people,
-        sources::{self, ReadySource},
+        sources::{self, ConnectorHash, ReadySource},
     },
 };
 
@@ -104,9 +107,15 @@ pub fn read(connection: &Connection, project_id: &str) -> CommandResult<BriefInp
     let basics = basics(connection, project_id)?;
     let people = people_of(connection, project_id)?;
     let sources = sources::ready_texts(connection, project_id)?;
-    let mut hashes: Vec<String> = sources.iter().map(|source| source.sha256.clone()).collect();
-    hashes.sort();
-    let fingerprint = hash(&basics.description, &basics.notes, &people, &hashes);
+    let hashes = sources::ready_hashes(connection, project_id)?;
+    let connected = sources::ready_connector_hashes(connection, project_id)?;
+    let fingerprint = hash(
+        &basics.description,
+        &basics.notes,
+        &people,
+        &hashes,
+        &connected,
+    );
     Ok(BriefInputs {
         project_id: project_id.to_owned(),
         project_name: basics.name,
@@ -124,15 +133,24 @@ pub fn fingerprint(connection: &Connection, project_id: &str) -> CommandResult<S
     let basics = basics(connection, project_id)?;
     let people = people_of(connection, project_id)?;
     let hashes = sources::ready_hashes(connection, project_id)?;
-    Ok(hash(&basics.description, &basics.notes, &people, &hashes))
+    let connected = sources::ready_connector_hashes(connection, project_id)?;
+    Ok(hash(
+        &basics.description,
+        &basics.notes,
+        &people,
+        &hashes,
+        &connected,
+    ))
 }
 
-/// `source_hashes` must be sorted, `people` sorted by id.
+/// `source_hashes` (of files) must be sorted, `people` and `connected`
+/// sorted by id.
 fn hash(
     description: &str,
     notes: &str,
     people: &[BriefPerson],
     source_hashes: &[String],
+    connected: &[ConnectorHash],
 ) -> String {
     let people: Vec<Value> = people
         .iter()
@@ -144,12 +162,26 @@ fn hash(
             })
         })
         .collect();
-    let inputs = json!({
+    let mut inputs = json!({
         "description": description,
         "notes": notes,
         "people": people,
         "sources": source_hashes,
     });
+    // Only when there are some: a project of files keeps its fingerprint.
+    if !connected.is_empty() {
+        let connected: Vec<Value> = connected
+            .iter()
+            .map(|source| {
+                json!({
+                    "id": source.id,
+                    "externalId": source.external_id,
+                    "sha256": source.sha256,
+                })
+            })
+            .collect();
+        inputs["connectorSources"] = Value::Array(connected);
+    }
     let mut canonical = String::new();
     write_canonical(&inputs, &mut canonical);
     sha256_hex(canonical.as_bytes())
@@ -221,6 +253,7 @@ mod tests {
             "заметки",
             &[person(json!({ "tech": 1, "notes": "без жаргона" }))],
             &["a".repeat(64)],
+            &[],
         );
         assert_eq!(base.len(), 64);
         assert_eq!(
@@ -230,27 +263,48 @@ mod tests {
                 "заметки",
                 &[person(json!({ "notes": "без жаргона", "tech": 1 }))],
                 &["a".repeat(64)],
+                &[],
             )
         );
         for other in [
-            hash("другое", "заметки", &[person(json!({}))], &["a".repeat(64)]),
+            hash(
+                "другое",
+                "заметки",
+                &[person(json!({}))],
+                &["a".repeat(64)],
+                &[],
+            ),
             hash(
                 "описание",
                 "",
                 &[person(json!({ "tech": 1, "notes": "без жаргона" }))],
                 &["a".repeat(64)],
+                &[],
             ),
             hash(
                 "описание",
                 "заметки",
                 &[person(json!({ "tech": 2, "notes": "без жаргона" }))],
                 &["a".repeat(64)],
+                &[],
             ),
             hash(
                 "описание",
                 "заметки",
                 &[person(json!({ "tech": 1, "notes": "без жаргона" }))],
                 &[],
+                &[],
+            ),
+            hash(
+                "описание",
+                "заметки",
+                &[person(json!({ "tech": 1, "notes": "без жаргона" }))],
+                &["a".repeat(64)],
+                &[ConnectorHash {
+                    id: "s1".to_owned(),
+                    external_id: "doc".to_owned(),
+                    sha256: "b".repeat(64),
+                }],
             ),
         ] {
             assert_ne!(base, other);

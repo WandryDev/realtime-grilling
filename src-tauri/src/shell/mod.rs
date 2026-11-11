@@ -83,6 +83,18 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     let settings = stored.unwrap_or_else(settings::defaults);
 
     app.manage(storage);
+    // Connectors (connectors-outline): their secrets in Keychain / Credential
+    // Manager. The connections are checked in the background a few seconds
+    // after the start, never holding a window; a network failure is not a
+    // revoked key.
+    app.manage(crate::connectors::Connectors::for_app());
+    let checking = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(crate::connectors::service::VERIFY_AFTER_START).await;
+        if let Err(error) = crate::connectors::service::verify_all(&checking).await {
+            eprintln!("grill: could not check the connectors: {error}");
+        }
+    });
     app.manage(QuitRequested::default());
     app.manage(shortcuts::Registered::default());
     app.manage(SettingsLock::default());

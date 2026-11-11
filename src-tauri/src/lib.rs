@@ -3,6 +3,7 @@ mod audio;
 mod bindings;
 mod call;
 mod commands;
+mod connectors;
 mod error;
 /// `grill-eval` (question-quality design.md, decision 1): its only way in
 /// is `eval::cli::main`. Only with the `eval` feature (the example) and in

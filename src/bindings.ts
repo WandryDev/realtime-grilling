@@ -55,6 +55,49 @@ export const commands = {
 	 *  folder that does not exist, `External` when the file can't be written.
 	 */
 	briefExport: (projectId: string, folder: string) => typedError<string, CommandError>(__TAURI_INVOKE("brief_export", { projectId, folder })),
+	/**
+	 *  The catalog with each connector's connection: Outline works, GitHub and
+	 *  ClickUp are «скоро» (`available: false`). No secret is ever in it.
+	 */
+	connectorsList: () => typedError<ConnectorView[], CommandError>(__TAURI_INVOKE("connectors_list")),
+	/**
+	 *  Checks the address and the key with the service, then saves the key in
+	 *  Keychain / Credential Manager and the connection (also to replace the
+	 *  key of a connected or broken one). A refusal is `rejected` with the
+	 *  field it belongs to, and nothing is saved. `External` when the OS store
+	 *  refused the key; `Invalid` for a connector that is «скоро».
+	 */
+	connectorConnectApiKey: (kind: ConnectorKind, host: string, key: string) => typedError<ConnectOutcome, CommandError>(__TAURI_INVOKE("connector_connect_api_key", { kind, host, key })),
+	/**
+	 *  Removes the key from the OS store and the connection. The projects'
+	 *  selections and sources stay with their last text.
+	 */
+	connectorDisconnect: (kind: ConnectorKind) => typedError<null, CommandError>(__TAURI_INVOKE("connector_disconnect", { kind })),
+	/**
+	 *  The picker's tree: the containers (Outline's collections with their
+	 *  document counts) without `parent`, else what is inside it. `Invalid`
+	 *  when not connected, `External` with what to show when the service
+	 *  failed (recorded on the connection).
+	 */
+	connectorBrowse: (kind: ConnectorKind, parent: ExternalRef | null) => typedError<BrowseNode[], CommandError>(__TAURI_INVOKE("connector_browse", { kind, parent })),
+	/**
+	 *  The project's selection in each connector that gives sources, with the
+	 *  items' state and the last sync. `NotFound` for an unknown project.
+	 */
+	connectorSelectionGet: (projectId: string) => typedError<ProjectConnectorView[], CommandError>(__TAURI_INVOKE("connector_selection_get", { projectId })),
+	/**
+	 *  Replaces the project's selection in the connector (an empty list
+	 *  removes it) and starts its sync in the background. `Invalid` when it
+	 *  brings more than 200 documents (nothing saved) or the connector is not
+	 *  connected.
+	 */
+	connectorSelectionSet: (projectId: string, kind: ConnectorKind, items: SelectionItem[]) => typedError<ProjectConnectorView, CommandError>(__TAURI_INVOKE("connector_selection_set", { projectId, kind, items })),
+	/**
+	 *  «Обновить»: syncs the project with the connector (every connector it
+	 *  uses without `kind`) and returns when done; joins a sync that runs. The
+	 *  outcome is in the selection's sync state.
+	 */
+	connectorSync: (projectId: string, kind: ConnectorKind | null) => typedError<null, CommandError>(__TAURI_INVOKE("connector_sync", { projectId, kind })),
 	peopleList: (projectId: string) => typedError<Person[], CommandError>(__TAURI_INVOKE("people_list", { projectId })),
 	peopleGet: (id: string) => typedError<Person, CommandError>(__TAURI_INVOKE("people_get", { id })),
 	/**  Also sends the project's `DataChanged`: its brief depends on its people. */
@@ -480,6 +523,19 @@ export const events = {
 };
 
 /* Types */
+/**
+ *  Who the secret belongs to, as the service says. Stored with the
+ *  connection (no secret in it) and shown in the settings.
+ */
+export type Account = {
+	/**  The service's address (Outline). */
+	host: string | null,
+	/**  The workspace the key opens: a selection belongs to it. */
+	teamId: string,
+	teamName: string,
+	userName: string | null,
+};
+
 /**  Sent to the window that started `agent_install`. */
 export type AgentInstallProgress = {
 	stage: InstallStage,
@@ -559,6 +615,18 @@ export type AudioSource =
 "microphone" | 
 /**  What the other apps play ("Остальные"), without this app. */
 "system";
+
+/**
+ *  How a connector signs in. Only `apiKey` works in this change; the other
+ *  two describe GitHub and ClickUp (design.md, decision 1).
+ */
+export type AuthMethod = 
+/**  An address (when `host`) and an API key. */
+{ type: "apiKey"; host: boolean } | 
+/**  A code the manager enters on the service's page. */
+{ type: "deviceCode" } | 
+/**  OAuth in the browser. */
+{ type: "browserOAuth" };
 
 /**  Why a check did not pass. */
 export type BenchmarkFailure = 
@@ -643,6 +711,26 @@ export type BriefState =
 "outdated" | 
 /**  A build of this project runs now. */
 "building";
+
+/**  A node of the picker's tree (`connector_browse`). */
+export type BrowseNode = {
+	id: string,
+	kind: RefKind,
+	title: string,
+	/**  The node in the service, to open in the browser. */
+	url: string | null,
+	hasChildren: boolean,
+	/**
+	 *  Documents it brings into a project: a collection's all, a document
+	 *  with its nested ones.
+	 */
+	documentCount: number,
+	/**
+	 *  Nested documents, when the service gave them with the node (Outline
+	 *  gives a collection's whole tree at once); empty for a collection.
+	 */
+	children: BrowseNode[],
+};
 
 export type Call = {
 	id: string,
@@ -1003,6 +1091,17 @@ export type CallUpdate = {
 	summary?: Value | null,
 };
 
+/**  What a connector can do for the app. */
+export type Capability = 
+/**  Documents as the project's sources. */
+"projectSources" | 
+/**  Search during a call (later). */
+"callSearch" | 
+/**  Incoming questions (later). */
+"inbox" | 
+/**  Writing the call's results (later). */
+"publish";
+
 /**
  *  Why a capture for the level meter could not open (`External.reason`)
  *  or broke after it started (`AudioLevelStopped.reason`).
@@ -1091,6 +1190,49 @@ export type CommandError =
 { kind: "External"; message: string; reason?: CaptureFailure | null };
 
 /**
+ *  `connector_connect_api_key`: connected, or refused with what to show at
+ *  which field (nothing was saved).
+ */
+export type ConnectOutcome = ({ connected: ConnectorView }) & { rejected?: never } | ({ rejected: {
+	field: RejectedField,
+	reason: string,
+} }) & { connected?: never };
+
+/**  The services the app knows; one connection per service. */
+export type ConnectorKind = "outline" | "github" | "clickup";
+
+/**
+ *  The state of a connector as the screens show it. «Проверка» is the
+ *  screens' own while a connect runs.
+ */
+export type ConnectorStatus = "disconnected" | "connected" | 
+/**  The service refused the secret: «Обновить ключ». */
+"error";
+
+/**  A connector of the catalog with its connection (`connectors_list`). */
+export type ConnectorView = {
+	kind: ConnectorKind,
+	auth: AuthMethod,
+	capabilities: Capability[],
+	/**  `false`: «скоро», never connected. */
+	available: boolean,
+	status: ConnectorStatus,
+	/**  Whose secret it is (Outline: the address, the team, the user). */
+	account: Account | null,
+	/**  Milliseconds since the Unix epoch, UTC. */
+	connectedAt: number | null,
+	/**  The last time the service answered. */
+	lastOkAt: number | null,
+	lastAttemptAt: number | null,
+	/**
+	 *  The last failure; with `connected` and `unreachable`: «не удалось
+	 *  обновить», the connection stands.
+	 */
+	errorKind: ErrorKind | null,
+	error: string | null,
+};
+
+/**
  *  Sent to every window after a write is committed, never on failure.
  * 
  *  A cascade delete sends one event about the root record; stores of the
@@ -1113,7 +1255,30 @@ export type Entity = "project" | "person" |
  */
 "transcript" | 
 /**  `id` is `"settings"`. */
-"settings";
+"settings" | 
+/**
+ *  A connector's connection was made, changed or removed; `id` is the
+ *  connector's kind (`outline`), no `projectId`.
+ */
+"connections" | 
+/**
+ *  A project's selection in a connector or the state of its sync
+ *  changed; `id` is the connector's kind, `projectId` the project. A
+ *  sync that changed the project's sources sends the project's event
+ *  instead: re-read the selection on it too.
+ */
+"connectorSelections";
+
+/**  The kind of a connection's or a sync's last error. */
+export type ErrorKind = 
+/**  The key no longer works: «Обновить ключ». */
+"unauthorized" | 
+/**  No access. */
+"forbidden" | 
+/**  The service did not answer: «Повторить». */
+"unreachable" | "other" | 
+/**  Only of a project's sync: the connector is not connected. */
+"disconnected";
 
 /**  Why a download ended in `error`. */
 export type ErrorReason = 
@@ -1145,6 +1310,12 @@ export type EvidenceSource =
 "segment" | 
 /**  The project: its description `P1` or a brief item `B1…Bn`. */
 "project";
+
+/**  A container or a document in the service. */
+export type ExternalRef = {
+	id: string,
+	kind: RefKind,
+};
 
 /**  Where a fact comes from (`call-task-cards`, "Состояние и источник факта"). */
 export type FactSource = 
@@ -1187,6 +1358,11 @@ export type GlossaryEntry = {
 export type InstallStage = "downloading" | "installing" | 
 /**  The installer finished; the app checks the CLI. */
 "verifying";
+
+/**  Whether the service still has a selection item. */
+export type ItemStatus = "ok" | 
+/**  Deleted in the service, no access, or of another team. */
+"unavailable";
 
 export type KeyDocument = {
 	/**  A `ready` document of the project (`F1…` in the agent's reply). */
@@ -1333,6 +1509,22 @@ export type Project = {
 	updatedAt: number,
 };
 
+/**
+ *  A project's selection in a connector and its last sync
+ *  (`connector_selection_get`).
+ */
+export type ProjectConnectorView = {
+	projectId: string,
+	kind: ConnectorKind,
+	/**  The connector is connected (not «отключён»; it may be in error). */
+	connected: boolean,
+	items: SelectionItemView[],
+	/**  `null` before the first sync. */
+	sync: SyncState | null,
+	/**  A sync of it runs now. */
+	syncing: boolean,
+};
+
 export type ProjectCreate = {
 	name: string,
 	description?: string | null,
@@ -1383,6 +1575,8 @@ export type ProjectSource = {
 	truncated: boolean,
 	/**  Milliseconds since the Unix epoch, UTC. */
 	createdAt: number,
+	/**  Where a connector's document comes from; absent for a file. */
+	origin?: SourceOrigin | null,
 };
 
 /**  Only the fields present change. */
@@ -1565,6 +1759,13 @@ export type RecordingStatus = {
 	transcription: TranscriptionStatus,
 };
 
+/**  What a node of the picker is. */
+export type RefKind = 
+/**  An Outline collection: all its documents, later ones too. */
+"container" | 
+/**  A document with its nested ones. */
+"document";
+
 export type RefineState = "refining" | 
 /**  The refined transcript is stored: `transcript_for_recording` returns it. */
 "done" | 
@@ -1579,6 +1780,9 @@ export type RejectReason =
 "tooLarge" | 
 /**  Missing, a folder, or the OS would not let the app read it. */
 "unreadable";
+
+/**  The field a refusal belongs to. */
+export type RejectedField = "host" | "key";
 
 /**  Where a match is. */
 export type SearchSource = 
@@ -1609,6 +1813,37 @@ export type SegmentationStatus = "ok" |
  *  without phrases.
  */
 "unavailable";
+
+/**  An item of a project's selection, as the picker gives it. */
+export type SelectionItem = {
+	itemKind: SelectionItemKind,
+	externalId: string,
+	title: string,
+	url?: string | null,
+};
+
+/**  What a selection item is. */
+export type SelectionItemKind = 
+/**  A whole container. */
+"container" | 
+/**  A document with its nested ones. */
+"document" | 
+/**  A document of a selected container left out. */
+"exclude";
+
+/**  A selection item with its state. */
+export type SelectionItemView = {
+	itemKind: SelectionItemKind,
+	externalId: string,
+	title: string,
+	url: string | null,
+	status: ItemStatus,
+	/**
+	 *  Picked with another team of the service than the connected one:
+	 *  `unavailable`, and nothing of it is removed.
+	 */
+	otherAccount: boolean,
+};
 
 export type SettingsUpdateResult = {
 	/**  All preferences after the update, as `settings_get` returns them. */
@@ -1655,6 +1890,23 @@ export type SourceAddResult = {
 	/**  Its file name. */
 	name: string,
 	result: SourceAddOutcome,
+};
+
+/**
+ *  A document of a connector among the project's sources
+ *  (connectors-outline design.md, decision 3).
+ */
+export type SourceOrigin = {
+	connector: ConnectorKind,
+	/**  The document in the service. */
+	externalId: string,
+	/**  The document in the service, to open in the browser. */
+	url: string | null,
+	/**
+	 *  When its text last changed here (a sync brought a new version),
+	 *  milliseconds since the Unix epoch, UTC.
+	 */
+	updatedAt: number,
 };
 
 /**  Whether the text of a document could be read. */
@@ -1795,6 +2047,24 @@ export type SummaryTranscriptPass =
 "live" | 
 /**  Refined for some recordings, live for the others. */
 "mixed";
+
+/**  A project's last sync with a connector. */
+export type SyncState = {
+	/**  «Обновлено …»; `null` before the first successful sync. */
+	lastOkAt: number | null,
+	lastAttemptAt: number | null,
+	/**
+	 *  Why the last attempt failed: «Не обновлялось: …»; `null` after a
+	 *  success.
+	 */
+	errorKind: ErrorKind | null,
+	error: string | null,
+	/**
+	 *  Documents over the limit of 200 the last sync left out
+	 *  («N не загружены»).
+	 */
+	skipped: number,
+};
 
 /**  The task card of a topic (one per topic). */
 export type TaskCard = {

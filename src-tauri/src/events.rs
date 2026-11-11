@@ -19,6 +19,14 @@ pub enum Entity {
     Transcript,
     /// `id` is `"settings"`.
     Settings,
+    /// A connector's connection was made, changed or removed; `id` is the
+    /// connector's kind (`outline`), no `projectId`.
+    Connections,
+    /// A project's selection in a connector or the state of its sync
+    /// changed; `id` is the connector's kind, `projectId` the project. A
+    /// sync that changed the project's sources sends the project's event
+    /// instead: re-read the selection on it too.
+    ConnectorSelections,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]

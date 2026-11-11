@@ -30,6 +30,11 @@ use crate::{
         mic_watch::{MicActivityChanged, MicWatch},
     },
     call::{CallManager, CallStart},
+    connectors::{
+        BrowseNode, ConnectorKind, ExternalRef, SelectionItem,
+        service::{self as connector_service, ConnectOutcome, ConnectorView, ProjectConnectorView},
+        sync as connector_sync,
+    },
     error::{CommandError, CommandResult},
     events::{CallSession, Navigate},
     permissions::{self, PermissionKind, PermissionStatus, Permissions},
@@ -234,6 +239,109 @@ pub async fn brief_export(
     folder: String,
 ) -> CommandResult<String> {
     brief_export_file::export(&storage, &project_id, &folder).await
+}
+
+/* Connectors (connectors-outline design.md, decision 6) */
+
+/// The catalog with each connector's connection: Outline works, GitHub and
+/// ClickUp are «скоро» (`available: false`). No secret is ever in it.
+#[tauri::command]
+#[specta::specta]
+pub async fn connectors_list(app: AppHandle) -> CommandResult<Vec<ConnectorView>> {
+    connector_service::list(&app).await
+}
+
+/// Checks the address and the key with the service, then saves the key in
+/// Keychain / Credential Manager and the connection (also to replace the
+/// key of a connected or broken one). A refusal is `rejected` with the
+/// field it belongs to, and nothing is saved. `External` when the OS store
+/// refused the key; `Invalid` for a connector that is «скоро».
+#[tauri::command]
+#[specta::specta]
+pub async fn connector_connect_api_key(
+    app: AppHandle,
+    kind: ConnectorKind,
+    host: String,
+    key: String,
+) -> CommandResult<ConnectOutcome> {
+    connector_service::connect_api_key(&Arc::new(app), kind, &host, &key).await
+}
+
+/// Removes the key from the OS store and the connection. The projects'
+/// selections and sources stay with their last text.
+#[tauri::command]
+#[specta::specta]
+pub async fn connector_disconnect(app: AppHandle, kind: ConnectorKind) -> CommandResult<()> {
+    connector_service::disconnect(&app, kind).await
+}
+
+/// The picker's tree: the containers (Outline's collections with their
+/// document counts) without `parent`, else what is inside it. `Invalid`
+/// when not connected, `External` with what to show when the service
+/// failed (recorded on the connection).
+#[tauri::command]
+#[specta::specta]
+pub async fn connector_browse(
+    app: AppHandle,
+    kind: ConnectorKind,
+    parent: Option<ExternalRef>,
+) -> CommandResult<Vec<BrowseNode>> {
+    connector_service::browse(&app, kind, parent).await
+}
+
+/// The project's selection in each connector that gives sources, with the
+/// items' state and the last sync. `NotFound` for an unknown project.
+#[tauri::command]
+#[specta::specta]
+pub async fn connector_selection_get(
+    app: AppHandle,
+    project_id: String,
+) -> CommandResult<Vec<ProjectConnectorView>> {
+    connector_service::selection_get(&app, &project_id).await
+}
+
+/// Replaces the project's selection in the connector (an empty list
+/// removes it) and starts its sync in the background. `Invalid` when it
+/// brings more than 200 documents (nothing saved) or the connector is not
+/// connected.
+#[tauri::command]
+#[specta::specta]
+pub async fn connector_selection_set(
+    app: AppHandle,
+    project_id: String,
+    kind: ConnectorKind,
+    items: Vec<SelectionItem>,
+) -> CommandResult<ProjectConnectorView> {
+    let view = connector_service::selection_set(&app, &project_id, kind, items).await?;
+    let host = Arc::new(app);
+    tauri::async_runtime::spawn(async move {
+        let _ = connector_sync::sync_fresh(&host, &project_id, kind).await;
+    });
+    Ok(view)
+}
+
+/// «Обновить»: syncs the project with the connector (every connector it
+/// uses without `kind`) and returns when done; joins a sync that runs. The
+/// outcome is in the selection's sync state.
+#[tauri::command]
+#[specta::specta]
+pub async fn connector_sync(
+    app: AppHandle,
+    project_id: String,
+    kind: Option<ConnectorKind>,
+) -> CommandResult<()> {
+    let host = Arc::new(app);
+    let results = match kind {
+        Some(kind) => vec![(
+            kind,
+            connector_sync::sync_project(&host, &project_id, kind).await,
+        )],
+        None => connector_sync::sync_all(&host, &project_id).await?,
+    };
+    for (_, result) in results {
+        result?;
+    }
+    Ok(())
 }
 
 /* People */

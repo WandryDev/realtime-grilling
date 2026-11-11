@@ -73,7 +73,19 @@ pub trait BriefHost: EventSink + 'static {
     fn agent(&self) -> AgentLookup<'_>;
     /// Where the prompt files of running builds go.
     fn prompt_dir(&self) -> PathBuf;
+    /// Syncs the project's sources of connectors (before a call); nothing
+    /// by default. [`prepare`] waits for it at most [`SYNC_BEFORE_CALL`].
+    fn sync_connectors(self: &Arc<Self>, _project_id: &str) -> SyncLookup {
+        Box::pin(async {})
+    }
 }
+
+pub type SyncLookup = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// How long `brief_prepare` waits for the connectors' sync before it checks
+/// the brief (connectors-outline design.md, decision 4): after that the
+/// brief is refreshed from the text already there, and the sync runs on.
+pub const SYNC_BEFORE_CALL: Duration = Duration::from_secs(30);
 
 impl<R: Runtime> BriefHost for AppHandle<R> {
     fn storage(&self) -> Option<&Storage> {
@@ -107,6 +119,16 @@ impl<R: Runtime> BriefHost for AppHandle<R> {
     fn prompt_dir(&self) -> PathBuf {
         agent::fast_loop::app::work_dir(self).join("briefs")
     }
+
+    fn sync_connectors(self: &Arc<Self>, project_id: &str) -> SyncLookup {
+        let host = Arc::clone(self);
+        let project_id = project_id.to_owned();
+        Box::pin(async move {
+            if let Err(error) = crate::connectors::sync::sync_all(&host, &project_id).await {
+                eprintln!("grill: could not sync the connectors of {project_id}: {error}");
+            }
+        })
+    }
 }
 
 /// What to show for a CLI that isn't ready.
@@ -139,16 +161,21 @@ pub fn start<H: BriefHost>(
     }))
 }
 
-/// Before a call (decision 8): starts a build in the background when the
+/// Before a call (decision 8): first syncs the project's sources of
+/// connectors, waiting at most [`SYNC_BEFORE_CALL`] (connectors-outline
+/// design.md, decision 4); then starts a build in the background when the
 /// brief is `outdated`, or `none` while there is something to build it
 /// from, the agent is ready and no build runs. Inputs a build failed on
 /// within [`FAILED_BACKOFF`](crate::projects::builds::FAILED_BACKOFF) are
-/// left alone: each try is a paid call. `true` when it started one.
+/// left alone: each try is a paid call. `true` when it started one. The
+/// call never waits for any of it.
 pub async fn prepare<H: BriefHost>(
     host: &Arc<H>,
     builds: &BriefBuilds,
     project_id: &str,
 ) -> CommandResult<bool> {
+    // A timeout drops only the waiting: the sync runs on in its own task.
+    let _ = tokio::time::timeout(SYNC_BEFORE_CALL, host.sync_connectors(project_id)).await;
     if builds.is_building(project_id) {
         return Ok(false);
     }
@@ -186,7 +213,8 @@ fn has_materials(db: &rusqlite::Connection, project: &projects::Project) -> Comm
     Ok(!project.description.trim().is_empty()
         || !project.notes.trim().is_empty()
         || !people::list(db, &project.id)?.is_empty()
-        || !sources::ready_hashes(db, &project.id)?.is_empty())
+        || !sources::ready_hashes(db, &project.id)?.is_empty()
+        || !sources::ready_connector_hashes(db, &project.id)?.is_empty())
 }
 
 /// How a build ended short of a brief.
