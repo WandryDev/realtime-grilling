@@ -16,12 +16,30 @@ import { ProjectSourcesData } from "@/data/services/sources";
  */
 
 const VALID_KEY = "ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2";
+const CLICKUP_TOKEN = "pk_4815162_Q7Z2LM8NX4WD9KTR3HB6YC1P";
+
+const connectClickUp = (key: string, workspace: string | null) =>
+  Effect.gen(function* () {
+    const connectors = yield* Connectors;
+    const fiber = yield* Effect.forkChild(
+      connectors.connectApiKey("clickup", "", key, workspace)
+    );
+    yield* TestClock.adjust(MOCK_CONNECT_DELAY_MS);
+    return yield* Fiber.join(fiber);
+  });
+
+const clickupSources = (projectId: string) =>
+  ProjectSourcesData.use((sources) => sources.list(projectId)).pipe(
+    Effect.map((list) =>
+      list.filter((source) => source.origin?.connector === "clickup")
+    )
+  );
 
 const connect = (host: string, key: string) =>
   Effect.gen(function* () {
     const connectors = yield* Connectors;
     const fiber = yield* Effect.forkChild(
-      connectors.connectApiKey("outline", host, key)
+      connectors.connectApiKey("outline", host, key, null)
     );
     yield* TestClock.adjust(MOCK_CONNECT_DELAY_MS);
     return yield* Fiber.join(fiber);
@@ -159,6 +177,115 @@ describe("Connectors.layerMock", () => {
         const gone = view?.items.find((item) => item.externalId === "gone");
         assert.strictEqual(gone?.status, "unavailable");
         assert.strictEqual((yield* outlineSources(projectId)).length, 5);
+      }).pipe(Effect.provide(DataLayerMock))
+  );
+});
+
+describe("Connectors.layerMock: ClickUp (connectors-clickup 3.1)", () => {
+  it.effect("asks for a workspace, then connects the picked one", () =>
+    Effect.gen(function* () {
+      const connectors = yield* Connectors;
+      yield* connectors.disconnect("clickup");
+
+      const refused = yield* connectClickUp("pk_short", null);
+      assert.deepStrictEqual(refused.rejected, {
+        field: "key",
+        reason: "Токен не подошёл",
+      });
+      const choose = yield* connectClickUp(CLICKUP_TOKEN, null);
+      assert.deepStrictEqual(
+        choose.chooseWorkspace?.workspaces.map((item) => item.name),
+        ["Pixel Agency", "Личное"]
+      );
+      const before = (yield* connectors.list).find(
+        (view) => view.kind === "clickup"
+      );
+      assert.strictEqual(before?.status, "disconnected");
+
+      const other = yield* connectClickUp(CLICKUP_TOKEN, "nope");
+      assert.strictEqual(
+        other.rejected?.reason,
+        "Токен не открывает это пространство"
+      );
+      const outcome = yield* connectClickUp(CLICKUP_TOKEN, "9001");
+      assert.strictEqual(outcome.connected?.account?.teamName, "Pixel Agency");
+      assert.strictEqual(outcome.connected?.account?.host, null);
+    }).pipe(Effect.provide(DataLayerMock))
+  );
+
+  it.effect("browses spaces, folders with their lists, and tasks", () =>
+    Effect.gen(function* () {
+      const connectors = yield* Connectors;
+      const spaces = yield* connectors.browse("clickup", null);
+      assert.deepStrictEqual(
+        spaces.map((node) => [node.title, node.documentCount]),
+        [
+          ["Клиенты", 0],
+          ["Внутреннее", 0],
+        ]
+      );
+      const inside = yield* connectors.browse("clickup", {
+        id: "space:sp-clients",
+        kind: "container",
+      });
+      const [folder, lapa] = inside;
+      assert.strictEqual(folder?.title, "Телемедиа");
+      assert.strictEqual(folder?.children.length, 2);
+      assert.strictEqual(folder?.documentCount, 19);
+      assert.strictEqual(lapa?.title, "Ветклиника Лапа");
+      const tasks = yield* connectors.browse("clickup", {
+        id: "list:ls-tm-1",
+        kind: "container",
+      });
+      assert.strictEqual(tasks[0]?.children.length, 2);
+    }).pipe(Effect.provide(DataLayerMock))
+  );
+
+  it.effect("refuses a space over 200 tasks with the ClickUp words", () =>
+    Effect.gen(function* () {
+      const connectors = yield* Connectors;
+      const projectId = yield* newProject;
+      const error = yield* Effect.flip(
+        connectors.selectionSet(projectId, "clickup", [
+          {
+            externalId: "space:sp-internal",
+            itemKind: "container",
+            title: "Внутреннее",
+          },
+        ])
+      );
+      assert.strictEqual(error.kind, "Invalid");
+      assert.include(error.message, "не больше 200 задач");
+      assert.include(error.message, "340");
+    }).pipe(Effect.provide(DataLayerMock))
+  );
+
+  it.effect(
+    "syncs a space less an excluded list and a task with its subtasks",
+    () =>
+      Effect.gen(function* () {
+        const connectors = yield* Connectors;
+        const projectId = yield* newProject;
+        yield* connectors.selectionSet(projectId, "clickup", [
+          {
+            externalId: "space:sp-clients",
+            itemKind: "container",
+            title: "Клиенты",
+          },
+          { externalId: "list:ls-tm-2", itemKind: "exclude", title: "Этап 2" },
+          { externalId: "tm1-mis", itemKind: "exclude", title: "МИС" },
+        ]);
+        // 14 + 6 tasks less «Интеграция с МИС» and its two subtasks.
+        const sources = yield* clickupSources(projectId);
+        assert.strictEqual(sources.length, 17);
+        assert.isFalse(
+          sources.some((source) => source.origin?.externalId === "tm1-mis-auth")
+        );
+        const views = yield* connectors.selectionGet(projectId);
+        assert.deepStrictEqual(
+          views.map((view) => view.kind),
+          ["outline", "clickup"]
+        );
       }).pipe(Effect.provide(DataLayerMock))
   );
 });

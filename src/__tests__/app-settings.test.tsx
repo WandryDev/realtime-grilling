@@ -153,26 +153,26 @@ describe("settings app", () => {
   });
 
   it("connects a service through the dialog", async () => {
-    setIntegration("clickup", { status: "disconnected" });
+    setIntegration("github", { status: "disconnected" });
     const user = userEvent.setup();
     render(<SettingsPage section="integrations" />);
 
-    const clickup = screen.getByRole("article", { name: "ClickUp" });
+    const github = screen.getByRole("article", { name: "GitHub" });
     await user.click(
-      within(clickup).getByRole("button", { name: "Подключить" })
+      within(github).getByRole("button", { name: "Подключить" })
     );
     const dialog = await screen.findByRole("dialog", {
-      name: "Подключить ClickUp",
+      name: "Подключить GitHub",
     });
     await user.click(
       within(dialog).getByRole("button", { name: "Продолжить в браузере" })
     );
 
-    expect(within(clickup).getByText("Подключаем…")).toBeTruthy();
+    expect(within(github).getByText("Подключаем…")).toBeTruthy();
     expect(
-      await within(clickup).findByText("Подключено", {}, ASYNC_TIMEOUT)
+      await within(github).findByText("Подключено", {}, ASYNC_TIMEOUT)
     ).toBeTruthy();
-    expect(getIntegrations().clickup.status).toBe("connected");
+    expect(getIntegrations().github.status).toBe("connected");
   });
 
   it("opens the forced states from ?demo", async () => {

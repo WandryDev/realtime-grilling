@@ -45,9 +45,9 @@ export const SERVICES_NOTHING_CONNECTED: ServiceListItem[] = [
 
 export const SERVICES_PARTLY_CONNECTED: ServiceListItem[] = [
   {
-    description: "dima-kapish, доступ к 12 репозиториям",
+    description: "Подтвердите доступ на github.com",
     id: "github",
-    status: "connected",
+    status: "waiting",
   },
   {
     description: "Ключ не подошёл, проверьте его",
@@ -55,9 +55,9 @@ export const SERVICES_PARTLY_CONNECTED: ServiceListItem[] = [
     status: "error",
   },
   {
-    description: "Завершите вход во вкладке браузера",
+    description: "Pixel Agency, Дима Капиш",
     id: "clickup",
-    status: "waiting",
+    status: "connected",
   },
 ];
 
@@ -90,19 +90,24 @@ export const OUTLINE_KEYS = {
   valid: "ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2",
 };
 
-export const CLICKUP_WORKSPACE = {
-  errorCode: "access_denied, 12:04",
-  listsCount: "38 списков",
-  moreCount: 6,
-  name: "Pixel Agency",
-  people: ["Андрей, разработчик", "Марта, дизайнер"],
-  summary: "рабочее пространство ClickUp",
+/** What the ClickUp step shows once connected (previews). */
+export const CLICKUP_CONNECTION = {
+  moreCount: 0,
+  spaces: ["Клиенты", "Внутреннее"],
+  spacesCount: "2 пространства",
+  user: "Дима Капиш",
+  workspace: "Pixel Agency",
 };
 
-export const CLICKUP_CAPABILITIES = [
-  { allowed: true, label: "Читать задачи, описания и комментарии" },
-  { allowed: true, label: "Видеть, кто из команды над чем работает" },
-  { allowed: false, label: "Ничего не меняет и не создаёт в ClickUp" },
+export const CLICKUP_TOKENS = {
+  rejected: "pk_4815162_Q7Z2ABCDEF1234567890",
+  valid: "pk_4815162_Q7Z2LM8NX4WD9KTR3HB6YC1P",
+};
+
+/** The workspaces a token opens, for the «choose» preview. */
+export const CLICKUP_WORKSPACES = [
+  { id: "9001", name: "Pixel Agency" },
+  { id: "9002", name: "Личное" },
 ];
 
 export type SetupSummaryIcon =
@@ -146,14 +151,14 @@ export const SETUP_SUMMARY_INTEGRATIONS: SetupSummaryItem[] = [
 
 /** How long each fake round trip takes. */
 export const CONNECT_DELAY_MS = {
-  clickup: 2200,
+  clickup: MOCK_CONNECT_DELAY_MS,
   github: 2500,
   outline: MOCK_CONNECT_DELAY_MS,
 } as const satisfies Record<IntegrationService, number>;
 
 /** What the list shows for each service once it is connected. */
 export const CONNECTED_ACCOUNTS = {
-  clickup: "Workspace «Pixel Agency», 38 списков",
+  clickup: "Pixel Agency, Дима Капиш",
   github: "dima-kapish, доступ к 12 репозиториям",
   outline: "docs.pixel.agency, 14 коллекций",
 } as const satisfies Record<IntegrationService, string>;

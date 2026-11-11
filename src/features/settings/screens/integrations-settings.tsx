@@ -38,14 +38,17 @@ import { AGENT_MCP, CLICKUP, GITHUB, OUTLINE, SERVICE_NAMES } from "../mock";
  * - confirm-disconnect: the "Отключить GitHub?" dialog over the window
  * - github-disconnected: GitHub back to "Не подключено", undo toast
  * In the app the rows follow the integrations store (`services`): GitHub
- * and ClickUp are «скоро» there, Outline shows its team, when it last
- * answered, «не удалось обновить» with «Повторить» when it did not, and
- * «Обновить ключ» when the key no longer works.
+ * is «скоро» there; Outline and ClickUp offer «Подключить», then show their
+ * team or workspace (ClickUp: whose token), when they last answered,
+ * «не удалось обновить» with «Повторить» when they did not, and «Обновить
+ * ключ» / «Обновить токен» when the secret no longer works.
  */
 type IntegrationsScreenState =
   | "default"
   | "confirm-disconnect"
-  | "github-disconnected";
+  | "github-disconnected"
+  | "app-empty"
+  | "clickup-revoked";
 
 const SERVICE_ORDER: IntegrationService[] = ["github", "outline", "clickup"];
 
@@ -64,11 +67,44 @@ const SERVICE_PITCH: Record<IntegrationService, string> = {
 /** The Paper states, for the previews. */
 function previewServices(githubConnected: boolean): IntegrationsState {
   return {
-    clickup: { status: "connected" },
+    clickup: {
+      account: CLICKUP.workspace,
+      status: "connected",
+      team: CLICKUP.workspace,
+      user: CLICKUP.user,
+    },
     github: { status: githubConnected ? "connected" : "disconnected" },
     outline: { account: OUTLINE.host, error: OUTLINE.error, status: "error" },
   };
 }
+
+/** The app's states: GitHub «скоро», Outline and ClickUp by a secret. */
+const APP_PREVIEWS: Partial<
+  Record<IntegrationsScreenState, IntegrationsState>
+> = {
+  "app-empty": {
+    clickup: { status: "disconnected" },
+    github: { available: false, status: "disconnected" },
+    outline: { status: "disconnected" },
+  },
+  "clickup-revoked": {
+    clickup: {
+      account: CLICKUP.workspace,
+      error: CLICKUP.error,
+      errorKind: "unauthorized",
+      status: "error",
+      team: CLICKUP.workspace,
+      user: CLICKUP.user,
+    },
+    github: { available: false, status: "disconnected" },
+    outline: {
+      account: OUTLINE.host,
+      lastOkAt: Date.UTC(2026, 9, 14, 9, 30),
+      status: "connected",
+      team: "Pixel Agency",
+    },
+  },
+};
 
 /** "2 из 3 работают", "1 из 3 работает"; «скоро» doesn't count. */
 export function workingSummary(services: IntegrationsState) {
@@ -87,19 +123,58 @@ function since(at: number | null | undefined) {
   return at ? relativeTime(at) : "давно";
 }
 
-/** What a broken Outline means for the projects. */
-function outlineImpact(state: IntegrationState, projects?: string[]) {
+/** Connected by a key or a token: Outline and ClickUp. */
+type KeyService = Exclude<IntegrationService, "github">;
+
+function isKeyService(service: IntegrationService): service is KeyService {
+  return service !== "github";
+}
+
+const KEY_WORDS: Record<
+  KeyService,
+  {
+    error: string;
+    impact: string;
+    kept: string;
+    reconnect: string;
+    stale: string;
+  }
+> = {
+  clickup: {
+    error: CLICKUP.error,
+    impact: CLICKUP.impact,
+    kept: "задачи ClickUp в проектах",
+    reconnect: "Обновить токен",
+    stale: "задачи ClickUp не обновляются",
+  },
+  outline: {
+    error: OUTLINE.error,
+    impact: OUTLINE.impact,
+    kept: "документы Outline в проектах",
+    reconnect: "Обновить ключ",
+    stale: "документы Outline не обновляются",
+  },
+};
+
+/** What a broken Outline or ClickUp means for the projects. */
+function brokenImpact(
+  service: KeyService,
+  state: IntegrationState,
+  projects?: string[]
+) {
+  const words = KEY_WORDS[service];
   if (!projects) {
-    return OUTLINE.impact;
+    return words.impact;
   }
   const where =
     projects.length > 0
-      ? `документы Outline в проектах (${projects.map((name) => `«${name}»`).join(", ")}) остаются с последним текстом`
-      : "документы Outline не обновляются";
+      ? `${words.kept} (${projects.map((name) => `«${name}»`).join(", ")}) остаются с последним текстом`
+      : words.stale;
   const last = state.lastOkAt
     ? ` Последний раз работало ${relativeTime(state.lastOkAt)}.`
     : "";
-  return `Пока ключ не обновлён, ${where}.${last}`;
+  const secret = service === "clickup" ? "токен" : "ключ";
+  return `Пока ${secret} не обновлён, ${where}.${last}`;
 }
 
 export interface IntegrationHandlers {
@@ -108,12 +183,15 @@ export interface IntegrationHandlers {
   /** "Подключить" on a service that is not connected. */
   onConnect?: (service: IntegrationService) => void;
   onDisconnect?: (service: IntegrationService) => void;
-  /** "Обновить ключ" / "Подключить заново" on a broken service. */
+  /** "Обновить ключ" / "Обновить токен" on a broken service. */
   onReconnect?: (service: IntegrationService) => void;
   /** «Повторить» after the service did not answer. */
   onRetry?: (service: IntegrationService) => void;
-  /** Projects that picked Outline's documents; the previews leave it out. */
-  outlineProjects?: string[];
+  /**
+   * Projects that picked each service's documents; the previews leave it
+   * out.
+   */
+  projects?: Partial<Record<IntegrationService, string[]>>;
   /** «Повторить» is running. */
   retrying?: boolean;
 }
@@ -141,28 +219,20 @@ function ConnectedDetails({
     );
   }
   if (service === "outline") {
-    const stale = state.errorKind === "unreachable";
-    const failed = state.errorKind === "other" && state.error !== undefined;
-    let line = `Обновлено ${since(state.lastOkAt)}`;
-    if (stale) {
-      line = `Не удалось обновить: Outline не ответил. Последний раз отвечал ${since(state.lastOkAt)}`;
-    } else if (failed) {
-      line = `Не удалось обновить: ${state.error}`;
-    }
     return (
       <div className="flex flex-col gap-1">
         <p className="font-mono text-xs">{state.account ?? OUTLINE.host}</p>
-        {state.lastOkAt === undefined ? null : (
-          <p
-            className={
-              stale || failed
-                ? "text-contradiction text-sm"
-                : "text-muted-foreground text-sm"
-            }
-          >
-            {line}
-          </p>
-        )}
+        <FreshnessLine service={service} state={state} />
+      </div>
+    );
+  }
+  if (state.user !== undefined || state.lastOkAt !== undefined) {
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="text-sm">
+          Токен {state.user ?? CLICKUP.user}, только чтение
+        </p>
+        <FreshnessLine service={service} state={state} />
       </div>
     );
   }
@@ -177,6 +247,38 @@ function ConnectedDetails({
         <span className="font-mono text-xs">{CLICKUP.syncedAt}</span>
       </p>
     </div>
+  );
+}
+
+/** When the service last answered, or why it did not. */
+function FreshnessLine({
+  service,
+  state,
+}: {
+  service: KeyService;
+  state: IntegrationState;
+}) {
+  if (state.lastOkAt === undefined) {
+    return null;
+  }
+  const stale = state.errorKind === "unreachable";
+  const failed = state.errorKind === "other" && state.error !== undefined;
+  let line = `Обновлено ${since(state.lastOkAt)}`;
+  if (stale) {
+    line = `Не удалось обновить: ${SERVICE_NAMES[service]} не ответил. Последний раз отвечал ${since(state.lastOkAt)}`;
+  } else if (failed) {
+    line = `Не удалось обновить: ${state.error}`;
+  }
+  return (
+    <p
+      className={
+        stale || failed
+          ? "text-contradiction text-sm"
+          : "text-muted-foreground text-sm"
+      }
+    >
+      {line}
+    </p>
   );
 }
 
@@ -202,7 +304,7 @@ function IntegrationServiceRow({
     onDisconnect,
     onReconnect,
     onRetry,
-    outlineProjects,
+    projects,
     retrying,
   } = handlers;
   const name = SERVICE_NAMES[service];
@@ -257,34 +359,12 @@ function IntegrationServiceRow({
 
   if (state.status === "error") {
     return (
-      <ServiceRow
-        actions={
-          <>
-            <ServiceTextAction onClick={disconnect}>
-              Отключить
-            </ServiceTextAction>
-            <Button className="h-9 px-4" onClick={reconnect}>
-              {service === "outline" ? "Обновить ключ" : "Подключить заново"}
-            </Button>
-          </>
-        }
-        description={state.error ?? OUTLINE.error}
-        details={
-          service === "outline" ? (
-            <div className="flex flex-col gap-1">
-              <p className="font-mono text-xs">
-                {state.account ?? OUTLINE.host}
-              </p>
-              <p className="text-muted-foreground text-sm">
-                {outlineImpact(state, outlineProjects)}
-              </p>
-            </div>
-          ) : undefined
-        }
-        error
-        icon={icon}
-        name={name}
-        status={<ServiceBroken />}
+      <BrokenServiceRow
+        onDisconnect={disconnect}
+        onReconnect={reconnect}
+        projects={projects}
+        service={service}
+        state={state}
       />
     );
   }
@@ -298,7 +378,7 @@ function IntegrationServiceRow({
               Изменить доступ
             </ServiceTextAction>
           ) : null}
-          {service === "outline" && state.errorKind === "unreachable" ? (
+          {isKeyService(service) && state.errorKind === "unreachable" ? (
             <ServiceTextAction disabled={retrying} emphasis onClick={retry}>
               {retrying ? "Проверяем…" : "Повторить"}
             </ServiceTextAction>
@@ -306,15 +386,74 @@ function IntegrationServiceRow({
           <ServiceTextAction onClick={disconnect}>Отключить</ServiceTextAction>
         </>
       }
-      description={
-        service === "outline" && state.team
-          ? `Команда ${state.team}, только чтение документов`
-          : CONNECTED_DESCRIPTION[service]
-      }
+      description={connectedDescription(service, state)}
       details={<ConnectedDetails service={service} state={state} />}
       icon={icon}
       name={name}
       status={<ServiceConnected />}
+    />
+  );
+}
+
+function connectedDescription(
+  service: IntegrationService,
+  state: IntegrationState
+) {
+  if (service === "outline" && state.team) {
+    return `Команда ${state.team}, только чтение документов`;
+  }
+  if (service === "clickup" && state.team) {
+    return `Пространство ${state.team}, только чтение задач и комментариев`;
+  }
+  return CONNECTED_DESCRIPTION[service];
+}
+
+/** A service whose secret stopped working: why, and how to fix it. */
+function BrokenServiceRow({
+  onDisconnect,
+  onReconnect,
+  projects,
+  service,
+  state,
+}: {
+  onDisconnect: () => void;
+  onReconnect: () => void;
+  projects?: Partial<Record<IntegrationService, string[]>>;
+  service: IntegrationService;
+  state: IntegrationState;
+}) {
+  const keyed = isKeyService(service) ? service : null;
+  return (
+    <ServiceRow
+      actions={
+        <>
+          <ServiceTextAction onClick={onDisconnect}>
+            Отключить
+          </ServiceTextAction>
+          <Button className="h-9 px-4" onClick={onReconnect}>
+            {keyed ? KEY_WORDS[keyed].reconnect : "Подключить заново"}
+          </Button>
+        </>
+      }
+      description={state.error ?? (keyed ? KEY_WORDS[keyed].error : "")}
+      details={
+        keyed ? (
+          <div className="flex flex-col gap-1">
+            {keyed === "outline" ? (
+              <p className="font-mono text-xs">
+                {state.account ?? OUTLINE.host}
+              </p>
+            ) : null}
+            <p className="text-muted-foreground text-sm">
+              {brokenImpact(keyed, state, projects?.[keyed])}
+            </p>
+          </div>
+        ) : undefined
+      }
+      error
+      icon={SERVICE_ICONS[service]}
+      name={SERVICE_NAMES[service]}
+      status={<ServiceBroken />}
     />
   );
 }
@@ -388,7 +527,10 @@ export function IntegrationsSettingsScreen({
       overlay={overlay}
       section="integrations"
     >
-      <IntegrationsSettings githubConnected={state !== "github-disconnected"} />
+      <IntegrationsSettings
+        githubConnected={state !== "github-disconnected"}
+        services={APP_PREVIEWS[state]}
+      />
     </SettingsScreen>
   );
 }

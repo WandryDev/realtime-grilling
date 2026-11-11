@@ -144,6 +144,10 @@ export function OutlineConnectFlow({
         clearIntegration("outline");
         return;
       }
+      // Outline's key opens one team: no workspace to pick.
+      if (result.field === "workspace") {
+        return;
+      }
       if (result.field === "host") {
         setUrlError(result.message);
       } else {

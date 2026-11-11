@@ -302,8 +302,13 @@ export const OUTLINE = {
 
 export const CLICKUP = {
   description: "Пространство Pixel Agency, только чтение задач и комментариев",
+  error: "Токен больше не подходит: истёк или был отозван",
+  impact:
+    "Пока токен не обновлён, задачи ClickUp в проектах остаются с последним текстом.",
   pitch: "Задачи и комментарии, чтобы спрашивать по делу",
   syncedAt: "12:04",
+  user: "Дима Капиш",
+  workspace: "Pixel Agency",
 };
 
 export const SERVICE_NAMES = {
@@ -318,7 +323,7 @@ export const SERVICE_NAMES = {
  */
 export const AGENT_MCP = {
   description:
-    "Grill сам загружает документы выбранных в проекте коллекций и передаёт агенту их текст. Доступа к сервисам и ключей у агента нет.",
+    "Grill сам загружает документы и задачи, выбранные в проекте, и передаёт агенту их текст. Доступа к сервисам, ключей и токенов у агента нет.",
   version: "2.1.4",
 };
 
@@ -363,16 +368,25 @@ function quotedList(names: string[]) {
   return `${quoted.slice(0, -1).join(", ")} и ${quoted.at(-1)}`;
 }
 
+/** «Это коснётся проекта «Телемедиа».» */
+function touchesLine(projects: string[], nothing: string) {
+  if (projects.length === 1) {
+    return `Это коснётся проекта ${quotedList(projects)}.`;
+  }
+  if (projects.length > 1) {
+    return `Это коснётся проектов ${quotedList(projects)}.`;
+  }
+  return nothing;
+}
+
 /** «Отключить Outline?» naming the projects that picked its documents. */
 export function disconnectOutlineContent(
   projects: string[]
 ): DisconnectContent {
-  let touches = "Ни один проект пока не выбрал документы Outline.";
-  if (projects.length === 1) {
-    touches = `Это коснётся проекта ${quotedList(projects)}.`;
-  } else if (projects.length > 1) {
-    touches = `Это коснётся проектов ${quotedList(projects)}.`;
-  }
+  const touches = touchesLine(
+    projects,
+    "Ни один проект пока не выбрал документы Outline."
+  );
   return {
     ...DISCONNECT_OUTLINE,
     description: `Grill перестанет обновлять документы из Outline. ${touches}`,
@@ -381,15 +395,30 @@ export function disconnectOutlineContent(
 
 export const DISCONNECT_CLICKUP: DisconnectContent = {
   consequences: [
-    "Выбранные в проектах списки задач запомнятся",
-    "Итоги прошлых звонков останутся как есть",
+    "Выбранные в проектах пространства, списки и задачи запомнятся",
+    "Задачи ClickUp останутся в проектах с последним текстом",
+    "Обновляться они снова начнут, когда ClickUp подключат",
   ],
   description:
-    "На звонках Grill перестанет видеть задачи и комментарии. Это коснётся проекта «Ветклиника Лапа».",
+    "Grill перестанет обновлять задачи из ClickUp. Это коснётся проекта «Телемедиа».",
   footnote:
-    "Токен удалится с этого компьютера. Полностью отозвать доступ можно в ClickUp, раздел Apps.",
+    "Токен удалится из Keychain. Отозвать его можно в ClickUp: Settings → Apps.",
   title: "Отключить ClickUp?",
 };
+
+/** «Отключить ClickUp?» naming the projects that picked its tasks. */
+export function disconnectClickUpContent(
+  projects: string[]
+): DisconnectContent {
+  const touches = touchesLine(
+    projects,
+    "Ни один проект пока не выбрал задачи ClickUp."
+  );
+  return {
+    ...DISCONNECT_CLICKUP,
+    description: `Grill перестанет обновлять задачи из ClickUp. ${touches}`,
+  };
+}
 
 /* ------------------------------------------------- Состояния для ?demo */
 

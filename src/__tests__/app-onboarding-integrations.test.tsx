@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetIntegrations } from "@/data/integrations";
@@ -27,6 +27,9 @@ vi.mock("next/navigation", () => ({
 }));
 
 const CHECKING_KEY = /Проверяем ключ/u;
+const CHECKING_TOKEN = /Проверяем токен/u;
+const TOKEN_REFUSED = /Токен не подошёл/u;
+const CLICKUP_TOKEN = "pk_4815162_Q7Z2LM8NX4WD9KTR3HB6YC1P";
 const KEY_TAIL = /Xk2$/u;
 const VALID_KEY = "ol_api_x9Pq4Lm2Vb7Nd3Wf8Ht7Xk2";
 
@@ -77,8 +80,8 @@ describe("IntegrationsPage", () => {
     expect(hrefOf("Исправить Outline")).toBe(
       "/onboarding/integrations/outline"
     );
-    expect(hrefOf("ClickUp: ждём браузер")).toBe(
-      "/onboarding/integrations/clickup"
+    expect(hrefOf("GitHub: ждём браузер")).toBe(
+      "/onboarding/integrations/github"
     );
     expect(hrefOf("Продолжить")).toBe("/onboarding/done");
   });
@@ -217,36 +220,59 @@ describe("Outline step", () => {
 });
 
 describe("ClickUp step", () => {
-  it("can cancel the browser sign-in and connect on the second try", async () => {
-    render(<ServiceConnectPage service="clickup" />);
+  it("connects by a token after picking a workspace, then the list shows it", async () => {
+    const { unmount } = render(<ServiceConnectPage service="clickup" />);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Продолжить в браузере" })
-    );
-    expect(screen.getByText("Ждём ответа от ClickUp")).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
     expect(
-      screen.getByRole("button", { name: "Продолжить в браузере" })
-    ).toBeDefined();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Продолжить в браузере" })
-    );
+      screen
+        .getByRole("link", { name: "Открыть страницу токена" })
+        .getAttribute("href")
+    ).toBe("https://app.clickup.com/settings/apps");
+    fireEvent.change(screen.getByLabelText("Токен ClickUp"), {
+      target: { value: CLICKUP_TOKEN },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+    expect(screen.getByRole("button", { name: CHECKING_TOKEN })).toBeDefined();
     await advance(CONNECT_DELAY_MS.clickup);
+
+    // The demo token opens two workspaces: nothing is connected yet.
+    const workspaces = screen.getByRole("radiogroup");
+    expect(within(workspaces).getByText("Личное")).toBeDefined();
+    fireEvent.click(within(workspaces).getByText("Pixel Agency"));
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+    await advance(CONNECT_DELAY_MS.clickup);
+
     expect(
       screen.getByRole("heading", { level: 1, name: "ClickUp подключён" })
     ).toBeDefined();
+    expect(screen.getByText("Дима Капиш")).toBeDefined();
+    unmount();
+
+    render(<IntegrationsPage />);
+    expect(
+      screen.queryByRole("link", { name: "Подключить ClickUp" })
+    ).toBeNull();
   });
 
-  it("retries after an error forced with ?demo=error", () => {
-    navigation.params = new URLSearchParams("demo=error");
+  it("refuses a token at its field and keeps the focus there", async () => {
+    render(<ServiceConnectPage service="clickup" />);
+    fireEvent.change(screen.getByLabelText("Токен ClickUp"), {
+      target: { value: "pk_bad" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+    await advance(CONNECT_DELAY_MS.clickup);
+
+    expect(screen.getByText(TOKEN_REFUSED)).toBeDefined();
+    expect(document.activeElement).toBe(screen.getByLabelText("Токен ClickUp"));
+  });
+
+  it("opens the workspace choice with ?demo=choose", () => {
+    navigation.params = new URLSearchParams("demo=choose");
     render(<ServiceConnectPage service="clickup" />);
 
     expect(
-      screen.getByRole("heading", { level: 1, name: "ClickUp не подключился" })
-    ).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: "Попробовать снова" }));
-    expect(screen.getByText("Ждём ответа от ClickUp")).toBeDefined();
+      within(screen.getByRole("radiogroup")).getAllByRole("radio")
+    ).toHaveLength(2);
   });
 });
 

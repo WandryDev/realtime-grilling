@@ -3,11 +3,7 @@
 import { Effect } from "effect";
 
 import { toast } from "@/components/ui/toast";
-import {
-  disconnectIntegration,
-  type IntegrationState,
-  setIntegration,
-} from "@/data/integrations";
+import { type IntegrationState, setIntegration } from "@/data/integrations";
 import { type AppServices, appRuntime, runCancelable } from "@/effect/runtime";
 import { OnboardingBackend } from "@/features/onboarding/backend";
 import type { IntegrationService } from "@/lib/routes";
@@ -16,8 +12,8 @@ import { IntegrationsBackend } from "./backend";
 import { GITHUB_DEVICE } from "./mock";
 
 /*
- * React-facing side of the onboarding integration steps. The GitHub and
- * ClickUp round trips live in the IntegrationsBackend Effect service
+ * React-facing side of the onboarding integration steps. The GitHub round
+ * trip lives in the IntegrationsBackend Effect service
  * (`./backend.ts`), the clipboard in OnboardingBackend; this module runs
  * them through the app runtime.
  *
@@ -136,23 +132,19 @@ export function startGitHubAuthorization() {
   );
 }
 
-/* Settings: the browser sign-ins of the demo -------------------------- */
+/* Settings: the browser sign-in of the demo -------------------------- */
 
 /**
- * GitHub or ClickUp from Settings in the browser demo: the row shows
- * «Подключаем…» until the (simulated) sign-in answers. They are «скоро»
- * in the app, which never gets here.
+ * GitHub from Settings in the browser demo: the row shows «Подключаем…»
+ * until the (simulated) sign-in answers. It is «скоро» in the app, which
+ * never gets here.
  */
-export function connectDemoService(service: "github" | "clickup") {
+export function connectDemoService(service: "github") {
   setIntegration(service, { status: "connecting" });
   return new Promise<void>((resolve) => {
     schedule(
       service,
-      IntegrationsBackend.use((backend) =>
-        service === "github"
-          ? backend.authorizeGitHub
-          : backend.authorizeClickUp
-      ).pipe(
+      IntegrationsBackend.use((backend) => backend.authorizeGitHub).pipe(
         Effect.andThen((account) =>
           Effect.sync(() => {
             setIntegration(service, connected(account));
@@ -173,28 +165,11 @@ export function connectDemoService(service: "github" | "clickup") {
 export const OUTLINE_REJECTED_SUMMARY = "Ключ не подошёл, проверьте его";
 export const OUTLINE_UNREACHABLE_SUMMARY = "Адрес не отвечает, проверьте его";
 
-/* ClickUp: OAuth in the browser ---------------------------------------- */
-
-/** List line after the browser sign-in failed. */
-export const CLICKUP_DENIED_SUMMARY = "Доступ не выдан, попробуйте снова";
+/* ClickUp: personal token --------------------------------------------- */
 
 /*
- * Opens ClickUp OAuth in the browser and waits for the redirect to the
- * local address.
+ * ClickUp connects through `connectWithKey` too, with the workspace picked
+ * when the token opens several. A refused token leaves this line on the
+ * onboarding list, «Исправить».
  */
-export function startClickUpAuthorization() {
-  openInBrowser("app.clickup.com/api");
-  setIntegration("clickup", { status: "connecting" });
-  schedule(
-    "clickup",
-    IntegrationsBackend.use((backend) => backend.authorizeClickUp).pipe(
-      Effect.map((account) => setIntegration("clickup", connected(account)))
-    )
-  );
-}
-
-/** "Отменить" while waiting for the browser. */
-export function cancelClickUpAuthorization() {
-  cancelConnect("clickup");
-  disconnectIntegration("clickup");
-}
+export const CLICKUP_REJECTED_SUMMARY = "Токен не подошёл, проверьте его";

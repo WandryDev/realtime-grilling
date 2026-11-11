@@ -13,6 +13,8 @@ const heading = (name: string) =>
   screen.getByRole("heading", { level: 1, name });
 
 const MASKED_KEY = /^ol_api_•+7Xk2$/u;
+const MASKED_TOKEN = /^pk_4815162_•+YC1P$/u;
+const TOKEN_REFUSED = /Токен не подошёл/u;
 
 describe("IntegrationsScreen", () => {
   it("offers to connect every service and to skip the step", () => {
@@ -126,39 +128,43 @@ describe("OutlineConnectScreen", () => {
 });
 
 describe("ClickUpConnectScreen", () => {
-  it("says what Grill may do before the browser opens", () => {
-    render(<ClickUpConnectScreen state="intro" />);
+  it("asks for a personal token and leads to ClickUp's token page", () => {
+    render(<ClickUpConnectScreen state="form" />);
 
     expect(heading("Подключение ClickUp")).toBeDefined();
     expect(
-      screen.getByRole("region", { name: "Что сможет Grill" })
-    ).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Продолжить в браузере" })
-    ).toBeDefined();
+      screen
+        .getByRole("link", { name: "Открыть страницу токена" })
+        .getAttribute("href")
+    ).toBe("https://app.clickup.com/settings/apps");
+    const token = screen.getByLabelText("Токен ClickUp") as HTMLInputElement;
+    expect(token.value).toMatch(MASKED_TOKEN);
+    // No sign-in in the browser any more.
+    expect(screen.queryByText("Что сможет Grill")).toBeNull();
   });
 
-  it("waits for the browser and can be cancelled", () => {
-    render(<ClickUpConnectScreen state="waiting" />);
+  it("says the token was refused at its field", () => {
+    render(<ClickUpConnectScreen state="rejected" />);
 
-    expect(screen.getByText("Ждём ответа от ClickUp")).toBeDefined();
-    expect(screen.getByRole("button", { name: "Отменить" })).toBeDefined();
+    expect(screen.getByText(TOKEN_REFUSED)).toBeDefined();
   });
 
-  it("shows the workspace and people when connected", () => {
+  it("offers the workspaces when the token opens several", () => {
+    render(<ClickUpConnectScreen state="choose" />);
+
+    const group = screen.getByRole("radiogroup");
+    expect(within(group).getAllByRole("radio")).toHaveLength(2);
+    expect(within(group).getByText("Личное")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Подключить" })).toBeDefined();
+  });
+
+  it("shows the workspace, the user and the spaces when connected", () => {
     render(<ClickUpConnectScreen state="connected" />);
 
     expect(heading("ClickUp подключён")).toBeDefined();
-    expect(screen.getByText("Андрей, разработчик")).toBeDefined();
-  });
-
-  it("announces the error with its code", () => {
-    render(<ClickUpConnectScreen state="error" />);
-
-    expect(heading("ClickUp не подключился")).toBeDefined();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "access_denied, 12:04"
-    );
+    expect(screen.getByText("Pixel Agency")).toBeDefined();
+    expect(screen.getByText("Дима Капиш")).toBeDefined();
+    expect(screen.getByText("Клиенты")).toBeDefined();
   });
 });
 

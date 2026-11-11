@@ -27,7 +27,8 @@ import { cn } from "@/lib/utils";
 
 const DOT = "•";
 const TAIL = 4;
-const KNOWN_PREFIX = /^[a-z]+_api_/u;
+/** Outline's `ol_api_`, ClickUp's `pk_<user id>_`. */
+const KNOWN_PREFIX = /^(?:[a-z]+_api_|pk_\d+_)/u;
 const HEAD = 4;
 /** Shorter keys are all dots: a start and an end would give them away. */
 const MIN_REVEALED_LENGTH = 12;
@@ -44,10 +45,13 @@ export function maskKey(key: string) {
 
 export function MaskedKeyInput({
   className,
+  noun = "ключ",
   onValueChange,
   value,
   ...props
 }: Omit<ComponentProps<"input">, "onChange" | "type" | "value"> & {
+  /** What it holds, for the eye's label: «ключ», «токен». */
+  noun?: string;
   onValueChange: (value: string) => void;
   value: string;
 }) {
@@ -91,7 +95,7 @@ export function MaskedKeyInput({
       />
       <InputGroupAddon align="inline-end">
         <InputGroupButton
-          aria-label={visible ? "Скрыть ключ" : "Показать ключ"}
+          aria-label={visible ? `Скрыть ${noun}` : `Показать ${noun}`}
           className={cn(
             "text-muted-foreground hover:bg-transparent",
             "group-[:not(:hover,:focus-within):has(input:placeholder-shown)]/input-group:text-subtle group-focus-within/input-group:text-foreground"

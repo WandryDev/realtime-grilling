@@ -21,6 +21,7 @@ import {
   type ConnectTarget,
 } from "../dialogs/connect-service-dialog";
 import {
+  disconnectClickUpContent,
   disconnectOutlineContent,
   GITHUB,
   OUTLINE,
@@ -37,9 +38,16 @@ export type IntegrationsDemo =
 
 const HOUR_MS = 3_600_000;
 
+/** What a disconnect leaves in the projects. */
+const KEPT: Partial<Record<IntegrationService, string>> = {
+  clickup: "Задачи ClickUp остались в проектах с последним текстом",
+  outline: "Документы Outline остались в проектах с последним текстом",
+};
+
 /**
  * Disconnects. A demo service offers "Вернуть" with the state from
- * before; Outline's key is gone from Keychain, so it only says so.
+ * before; the secret of Outline or ClickUp is gone from Keychain, so it
+ * only says so.
  */
 async function disconnectWithUndo(service: IntegrationService) {
   const previous = getIntegrations()[service];
@@ -47,10 +55,11 @@ async function disconnectWithUndo(service: IntegrationService) {
   if (!done) {
     return;
   }
-  if (service === "outline") {
+  const kept = KEPT[service];
+  if (kept) {
     toast.add({
-      description: "Документы Outline остались в проектах с последним текстом",
-      title: "Outline отключён",
+      description: kept,
+      title: `${SERVICE_NAMES[service]} отключён`,
       type: "success",
     });
     return;
@@ -60,19 +69,22 @@ async function disconnectWithUndo(service: IntegrationService) {
   });
 }
 
-/** Names of the projects that picked Outline's documents. */
-function useOutlineProjects() {
+/** Names of the projects that picked each connector's documents. */
+function useConnectorProjects() {
   const selections = useConnectorSelections();
   const projects = useProjects();
   return useMemo(() => {
-    const ids = new Set(
-      selections
-        .filter((view) => view.kind === "outline" && view.items.length > 0)
-        .map((view) => view.projectId)
-    );
-    return projects
-      .filter((project) => ids.has(project.id))
-      .map((project) => project.name);
+    const namesOf = (kind: IntegrationService) => {
+      const ids = new Set(
+        selections
+          .filter((view) => view.kind === kind && view.items.length > 0)
+          .map((view) => view.projectId)
+      );
+      return projects
+        .filter((project) => ids.has(project.id))
+        .map((project) => project.name);
+    };
+    return { clickup: namesOf("clickup"), outline: namesOf("outline") };
   }, [projects, selections]);
 }
 
@@ -146,10 +158,13 @@ export function IntegrationsSection({ demo }: { demo?: IntegrationsDemo }) {
     setConnectTarget({ reconnect: true, service });
   }, []);
 
-  const outlineProjects = useOutlineProjects();
+  const connectorProjects = useConnectorProjects();
   const disconnectContents = useMemo(
-    () => ({ outline: disconnectOutlineContent(outlineProjects) }),
-    [outlineProjects]
+    () => ({
+      clickup: disconnectClickUpContent(connectorProjects.clickup),
+      outline: disconnectOutlineContent(connectorProjects.outline),
+    }),
+    [connectorProjects]
   );
   const [retrying, setRetrying] = useState(false);
   const retry = useCallback(async (service: IntegrationService) => {
@@ -178,7 +193,7 @@ export function IntegrationsSection({ demo }: { demo?: IntegrationsDemo }) {
         onDisconnect={setDisconnecting}
         onReconnect={reconnect}
         onRetry={retry}
-        outlineProjects={outlineProjects}
+        projects={connectorProjects}
         retrying={retrying}
         services={services}
       />

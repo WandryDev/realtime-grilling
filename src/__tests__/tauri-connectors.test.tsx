@@ -9,12 +9,13 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
- * Connectors in the app (connectors-outline tasks 4.1 and 4.2), over the
- * fake IPC (./helpers/fake-tauri.ts): the integrations store reads
+ * Connectors in the app (connectors-outline tasks 4.1 and 4.2,
+ * connectors-clickup tasks 3.1 and 3.2), over the fake IPC
+ * (./helpers/fake-tauri.ts): the integrations store reads
  * `connectors_list` and follows `DataChanged` of `connections` from every
- * window; Settings → Интеграции and the onboarding Outline step connect,
- * refuse at the right field and disconnect through the commands; GitHub
- * and ClickUp are «скоро».
+ * window; Settings → Интеграции and the onboarding Outline and ClickUp
+ * steps connect, refuse at the right field, pick a ClickUp workspace and
+ * disconnect through the commands; GitHub is «скоро».
  */
 
 const fake = await vi.hoisted(async () => {
@@ -50,8 +51,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.search,
 }));
 
-const { connectedOutline, fakeConnector, fakeProject, FAKE_OUTLINE_ACCOUNT } =
-  await import("./helpers/fake-tauri");
+const {
+  connectedClickUp,
+  connectedOutline,
+  fakeConnector,
+  fakeProject,
+  FAKE_OUTLINE_ACCOUNT,
+} = await import("./helpers/fake-tauri");
 const {
   connectWithKey,
   disconnectIntegration,
@@ -79,6 +85,11 @@ const AGENT_PATH = /Grill сам загружает документы/u;
 const MASKED_KEY = /^ol_api_•+7Xk2$/u;
 const NOT_UPDATED = /Не удалось обновить/u;
 const TOUCHES_TELEMEDIA = /Это коснётся проекта «Телемедиа»/u;
+const TOKEN = "pk_4815162_Q7Z2LM8NX4WD9KTR3HB6YC1P";
+const TOKEN_REFUSED = /Токен не подошёл/u;
+const PIXEL = { id: "9001", name: "Pixel Agency" };
+const PERSONAL = { id: "9002", name: "Личное" };
+const USER_LINE = /Токен Дима/u;
 
 function invokedWith(command: string) {
   return fake.invoked
@@ -86,12 +97,11 @@ function invokedWith(command: string) {
     .map((call) => call.args);
 }
 
-function setOutline(view: ReturnType<typeof connectedOutline>) {
-  fake.db.connections = [
-    view,
-    fakeConnector("github"),
-    fakeConnector("clickup"),
-  ];
+function setOutline(
+  view: ReturnType<typeof connectedOutline>,
+  clickup = fakeConnector("clickup")
+) {
+  fake.db.connections = [view, fakeConnector("github"), clickup];
 }
 
 /** The stores outlive a test: read the reset tables. */
@@ -115,8 +125,23 @@ function IntegrationsProbe() {
   );
 }
 
+function ClickUpProbe() {
+  const { clickup } = useIntegrations();
+  return (
+    <p data-testid="clickup">
+      {clickup.status}
+      {clickup.team ? `: ${clickup.team}` : ""}
+      {clickup.user ? `, ${clickup.user}` : ""}
+    </p>
+  );
+}
+
 function outlineRow() {
   return screen.getByRole("article", { name: "Outline" });
+}
+
+function clickupRow() {
+  return screen.getByRole("article", { name: "ClickUp" });
 }
 
 beforeEach(async () => {
@@ -128,6 +153,7 @@ beforeEach(async () => {
     ...fakeProject(TELEMEDIA, "Телемедиа"),
   });
   fake.db.selections = [];
+  fake.clickup.workspaces = [PIXEL];
   setOutline(fakeConnector("outline"));
   await reload();
   fake.invoked.length = 0;
@@ -155,7 +181,12 @@ describe("Connectors service and the integrations store (4.1)", () => {
 
     expect(result?.ok).toBe(true);
     expect(invokedWith("connector_connect_api_key")).toEqual([
-      { host: "https://docs.pixel.agency", key: GOOD_KEY, kind: "outline" },
+      {
+        host: "https://docs.pixel.agency",
+        key: GOOD_KEY,
+        kind: "outline",
+        workspace: null,
+      },
     ]);
     expect(screen.getByTestId("outline").textContent).toBe(
       "connected: Pixel Agency, github скоро"
@@ -222,18 +253,19 @@ describe("Connectors service and the integrations store (4.1)", () => {
 });
 
 describe("Settings → Интеграции in the app (4.2)", () => {
-  it("offers to connect Outline; GitHub and ClickUp are «скоро»", async () => {
+  it("offers to connect Outline and ClickUp; GitHub is «скоро» («Настройки без подключений»)", async () => {
     render(<SettingsPage section="integrations" />);
 
     expect(
       await within(outlineRow()).findByRole("button", { name: "Подключить" })
     ).toBeTruthy();
-    for (const name of ["GitHub", "ClickUp"]) {
-      const row = screen.getByRole("article", { name });
-      expect(within(row).getByText("скоро")).toBeTruthy();
-      expect(within(row).queryByRole("button")).toBeNull();
-    }
-    expect(screen.getByText("0 из 1 работают")).toBeTruthy();
+    expect(
+      within(clickupRow()).getByRole("button", { name: "Подключить" })
+    ).toBeTruthy();
+    const github = screen.getByRole("article", { name: "GitHub" });
+    expect(within(github).getByText("скоро")).toBeTruthy();
+    expect(within(github).queryByRole("button")).toBeNull();
+    expect(screen.getByText("0 из 2 работают")).toBeTruthy();
     // How the data reaches the agent, no MCP.
     expect(screen.getByText(AGENT_PATH).textContent).not.toContain("MCP");
   });
@@ -279,6 +311,7 @@ describe("Settings → Интеграции in the app (4.2)", () => {
       host: "https://docs.pixel.agency",
       key: GOOD_KEY,
       kind: "outline",
+      workspace: null,
     });
   });
 
@@ -431,8 +464,11 @@ describe("Onboarding integrations in the app (4.2)", () => {
     expect(
       screen.getByRole("link", { name: "Подключить Outline" })
     ).toBeTruthy();
-    // GitHub and ClickUp can't be connected yet.
-    expect(screen.getAllByText("скоро")).toHaveLength(2);
+    expect(
+      screen.getByRole("link", { name: "Подключить ClickUp" })
+    ).toBeTruthy();
+    // GitHub can't be connected yet.
+    expect(screen.getAllByText("скоро")).toHaveLength(1);
     expect(
       screen.queryByRole("link", { name: "Подключить GitHub" })
     ).toBeNull();
@@ -475,6 +511,7 @@ describe("Onboarding integrations in the app (4.2)", () => {
         host: "https://wandry.getoutline.com",
         key: GOOD_KEY,
         kind: "outline",
+        workspace: null,
       },
     ]);
     onboarding.unmount();
@@ -487,6 +524,196 @@ describe("Onboarding integrations in the app (4.2)", () => {
     ).toBeTruthy();
     expect(
       within(outlineRow()).getByText("wandry.getoutline.com")
+    ).toBeTruthy();
+  });
+});
+
+describe("ClickUp: the service and the store (connectors-clickup 3.1)", () => {
+  it("connects with a token that opens one workspace", async () => {
+    render(<ClickUpProbe />);
+    await screen.findByText("disconnected");
+
+    let result: Awaited<ReturnType<typeof connectWithKey>> | undefined;
+    await act(async () => {
+      result = await connectWithKey("clickup", "", TOKEN);
+    });
+
+    expect(result?.ok).toBe(true);
+    expect(invokedWith("connector_connect_api_key")).toEqual([
+      { host: "", key: TOKEN, kind: "clickup", workspace: null },
+    ]);
+    expect(screen.getByTestId("clickup").textContent).toBe(
+      "connected: Pixel Agency, Дима"
+    );
+  });
+
+  it("asks for a workspace when the token opens two, then connects the picked one", async () => {
+    fake.clickup.workspaces = [PIXEL, PERSONAL];
+    render(<ClickUpProbe />);
+    await screen.findByText("disconnected");
+
+    let result: Awaited<ReturnType<typeof connectWithKey>> | undefined;
+    await act(async () => {
+      result = await connectWithKey("clickup", "", TOKEN);
+    });
+    expect(result).toEqual({
+      field: "workspace",
+      ok: false,
+      workspaces: [PIXEL, PERSONAL],
+    });
+    // Nothing saved before the pick.
+    expect(screen.getByTestId("clickup").textContent).toBe("disconnected");
+
+    await act(async () => {
+      result = await connectWithKey("clickup", "", TOKEN, PERSONAL.id);
+    });
+    expect(result?.ok).toBe(true);
+    expect(invokedWith("connector_connect_api_key").at(-1)).toEqual({
+      host: "",
+      key: TOKEN,
+      kind: "clickup",
+      workspace: PERSONAL.id,
+    });
+    expect(screen.getByTestId("clickup").textContent).toBe(
+      "connected: Личное, Дима"
+    );
+  });
+
+  it("returns a refusal at the key field and changes nothing", async () => {
+    render(<ClickUpProbe />);
+    await screen.findByText("disconnected");
+
+    let result: Awaited<ReturnType<typeof connectWithKey>> | undefined;
+    await act(async () => {
+      result = await connectWithKey("clickup", "", "bad-token");
+    });
+
+    expect(result).toEqual({
+      field: "key",
+      message: "Токен не подошёл",
+      ok: false,
+    });
+    expect(screen.getByTestId("clickup").textContent).toBe("disconnected");
+  });
+});
+
+describe("ClickUp in Settings and onboarding (connectors-clickup 3.2)", () => {
+  async function openClickUpDialog() {
+    render(<SettingsPage section="integrations" />);
+    fireEvent.click(
+      await within(clickupRow()).findByRole("button", { name: "Подключить" })
+    );
+    return screen.findByRole("dialog", { name: "Подключить ClickUp" });
+  }
+
+  it("refuses a token at its field and keeps the focus there («Неверный токен»)", async () => {
+    const dialog = await openClickUpDialog();
+    expect(
+      within(dialog)
+        .getByRole("link", { name: "Открыть страницу токена" })
+        .getAttribute("href")
+    ).toBe("https://app.clickup.com/settings/apps");
+    fireEvent.change(within(dialog).getByLabelText("Токен ClickUp"), {
+      target: { value: "bad-token-123456" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Подключить" }));
+
+    expect(await within(dialog).findByText(TOKEN_REFUSED)).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(dialog).getByLabelText("Токен ClickUp")
+    );
+    expect(
+      fake.db.connections.find((view) => view.kind === "clickup")?.status
+    ).toBe("disconnected");
+  });
+
+  it("picks one of several workspaces before connecting («Несколько пространств»)", async () => {
+    fake.clickup.workspaces = [PIXEL, PERSONAL];
+    const dialog = await openClickUpDialog();
+    fireEvent.change(within(dialog).getByLabelText("Токен ClickUp"), {
+      target: { value: TOKEN },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Подключить" }));
+
+    const group = await within(dialog).findByRole("radiogroup");
+    // Not connected until a workspace is picked.
+    expect(
+      within(dialog)
+        .getByRole("button", { name: "Подключить" })
+        .hasAttribute("disabled")
+    ).toBe(true);
+    expect(fake.db.connections.find((v) => v.kind === "clickup")?.status).toBe(
+      "disconnected"
+    );
+    fireEvent.click(within(group).getByText("Pixel Agency"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Подключить" }));
+
+    await waitFor(() => {
+      expect(
+        within(clickupRow()).getByText(
+          "Пространство Pixel Agency, только чтение задач и комментариев"
+        )
+      ).toBeTruthy();
+    });
+    expect(within(clickupRow()).getByText(USER_LINE)).toBeTruthy();
+    expect(invokedWith("connector_connect_api_key").at(-1)).toEqual({
+      host: "",
+      key: TOKEN,
+      kind: "clickup",
+      workspace: PIXEL.id,
+    });
+  });
+
+  it("asks for a new token when it was revoked", async () => {
+    setOutline(fakeConnector("outline"), {
+      ...connectedClickUp(Date.now() - HOUR_MS),
+      error: "Токен больше не подходит",
+      errorKind: "unauthorized",
+      status: "error",
+    });
+    await reload();
+    render(<SettingsPage section="integrations" />);
+
+    expect(
+      await within(clickupRow()).findByText(
+        "Токен больше не подходит: истёк или был отозван"
+      )
+    ).toBeTruthy();
+    fireEvent.click(
+      within(clickupRow()).getByRole("button", { name: "Обновить токен" })
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Новый токен ClickUp" })
+    ).toBeTruthy();
+  });
+
+  it("connects ClickUp in onboarding, then Settings shows the same workspace («Подключить ClickUp в онбординге»)", async () => {
+    fake.clickup.workspaces = [PIXEL, PERSONAL];
+    const onboarding = render(<ServiceConnectPage service="clickup" />);
+    fireEvent.change(await screen.findByLabelText("Токен ClickUp"), {
+      target: { value: TOKEN },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+    fireEvent.click(
+      within(await screen.findByRole("radiogroup")).getByText("Pixel Agency")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "ClickUp подключён",
+      })
+    ).toBeTruthy();
+    expect(screen.getByText("Pixel Agency")).toBeTruthy();
+    expect(screen.getByText("Дима")).toBeTruthy();
+    onboarding.unmount();
+
+    render(<SettingsPage section="integrations" />);
+    expect(
+      await within(clickupRow()).findByText(
+        "Пространство Pixel Agency, только чтение задач и комментариев"
+      )
     ).toBeTruthy();
   });
 });

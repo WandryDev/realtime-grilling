@@ -22,7 +22,7 @@ const ROW_STATUS = {
 } as const satisfies Record<IntegrationState["status"], ServiceConnection>;
 
 const WAITING_DESCRIPTION: Record<IntegrationService, string> = {
-  clickup: "Завершите вход во вкладке браузера",
+  clickup: "Проверяем токен",
   github: "Подтвердите доступ на github.com",
   outline: "Проверяем ключ",
 };
@@ -79,7 +79,7 @@ function summaryValue(service: IntegrationService, state: IntegrationState) {
     return "пропущено";
   }
   return (
-    (service === "outline" ? state.team : undefined) ?? SUMMARY_VALUE[service]
+    (service === "github" ? undefined : state.team) ?? SUMMARY_VALUE[service]
   );
 }
 

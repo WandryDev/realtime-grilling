@@ -23,6 +23,12 @@ import type {
 import { charCount } from "@/data/project-limits";
 import { BackendError } from "@/effect/tauri";
 import {
+  MOCK_CLICKUP_AGENCY,
+  type MockClickUp,
+  mockClickUp,
+  mockClickUpAccount,
+} from "./mock-clickup";
+import {
   MOCK_OUTLINE_ACCOUNT,
   type MockOutlineCollection,
   mockOutlineCollections,
@@ -80,6 +86,8 @@ export interface MockTables {
   /** Projects whose brief is being built now. */
   building: Set<string>;
   calls: Map<string, Call>;
+  /** The demo ClickUp the connector reads, by workspace. */
+  clickup: MockClickUp;
   /** The connectors' connections, as `connectors_list` gives them. */
   connections: Map<ConnectorKind, ConnectorView>;
   /** The demo Outline the connector reads. */
@@ -203,8 +211,8 @@ const MOCK_CONNECTED_AT = Date.UTC(2026, 9, 1, 10);
 const MOCK_CHECKED_AT = Date.UTC(2026, 9, 14, 9, 30);
 
 /**
- * The demo connections: Outline connected to Pixel Agency; GitHub and
- * ClickUp connect only through their demo flows (the integrations store).
+ * The demo connections: Outline and ClickUp connected to Pixel Agency;
+ * GitHub connects only through its demo flow (the integrations store).
  */
 export function mockConnections(): Map<ConnectorKind, ConnectorView> {
   const none = {
@@ -236,7 +244,22 @@ export function mockConnections(): Map<ConnectorKind, ConnectorView> {
       },
     ],
     ["github", { ...none, auth: { type: "deviceCode" }, kind: "github" }],
-    ["clickup", { ...none, auth: { type: "browserOAuth" }, kind: "clickup" }],
+    [
+      "clickup",
+      {
+        account: mockClickUpAccount(MOCK_CLICKUP_AGENCY),
+        auth: { host: false, type: "apiKey" },
+        available: true,
+        capabilities: ["projectSources"],
+        connectedAt: MOCK_CONNECTED_AT,
+        error: null,
+        errorKind: null,
+        kind: "clickup",
+        lastAttemptAt: MOCK_CHECKED_AT,
+        lastOkAt: MOCK_CHECKED_AT,
+        status: "connected",
+      },
+    ],
   ]);
 }
 
@@ -246,6 +269,7 @@ function seedTables(): MockTables {
     briefInputs: new Map(),
     building: new Set(),
     calls: new Map(seed.calls.map((call) => [call.id, call])),
+    clickup: mockClickUp(),
     connections: mockConnections(),
     outline: mockOutlineCollections(),
     people: new Map(seed.people.map((person) => [person.id, person])),
@@ -401,6 +425,7 @@ export class MockDatabase extends Context.Service<
           const seed = seedTables();
           tables.briefInputs = seed.briefInputs;
           tables.building = seed.building;
+          tables.clickup = seed.clickup;
           tables.connections = seed.connections;
           tables.outline = seed.outline;
           tables.selections = seed.selections;

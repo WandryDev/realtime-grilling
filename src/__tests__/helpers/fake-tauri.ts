@@ -16,6 +16,7 @@ import type {
   SelectionItem,
   SourceAddResult,
   Value,
+  Workspace,
 } from "@/bindings";
 import { mergePatch } from "@/lib/merge-patch";
 
@@ -30,11 +31,14 @@ import { mergePatch } from "@/lib/merge-patch";
  * stores the call and records it, each change sends `DataChanged` of the
  * call, then `CallSessionChanged`.
  *
- * The connectors play Rust's (`connectors_*`): Outline is the only one
- * available, a key starting with `bad` is refused at the key, a host with
- * `nowhere` at the address; the picker's tree is `outline`, and a saved
- * selection syncs at once: the documents of the picked collections and
- * documents become sources with `origin`, less the excluded ones.
+ * The connectors play Rust's (`connectors_*`): Outline and ClickUp are
+ * available, GitHub is not. A key or token starting with `bad` is refused
+ * at the key, an Outline host with `nowhere` at the address; a ClickUp
+ * token opens `clickup.workspaces` (several: `chooseWorkspace` first). The
+ * picker's trees are `outline` and `clickup`, and a saved selection syncs
+ * at once: the documents of the picked containers and documents become
+ * sources with `origin`, less the excluded ones (a ClickUp exclude takes
+ * the nested ones along). A selection over 200 is refused as `Invalid`.
  *
  * Use with `vi.hoisted` + `vi.mock` of `@tauri-apps/api/core`,
  * `@tauri-apps/api/event` and `@tauri-apps/api/window`, and
@@ -43,6 +47,12 @@ import { mergePatch } from "@/lib/merge-patch";
 
 type Handler = (event: { payload: unknown }) => void;
 
+/** A service's tree: the top level, and what each container loads. */
+export interface FakeService {
+  containers: BrowseNode[];
+  trees: Record<string, BrowseNode[]>;
+}
+
 export interface FakeTauri {
   /**
    * Answers of commands the fake doesn't know (the onboarding ones), set by
@@ -50,6 +60,11 @@ export interface FakeTauri {
    * a command running.
    */
   readonly answers: Map<string, (args: Record<string, unknown>) => unknown>;
+  /**
+   * The ClickUp the picker browses: spaces, what each container holds, the
+   * workspaces a token opens.
+   */
+  clickup: FakeService & { workspaces: Workspace[] };
   dataChanged: (change: DataChanged) => void;
   readonly db: {
     calls: Call[];
@@ -73,7 +88,7 @@ export interface FakeTauri {
   /** What `mic_activity_get` answers. */
   micActivity: MicActivityChanged;
   /** The Outline the picker browses: collections, and each one's tree. */
-  outline: { containers: BrowseNode[]; trees: Record<string, BrowseNode[]> };
+  outline: FakeService;
   /**
    * What the recording of a call fails with (`call_start`, `call_resume`);
    * null: it starts.
@@ -198,19 +213,23 @@ export function fakeCall(
   };
 }
 
+const AUTH: Record<ConnectorKind, ConnectorView["auth"]> = {
+  clickup: { host: false, type: "apiKey" },
+  github: { type: "deviceCode" },
+  outline: { host: true, type: "apiKey" },
+};
+
 /** A connector of the catalog, not connected. */
 export function fakeConnector(
   kind: ConnectorKind,
   view: Partial<ConnectorView> = {}
 ): ConnectorView {
+  const available = kind !== "github";
   return {
     account: null,
-    auth:
-      kind === "outline"
-        ? { host: true, type: "apiKey" }
-        : { type: "deviceCode" },
-    available: kind === "outline",
-    capabilities: kind === "outline" ? ["projectSources"] : [],
+    auth: AUTH[kind],
+    available,
+    capabilities: available ? ["projectSources"] : [],
     connectedAt: null,
     error: null,
     errorKind: null,
@@ -240,6 +259,24 @@ export function connectedOutline(at: number = Date.now()): ConnectorView {
   });
 }
 
+export const FAKE_CLICKUP_ACCOUNT = {
+  host: null,
+  teamId: "9001",
+  teamName: "Pixel Agency",
+  userName: "Дима",
+};
+
+/** ClickUp connected to Pixel Agency, answered at `at`. */
+export function connectedClickUp(at: number = Date.now()): ConnectorView {
+  return fakeConnector("clickup", {
+    account: FAKE_CLICKUP_ACCOUNT,
+    connectedAt: at,
+    lastAttemptAt: at,
+    lastOkAt: at,
+    status: "connected",
+  });
+}
+
 /** A node of the picker's tree. */
 export function fakeNode(
   id: string,
@@ -258,6 +295,12 @@ export function fakeNode(
     url: `https://docs.pixel.agency/${kind === "container" ? "collection" : "doc"}/${id}`,
   };
 }
+
+/** The connectors that give a project its sources. */
+const SOURCE_KINDS: ConnectorKind[] = ["outline", "clickup"];
+
+/** The most documents a project takes from a connector. */
+const FAKE_LIMIT = 200;
 
 /** Ids `recording_start` gives: "fake-recording-1", "-2"… */
 export const FAKE_RECORDING_PREFIX = "fake-recording-";
@@ -441,67 +484,86 @@ export function createFakeTauri(): FakeTauri {
     }
   };
 
-  const outlineView = () =>
-    db.connections.find((view) => view.kind === "outline") ??
-    fakeConnector("outline");
+  const connectionOf = (kind: ConnectorKind) =>
+    db.connections.find((view) => view.kind === kind) ?? fakeConnector(kind);
 
-  const selectionOf = (projectId: string): ProjectConnectorView =>
-    db.selections.find((view) => view.projectId === projectId) ?? {
-      connected: outlineView().status !== "disconnected",
+  const selectionOf = (
+    projectId: string,
+    kind: ConnectorKind
+  ): ProjectConnectorView =>
+    db.selections.find(
+      (view) => view.projectId === projectId && view.kind === kind
+    ) ?? {
+      connected: connectionOf(kind).status !== "disconnected",
       items: [],
-      kind: "outline",
+      kind,
       projectId,
       sync: null,
       syncing: false,
     };
 
+  const serviceOf = (kind: ConnectorKind): FakeService =>
+    kind === "clickup" ? fake.clickup : fake.outline;
+
+  /** What is inside a node as far as the fake knows. */
+  const inside = (service: FakeService, node: BrowseNode) =>
+    node.children.length > 0 ? node.children : (service.trees[node.id] ?? []);
+
   /** The documents a selection brings, by id. */
-  const resolve = (items: SelectionItem[]) => {
-    const flat = (nodes: BrowseNode[]): BrowseNode[] =>
-      nodes.flatMap((node) => [node, ...flat(node.children)]);
-    const all = Object.values(fake.outline.trees).flatMap(flat);
+  const resolve = (kind: ConnectorKind, items: SelectionItem[]) => {
+    const service = serviceOf(kind);
     const excluded = new Set(
       items
         .filter((item) => item.itemKind === "exclude")
         .map((item) => item.externalId)
     );
+    const picked = new Set(
+      items
+        .filter((item) => item.itemKind !== "exclude")
+        .map((item) => item.externalId)
+    );
     const documents = new Map<string, BrowseNode>();
-    for (const item of items) {
-      const picked =
-        item.itemKind === "container"
-          ? flat(fake.outline.trees[item.externalId] ?? [])
-          : flat(all.filter((node) => node.id === item.externalId));
-      for (const node of picked) {
-        if (!excluded.has(node.id)) {
+    const takesNested = kind === "clickup";
+    // Walks a level, collecting documents brought (`covered`).
+    const walk = (nodes: BrowseNode[], covered: boolean) => {
+      for (const node of nodes) {
+        const left = excluded.has(node.id);
+        const here = (covered && !left) || picked.has(node.id);
+        if (node.kind === "document" && here) {
           documents.set(node.id, node);
         }
+        const nested =
+          node.kind === "container" ? here : here || (covered && !takesNested);
+        walk(inside(service, node), nested);
       }
-    }
+    };
+    walk(service.containers, false);
     return documents;
   };
 
-  /** Rust's sync: the project's Outline sources become the selection's. */
-  const syncOutline = (projectId: string) => {
-    const view = selectionOf(projectId);
+  /** Rust's sync: the project's sources of the connector become the selection's. */
+  const syncConnector = (projectId: string, kind: ConnectorKind) => {
+    const view = selectionOf(projectId, kind);
     const now = Date.now();
-    if (outlineView().status !== "connected") {
+    const connection = connectionOf(kind);
+    if (connection.status !== "connected") {
+      const revoked = connection.status === "error";
       view.sync = {
-        error: "Ключ больше не подходит",
-        errorKind:
-          outlineView().status === "error" ? "unauthorized" : "disconnected",
+        error: revoked ? "Ключ больше не подходит" : `${kind} отключён`,
+        errorKind: revoked ? "unauthorized" : "disconnected",
         lastAttemptAt: now,
         lastOkAt: view.sync?.lastOkAt ?? null,
         skipped: 0,
       };
-      changed("connectorSelections", "outline", projectId, "updated");
+      changed("connectorSelections", kind, projectId, "updated");
       return;
     }
-    const documents = resolve(view.items);
+    const documents = resolve(kind, view.items);
     const before = JSON.stringify(db.sources);
     db.sources = db.sources.filter(
       (source) =>
         source.projectId !== projectId ||
-        !source.origin ||
+        source.origin?.connector !== kind ||
         documents.has(source.origin.externalId)
     );
     for (const node of documents.values()) {
@@ -509,7 +571,8 @@ export function createFakeTauri(): FakeTauri {
         !db.sources.some(
           (source) =>
             source.projectId === projectId &&
-            source.origin?.externalId === node.id
+            source.origin?.connector === kind &&
+            source.origin.externalId === node.id
         )
       ) {
         created += 1;
@@ -517,7 +580,7 @@ export function createFakeTauri(): FakeTauri {
           ...fakeSource(`fake-source-${created}`, projectId, node.title),
           extension: "md",
           origin: {
-            connector: "outline",
+            connector: kind,
             externalId: node.id,
             updatedAt: now,
             url: node.url,
@@ -540,6 +603,41 @@ export function createFakeTauri(): FakeTauri {
     changed("project", projectId, projectId, "updated");
   };
 
+  /** `connector_connect_api_key` of ClickUp: the token, then the workspace. */
+  const connectClickUp = (key: string, workspace: string | null) => {
+    if (key.startsWith("bad")) {
+      return { rejected: { field: "key", reason: "Токен не подошёл" } };
+    }
+    const { workspaces } = fake.clickup;
+    if (workspace === null && workspaces.length > 1) {
+      return { chooseWorkspace: { workspaces } };
+    }
+    const picked = workspaces.find(
+      (item) => workspace === null || item.id === workspace
+    );
+    if (!picked) {
+      return {
+        rejected: {
+          field: "key",
+          reason: "Токен не открывает это пространство",
+        },
+      };
+    }
+    const view = {
+      ...connectedClickUp(),
+      account: {
+        ...FAKE_CLICKUP_ACCOUNT,
+        teamId: picked.id,
+        teamName: picked.name,
+      },
+    };
+    db.connections = db.connections.map((item) =>
+      item.kind === "clickup" ? view : item
+    );
+    changed("connections", "clickup", null, "updated");
+    return { connected: view };
+  };
+
   const connectorCommand = (
     command: string,
     args: Record<string, unknown>
@@ -550,6 +648,9 @@ export function createFakeTauri(): FakeTauri {
       case "connector_connect_api_key": {
         const host = String(args.host);
         const key = String(args.key);
+        if (args.kind === "clickup") {
+          return connectClickUp(key, (args.workspace as string | null) ?? null);
+        }
         if (key.startsWith("bad")) {
           return { rejected: { field: "key", reason: "Ключ не подошёл" } };
         }
@@ -578,18 +679,30 @@ export function createFakeTauri(): FakeTauri {
         changed("connections", String(args.kind), null, "deleted");
         return null;
       case "connector_browse": {
+        const service = serviceOf(args.kind as ConnectorKind);
         const parent = args.parent as { id: string } | null;
-        return parent
-          ? (fake.outline.trees[parent.id] ?? [])
-          : fake.outline.containers;
+        return parent ? (service.trees[parent.id] ?? []) : service.containers;
       }
-      case "connector_selection_get":
-        return [selectionOf(String(args.projectId))];
+      case "connector_selection_get": {
+        const projectId = String(args.projectId);
+        return SOURCE_KINDS.map((kind) => selectionOf(projectId, kind));
+      }
       case "connector_selection_set": {
         const projectId = String(args.projectId);
+        const kind = args.kind as ConnectorKind;
+        const items = args.items as SelectionItem[];
+        const count = resolve(kind, items).size;
+        if (count > FAKE_LIMIT) {
+          throw commandError(
+            "Invalid",
+            kind === "clickup"
+              ? `Из ClickUp в проект загружается не больше ${FAKE_LIMIT} задач, а в выбранном ${count}. Выберите списки или отдельные задачи.`
+              : `Из Outline в проект загружается не больше ${FAKE_LIMIT} документов, а в выбранном ${count}. Выберите отдельные документы.`
+          );
+        }
         const view = {
-          ...selectionOf(projectId),
-          items: (args.items as SelectionItem[]).map((item) => ({
+          ...selectionOf(projectId, kind),
+          items: items.map((item) => ({
             ...item,
             otherAccount: false,
             status: "ok" as const,
@@ -597,16 +710,23 @@ export function createFakeTauri(): FakeTauri {
           })),
         };
         db.selections = [
-          ...db.selections.filter((item) => item.projectId !== projectId),
+          ...db.selections.filter(
+            (item) => item.projectId !== projectId || item.kind !== kind
+          ),
           view,
         ];
-        changed("connectorSelections", "outline", projectId, "updated");
-        syncOutline(projectId);
+        changed("connectorSelections", kind, projectId, "updated");
+        syncConnector(projectId, kind);
         return view;
       }
-      case "connector_sync":
-        syncOutline(String(args.projectId));
+      case "connector_sync": {
+        const projectId = String(args.projectId);
+        const kinds = args.kind ? [args.kind as ConnectorKind] : SOURCE_KINDS;
+        for (const kind of kinds) {
+          syncConnector(projectId, kind);
+        }
         return null;
+      }
       default:
         return undefined;
     }
@@ -825,6 +945,11 @@ export function createFakeTauri(): FakeTauri {
 
   const fake: FakeTauri = {
     answers,
+    clickup: {
+      containers: [],
+      trees: {},
+      workspaces: [{ id: "9001", name: "Pixel Agency" }],
+    },
     dataChanged: (change) => emit("data-changed", change),
     db,
     emit,

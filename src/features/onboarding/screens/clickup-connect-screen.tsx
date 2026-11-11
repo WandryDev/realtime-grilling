@@ -1,214 +1,180 @@
-import {
-  Alert,
-  AlertAction,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
+"use client";
+
+import { useId } from "react";
+
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
-import { CrossIcon } from "@/features/onboarding/components/icons";
 import {
-  OnboardingBackButton,
-  OnboardingNextButton,
-} from "@/features/onboarding/components/onboarding-actions";
+  type ClickUpConnectState as ClickUpConnectForm,
+  ClickUpTokenFields,
+} from "@/features/connectors/clickup-connect";
+import { OnboardingBackButton } from "@/features/onboarding/components/onboarding-actions";
 import {
   OnboardingContent,
   OnboardingFooter,
   OnboardingWindow,
 } from "@/features/onboarding/components/onboarding-window";
-import { CapabilityList } from "@/features/onboarding/integrations/capability-list";
 import { ConnectedCard } from "@/features/onboarding/integrations/connected-card";
+import { Hint } from "@/features/onboarding/integrations/hint";
+import { HelpIcon } from "@/features/onboarding/integrations/icons";
 import {
-  CLICKUP_CAPABILITIES,
-  CLICKUP_WORKSPACE,
+  CLICKUP_CONNECTION,
+  CLICKUP_TOKENS,
+  CLICKUP_WORKSPACES,
 } from "@/features/onboarding/integrations/mock";
-import { BrowserButton } from "@/features/onboarding/integrations/step-actions";
 import { ServiceStepHeading } from "@/features/onboarding/integrations/step-heading";
 import { linkButtonProps } from "@/lib/link-button";
+import { cn } from "@/lib/utils";
 
 /*
- * Paper "05c ClickUp", OAuth in the default browser.
- * - intro: what Grill may do, "Продолжить в браузере"
- * - waiting: the tab is open, the answer comes to a local address
- * - connected: the workspace and the people Grill will recognize
- * - error: cancelled, closed tab or 10 minutes of silence, with the code
- * The app passes the handlers and the hrefs of "Назад" and "Готово".
+ * Step 05c, ClickUp by a personal token (clickup-connector spec, «Вход по
+ * личному токену», «Выбор рабочего пространства»).
+ * - form: the token field has focus, «Открыть страницу токена» leads to
+ *   ClickUp's Settings → Apps
+ * - checking: one check with ClickUp, the field locked, «Проверяем токен»
+ * - rejected: red token field with the reason, the focus stays in it
+ * - choose: the token opens several workspaces, one is picked, then
+ *   «Подключить»
+ * - connected: the workspace, whose token it is, the spaces Grill sees
+ * Without `form` the fields show the static values of the state (previews);
+ * the app passes `form` with the controlled values, the error and submit.
  */
-export type ClickUpConnectState = "intro" | "waiting" | "connected" | "error";
+export type ClickUpConnectState =
+  | "form"
+  | "checking"
+  | "rejected"
+  | "choose"
+  | "connected";
 
-const HEADING: Record<
-  ClickUpConnectState,
-  { description: string; title: string }
-> = {
-  connected: {
-    description:
-      "Grill увидит задачи и подскажет, если разработчик или дизайнер ждёт ответа от клиента.",
-    title: "ClickUp подключён",
-  },
-  error: {
-    description:
-      "Вход в браузере отменили или закрыли вкладку раньше времени. Ничего страшного, попробуйте ещё раз.",
-    title: "ClickUp не подключился",
-  },
-  intro: {
-    description:
-      "Откроем ClickUp в браузере. Войдите и выберите рабочее пространство агентства.",
-    title: "Подключение ClickUp",
-  },
-  waiting: {
-    description:
-      "Вкладка ClickUp открыта в браузере. Войдите, выберите пространство и нажмите Connect Workspace.",
-    title: "Подключение ClickUp",
-  },
+const ACTION_LABEL: Record<ClickUpConnectState, string> = {
+  checking: "Проверяем токен",
+  choose: "Подключить",
+  connected: "Готово",
+  form: "Подключить",
+  rejected: "Подключить",
 };
 
-export interface ClickUpConnectActions {
-  backHref?: string;
-  doneHref?: string;
-  /** "Отменить" while waiting for the browser. */
-  onCancel?: () => void;
-  /** "Открыть вкладку ещё раз". */
-  onOpenBrowser?: () => void;
-  /** "Продолжить в браузере" and "Попробовать снова". */
-  onStart?: () => void;
+const DESCRIPTION: Record<Exclude<ClickUpConnectState, "connected">, string> = {
+  checking:
+    "Grill будет читать задачи и комментарии, ничего не меняя в ClickUp. Нужен ваш личный токен ClickUp.",
+  choose:
+    "Токен открывает несколько рабочих пространств. Выберите то, где задачи агентства: Grill подключится к нему.",
+  form: "Grill будет читать задачи и комментарии, ничего не меняя в ClickUp. Нужен ваш личный токен ClickUp.",
+  rejected:
+    "Grill будет читать задачи и комментарии, ничего не меняя в ClickUp. Нужен ваш личный токен ClickUp.",
+};
+
+const noop = () => undefined;
+
+/** The static fields of a preview state. */
+function previewForm(state: ClickUpConnectState): ClickUpConnectForm {
+  return {
+    checking: state === "checking",
+    error:
+      state === "rejected"
+        ? "Токен не подошёл. Скопируйте его целиком или создайте новый."
+        : undefined,
+    keyRef: null,
+    onTokenChange: noop,
+    onWorkspaceChange: noop,
+    submit: () => Promise.resolve(),
+    token:
+      state === "rejected" ? CLICKUP_TOKENS.rejected : CLICKUP_TOKENS.valid,
+    workspace: state === "choose" ? (CLICKUP_WORKSPACES[0]?.id ?? null) : null,
+    workspaces: state === "choose" ? CLICKUP_WORKSPACES : null,
+  };
 }
 
 export function ClickUpConnectScreen({
   backHref,
   className,
+  connection = CLICKUP_CONNECTION,
   doneHref,
-  onCancel,
-  onOpenBrowser,
-  onStart,
-  state = "intro",
-  workspace = CLICKUP_WORKSPACE,
-}: ClickUpConnectActions & {
+  form,
+  state = "form",
+}: {
+  backHref?: string;
   className?: string;
+  connection?: typeof CLICKUP_CONNECTION;
+  doneHref?: string;
+  form?: ClickUpConnectForm;
   state?: ClickUpConnectState;
-  workspace?: typeof CLICKUP_WORKSPACE;
 }) {
+  const connected = state === "connected";
+  const formId = useId();
+  const fields = form ?? previewForm(state);
+  const blocked =
+    fields.checking ||
+    (fields.workspaces !== null && fields.workspace === null);
+
   return (
     <OnboardingWindow className={className} step="integrations">
       <OnboardingContent className="gap-6">
         <ServiceStepHeading
-          description={HEADING[state].description}
+          description={
+            connected
+              ? `Grill видит задачи пространства «${connection.workspace}». Какие списки относятся к проекту, выберете при его создании.`
+              : DESCRIPTION[state]
+          }
           service="clickup"
-          title={HEADING[state].title}
+          title={connected ? "ClickUp подключён" : "Подключение ClickUp"}
         />
-        <ClickUpBody onCancel={onCancel} state={state} workspace={workspace} />
+        {connected ? (
+          <ConnectedCard
+            chips={connection.spaces}
+            description={connection.user}
+            meta={connection.spacesCount}
+            moreCount={connection.moreCount}
+            title={connection.workspace}
+          />
+        ) : (
+          <>
+            <form
+              aria-busy={fields.checking || undefined}
+              aria-label="Подключение ClickUp"
+              className={cn(
+                "flex flex-col gap-5",
+                fields.checking && "opacity-55"
+              )}
+              id={formId}
+              inert={fields.checking}
+              noValidate
+              onSubmit={form?.submit}
+            >
+              <ClickUpTokenFields
+                {...fields}
+                fieldClassName="h-11"
+                readOnly={!form}
+              />
+            </form>
+            <Hint icon={<HelpIcon />} variant="panel">
+              В ClickUp откройте Settings → Apps, раздел «API Token», и нажмите
+              «Generate». Скопируйте токен (он начинается с pk_) и вставьте
+              сюда. Токен ляжет в Keychain, Grill только читает ClickUp.
+            </Hint>
+          </>
+        )}
       </OnboardingContent>
       <OnboardingFooter
         end={
-          <ClickUpFooterAction
-            doneHref={doneHref}
-            onOpenBrowser={onOpenBrowser}
-            onStart={onStart}
-            state={state}
-          />
+          connected ? (
+            <Button className="px-5" size="lg" {...linkButtonProps(doneHref)}>
+              {ACTION_LABEL[state]}
+            </Button>
+          ) : (
+            <Button
+              className={state === "checking" ? "pr-5 pl-4" : "px-5"}
+              disabled={Boolean(form) && blocked && !fields.checking}
+              form={form ? formId : undefined}
+              loading={state === "checking"}
+              size="lg"
+              type={form ? "submit" : "button"}
+            >
+              {ACTION_LABEL[state]}
+            </Button>
+          )
         }
         start={<OnboardingBackButton {...linkButtonProps(backHref)} />}
       />
     </OnboardingWindow>
   );
-}
-
-function ClickUpBody({
-  onCancel,
-  state,
-  workspace,
-}: {
-  onCancel?: () => void;
-  state: ClickUpConnectState;
-  workspace: typeof CLICKUP_WORKSPACE;
-}) {
-  switch (state) {
-    case "waiting":
-      return (
-        <Alert className="*:[svg]:text-foreground gap-x-3.5 gap-y-0.5 px-5 py-4.5">
-          <Spinner
-            aria-hidden="true"
-            aria-label={undefined}
-            className="size-5.5"
-            role="presentation"
-          />
-          <AlertTitle>Ждём ответа от ClickUp</AlertTitle>
-          <AlertDescription>
-            Это окно трогать не нужно, Grill продолжит сам
-          </AlertDescription>
-          <AlertAction>
-            <Button onClick={onCancel} variant="secondary">
-              Отменить
-            </Button>
-          </AlertAction>
-        </Alert>
-      );
-    case "connected":
-      return (
-        <ConnectedCard
-          chips={workspace.people}
-          description={workspace.summary}
-          meta={workspace.listsCount}
-          moreCount={workspace.moreCount}
-          title={workspace.name}
-        />
-      );
-    case "error":
-      return (
-        <Alert
-          className="items-start gap-y-0.5 py-4 pr-4.5"
-          variant="destructive"
-        >
-          {/* 14px mark centered in a 20px lane, like the title row */}
-          <CrossIcon className="mx-[3px] mt-[3px] size-3.5" strokeWidth={1.6} />
-          <AlertTitle className="text-foreground font-semibold">
-            Доступ не выдан
-          </AlertTitle>
-          <AlertDescription>
-            <p>
-              Если пространство агентства не видно в списке, попросите
-              администратора ClickUp добавить вас в него.
-            </p>
-            <p className="text-contradiction mt-1 font-mono text-xs">
-              {workspace.errorCode}
-            </p>
-          </AlertDescription>
-        </Alert>
-      );
-    default:
-      return <CapabilityList items={CLICKUP_CAPABILITIES} />;
-  }
-}
-
-function ClickUpFooterAction({
-  doneHref,
-  onOpenBrowser,
-  onStart,
-  state,
-}: Pick<ClickUpConnectActions, "doneHref" | "onOpenBrowser" | "onStart"> & {
-  state: ClickUpConnectState;
-}) {
-  switch (state) {
-    case "waiting":
-      return (
-        <BrowserButton onClick={onOpenBrowser} variant="secondary">
-          Открыть вкладку ещё раз
-        </BrowserButton>
-      );
-    case "connected":
-      return (
-        <OnboardingNextButton {...linkButtonProps(doneHref)}>
-          Готово
-        </OnboardingNextButton>
-      );
-    case "error":
-      return (
-        <OnboardingNextButton onClick={onStart}>
-          Попробовать снова
-        </OnboardingNextButton>
-      );
-    default:
-      return (
-        <BrowserButton onClick={onStart}>Продолжить в браузере</BrowserButton>
-      );
-  }
 }

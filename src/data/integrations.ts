@@ -3,7 +3,12 @@
 import { Effect, Exit } from "effect";
 import { useMemo } from "react";
 
-import type { ConnectorKind, ConnectorView, ErrorKind } from "@/bindings";
+import type {
+  ConnectorKind,
+  ConnectorView,
+  ErrorKind,
+  Workspace,
+} from "@/bindings";
 import { appRuntime, inTauri } from "@/effect/runtime";
 import type { IntegrationService } from "@/lib/routes";
 
@@ -22,15 +27,15 @@ import {
  * pages pick their documents.
  *
  * The connections come from the `Connectors` service: Rust in the app,
- * where only Outline works and GitHub and ClickUp are «скоро»
- * (`available: false`); the in-memory demo in the browser. Every window
- * re-reads on the `DataChanged` of `connections`. The adapter below turns
- * a `ConnectorView` into the `IntegrationState` the screens draw.
+ * where Outline (address and API key) and ClickUp (personal token, one
+ * workspace) work and GitHub is «скоро» (`available: false`); the
+ * in-memory demo in the browser. Every window re-reads on the
+ * `DataChanged` of `connections`. The adapter below turns a
+ * `ConnectorView` into the `IntegrationState` the screens draw.
  *
  * On top of that sit local states a screen sets for a while: «Проверяем
  * ключ» during a connect, a refused key on the onboarding list, and the
- * GitHub and ClickUp demo flows of the browser (their sign-ins live only
- * in the mocks).
+ * GitHub demo flow of the browser (its sign-in lives only in the mocks).
  */
 
 export type IntegrationStatus =
@@ -61,6 +66,8 @@ export interface IntegrationState {
   status: IntegrationStatus;
   /** The workspace the key opens (Outline: the team). */
   team?: string;
+  /** Whose key or token it is, as the service names them. */
+  user?: string;
 }
 
 export type IntegrationsState = Record<IntegrationService, IntegrationState>;
@@ -70,7 +77,24 @@ const SERVICES: IntegrationService[] = ["github", "outline", "clickup"];
 /* Adapter: ConnectorView → IntegrationState ---------------------------- */
 
 export const KEY_REVOKED = "Ключ больше не подходит: истёк или был отозван";
-const FORBIDDEN = "Нет доступа: у ключа не хватает прав";
+export const TOKEN_REVOKED = "Токен больше не подходит: истёк или был отозван";
+const FORBIDDEN: Record<ConnectorKind, string> = {
+  clickup: "Нет доступа: у токена не хватает прав",
+  github: "Нет доступа: не хватает прав",
+  outline: "Нет доступа: у ключа не хватает прав",
+};
+
+/** The connectors connected by a key or a token in the app. */
+const KEY_SERVICES: ReadonlySet<IntegrationService> = new Set([
+  "outline",
+  "clickup",
+]);
+
+const SERVICE_LABEL: Record<IntegrationService, string> = {
+  clickup: "ClickUp",
+  github: "GitHub",
+  outline: "Outline",
+};
 
 /** "https://docs.pixel.agency" → "docs.pixel.agency". */
 export function hostLabel(host: string) {
@@ -83,10 +107,10 @@ export function hostLabel(host: string) {
 
 function errorText(view: ConnectorView) {
   if (view.errorKind === "unauthorized") {
-    return KEY_REVOKED;
+    return view.kind === "clickup" ? TOKEN_REVOKED : KEY_REVOKED;
   }
   if (view.errorKind === "forbidden") {
-    return FORBIDDEN;
+    return FORBIDDEN[view.kind];
   }
   return view.error ?? "Не работает";
 }
@@ -96,9 +120,9 @@ function toIntegration(
   view: ConnectorView | undefined
 ): IntegrationState {
   if (!view) {
-    // Before the first read: in the app only Outline can be connected.
+    // Before the first read: in the app GitHub can't be connected yet.
     return {
-      available: kind === "outline" || !inTauri,
+      available: KEY_SERVICES.has(kind) || !inTauri,
       status: "disconnected",
     };
   }
@@ -125,6 +149,7 @@ function toIntegration(
     host,
     status: view.status,
     team: view.account?.teamName,
+    user: view.account?.userName ?? undefined,
   };
 }
 
@@ -144,9 +169,8 @@ const connectionsStore = createSyncedStore({
   seed: () => [...mockConnections().values()],
 });
 
-/** The browser demo starts with GitHub and ClickUp connected. */
+/** The browser demo starts with GitHub connected. */
 const DEMO_OVERRIDES: Partial<IntegrationsState> = {
-  clickup: { account: "Workspace «Wandry»", status: "connected" },
   github: {
     account: "dima-kapish, доступ к 12 репозиториям",
     status: "connected",
@@ -198,8 +222,8 @@ export function getIntegrations() {
 }
 
 /**
- * A local state over the backend one: the demo flows of GitHub and
- * ClickUp, the forced `?demo=` states, «Проверяем ключ».
+ * A local state over the backend one: the demo flow of GitHub, the forced
+ * `?demo=` states, «Проверяем ключ».
  */
 export function setIntegration(
   service: IntegrationService,
@@ -217,35 +241,35 @@ export function clearIntegration(service: IntegrationService) {
 }
 
 /**
- * Disconnects a service: Outline in the backend (its key leaves
- * Keychain), the demo services locally. Resolves to whether it worked.
+ * Disconnects a service: Outline and ClickUp in the backend (their secret
+ * leaves Keychain), the GitHub demo locally. Resolves to whether it
+ * worked.
  */
 export async function disconnectIntegration(service: IntegrationService) {
-  if (service !== "outline") {
+  if (!KEY_SERVICES.has(service)) {
     setIntegration(service, { status: "disconnected" });
     return true;
   }
   clearIntegration(service);
   const done = await connectionsStore.mutate(
     Connectors.use((connectors) => connectors.disconnect(service)),
-    { error: "Не удалось отключить Outline" }
+    { error: `Не удалось отключить ${SERVICE_LABEL[service]}` }
   );
   return done !== undefined;
 }
 
 /**
- * Onboarding starts from a clean slate: the demo services disconnected.
- * The demo Outline too; in the app a real connection stays.
+ * Onboarding starts from a clean slate: the GitHub demo disconnected, the
+ * demo Outline and ClickUp too; in the app a real connection stays.
  */
 export function resetIntegrations() {
-  overridesStore.set({
-    clickup: { status: "disconnected" },
-    github: { status: "disconnected" },
-  });
+  overridesStore.set({ github: { status: "disconnected" } });
   if (!inTauri) {
-    connectionsStore.mutate(
-      Connectors.use((connectors) => connectors.disconnect("outline"))
-    );
+    for (const service of KEY_SERVICES) {
+      connectionsStore.mutate(
+        Connectors.use((connectors) => connectors.disconnect(service))
+      );
+    }
   }
 }
 
@@ -260,18 +284,25 @@ export type ConnectKeyResult =
   | { ok: true; state: IntegrationState }
   /** The service refused: show `message` at `field`. */
   | { field: "host" | "key"; message: string; ok: false }
+  /**
+   * The token opens several workspaces (ClickUp): nothing was saved, pick
+   * one and connect again with the same token.
+   */
+  | { field: "workspace"; ok: false; workspaces: Workspace[] }
   /** Not saved for another reason (Keychain refused): a general error. */
   | { field: null; message: string; ok: false };
 
 /**
- * Checks the address and the key with the service, then saves them
- * (also «Обновить ключ»). The row shows «Проверяем ключ» meanwhile. A
- * refused key changes nothing that was saved.
+ * Checks the address (Outline) and the key or token with the service, then
+ * saves them (also «Обновить ключ» / «Обновить токен»). `workspace` is the
+ * one picked after `chooseWorkspace`. The row shows «Проверяем ключ»
+ * meanwhile. A refused key changes nothing that was saved.
  */
 export async function connectWithKey(
   service: IntegrationService,
   host: string,
-  key: string
+  key: string,
+  workspace: string | null = null
 ): Promise<ConnectKeyResult> {
   // Not cancelable: once the check passed, Rust saves the key whether
   // anyone still waits or not, so nothing may say «Отменено». A screen
@@ -279,7 +310,9 @@ export async function connectWithKey(
   const previous = getIntegrations()[service];
   setIntegration(service, { ...previous, status: "connecting" });
   const exit = await appRuntime.runPromiseExit(
-    Connectors.use((connectors) => connectors.connectApiKey(service, host, key))
+    Connectors.use((connectors) =>
+      connectors.connectApiKey(service, host, key, workspace)
+    )
   );
   clearIntegration(service);
   if (Exit.isFailure(exit)) {
@@ -293,13 +326,11 @@ export async function connectWithKey(
       ok: false,
     };
   }
-  if (!outcome.connected) {
-    // `chooseWorkspace`: picking a workspace comes with the ClickUp screens
-    // (connectors-clickup, task 3.2); nothing was saved.
+  if (outcome.chooseWorkspace) {
     return {
-      field: "key",
-      message: "Токен открывает несколько пространств",
+      field: "workspace",
       ok: false,
+      workspaces: outcome.chooseWorkspace.workspaces,
     };
   }
   await rereadAfterConnect();

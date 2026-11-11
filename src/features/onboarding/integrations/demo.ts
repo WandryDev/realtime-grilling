@@ -21,8 +21,12 @@ export const onboardingIntegrationsDemo: DemoGroup = {
     },
     { href: routes.onboardingIntegration("clickup"), label: "05c ClickUp" },
     {
-      href: withDemo(routes.onboardingIntegration("clickup"), "error"),
-      label: "05c ClickUp — ошибка входа",
+      href: withDemo(routes.onboardingIntegration("clickup"), "rejected"),
+      label: "05c ClickUp — токен не подошёл",
+    },
+    {
+      href: withDemo(routes.onboardingIntegration("clickup"), "choose"),
+      label: "05c ClickUp — выбор пространства",
     },
     { href: routes.onboarding("done"), label: "06 Готово" },
   ],

@@ -1,6 +1,7 @@
 import { Clock, Context, Effect, Layer } from "effect";
 
 import {
+  type Account,
   type BrowseNode,
   type ConnectOutcome,
   type ConnectorKind,
@@ -14,7 +15,13 @@ import {
   type SyncState,
 } from "@/bindings";
 import { BackendError, call } from "@/effect/tauri";
-
+import {
+  MOCK_CLICKUP_WORKSPACES,
+  mockClickUpAccount,
+  mockClickUpBrowse,
+  mockClickUpResolve,
+  mockClickUpUrl,
+} from "./mock-clickup";
 import {
   invalid,
   MockDatabase,
@@ -31,29 +38,38 @@ import {
 } from "./mock-outline";
 
 /*
- * Connectors (connectors-outline design.md, decisions 6 and 7): the
- * catalog with each service's connection, connecting by an API key,
- * disconnecting, the picker's tree and a project's selection with its
- * sync. Rust calls the services and keeps the keys in Keychain; nothing
- * here ever sees a key after it is sent.
+ * Connectors (connectors-outline design.md, decisions 6 and 7;
+ * connectors-clickup, decisions 1 and 6): the catalog with each service's
+ * connection, connecting by an API key or a token (with the workspace to
+ * pick when the token opens several), disconnecting, the picker's tree and
+ * a project's selection with its sync. Rust calls the services and keeps
+ * the secrets in Keychain; nothing here ever sees one after it is sent.
  *
  * `layerMock` plays it in memory over the demo Outline
- * (`./mock-outline.ts`): the key check takes `MOCK_CONNECT_DELAY_MS`, a
- * host without a dot doesn't answer, a key that isn't `ol_api_` and 20
- * characters is refused. Everything else answers at once, so the stores
- * apply a mock write before the action returns. A selection syncs as
- * soon as it is saved, like the background sync of Rust.
+ * (`./mock-outline.ts`) and the demo ClickUp (`./mock-clickup.ts`): the
+ * check takes `MOCK_CONNECT_DELAY_MS`. Outline: a host without a dot
+ * doesn't answer, a key that isn't `ol_api_` and 20 characters is
+ * refused. ClickUp: a token that isn't `pk_<digits>_` and 20 characters
+ * is refused, a good one opens two workspaces and asks which. Everything
+ * else answers at once, so the stores apply a mock write before the action
+ * returns. A selection syncs as soon as it is saved, like the background
+ * sync of Rust. GitHub stays the demo flow of the integrations store.
  */
 export class Connectors extends Context.Service<
   Connectors,
   {
     /** The catalog with each connector's connection. */
     readonly list: Effect.Effect<ConnectorView[], BackendError>;
-    /** Checks the address and the key, then saves them. */
+    /**
+     * Checks the address (Outline; ClickUp ignores it) and the key, then
+     * saves them. A token that opens several workspaces answers
+     * `chooseWorkspace` and saves nothing: call again with the picked id.
+     */
     readonly connectApiKey: (
       kind: ConnectorKind,
       host: string,
-      key: string
+      key: string,
+      workspace: string | null
     ) => Effect.Effect<ConnectOutcome, BackendError>;
     readonly disconnect: (
       kind: ConnectorKind
@@ -82,10 +98,8 @@ export class Connectors extends Context.Service<
   static readonly layerTauri = Layer.succeed(Connectors, {
     browse: (kind, parent) =>
       call(() => commands.connectorBrowse(kind, parent)),
-    connectApiKey: (kind, host, key) =>
-      // No workspace yet: picking one (`chooseWorkspace`) comes with the
-      // ClickUp screens (connectors-clickup, task 3.1).
-      call(() => commands.connectorConnectApiKey(kind, host, key, null)),
+    connectApiKey: (kind, host, key, workspace) =>
+      call(() => commands.connectorConnectApiKey(kind, host, key, workspace)),
     disconnect: (kind) =>
       Effect.asVoid(call(() => commands.connectorDisconnect(kind))),
     list: call(() => commands.connectorsList()),
@@ -103,8 +117,8 @@ export class Connectors extends Context.Service<
       const database = yield* MockDatabase;
       const { tables } = database;
 
-      const outlineOnly = Effect.fnUntraced(function* (kind: ConnectorKind) {
-        if (kind !== "outline") {
+      const connectable = Effect.fnUntraced(function* (kind: ConnectorKind) {
+        if (!SOURCE_KINDS.includes(kind)) {
           return yield* invalid(`${KIND_LABEL[kind]} пока нельзя подключить`);
         }
       });
@@ -118,27 +132,17 @@ export class Connectors extends Context.Service<
       const connectApiKey = Effect.fnUntraced(function* (
         kind: ConnectorKind,
         host: string,
-        key: string
+        key: string,
+        workspace: string | null
       ): Effect.fn.Return<ConnectOutcome, BackendError> {
-        yield* outlineOnly(kind);
+        yield* connectable(kind);
         yield* Effect.sleep(MOCK_CONNECT_DELAY_MS);
-        const origin = mockNormalizeHost(host);
-        if (typeof origin !== "string") {
-          return { rejected: { field: "host", reason: origin.reason } };
-        }
-        if (!key.trim()) {
-          return { rejected: { field: "key", reason: "Введите ключ" } };
-        }
-        if (!new URL(origin).hostname.includes(".")) {
-          return {
-            rejected: {
-              field: "host",
-              reason: "Не удалось подключиться к Outline",
-            },
-          };
-        }
-        if (!MOCK_OUTLINE_KEY.test(key.trim())) {
-          return { rejected: { field: "key", reason: "Ключ не подошёл" } };
+        const checked =
+          kind === "clickup"
+            ? mockCheckClickUp(key, workspace)
+            : mockCheckOutline(host, key);
+        if (!("teamId" in checked)) {
+          return checked;
         }
         const now = yield* Clock.currentTimeMillis;
         const current = tables.connections.get(kind);
@@ -147,7 +151,7 @@ export class Connectors extends Context.Service<
         }
         const connected: ConnectorView = {
           ...current,
-          account: { ...MOCK_OUTLINE_ACCOUNT, host: origin },
+          account: checked,
           connectedAt: now,
           error: null,
           errorKind: null,
@@ -188,12 +192,18 @@ export class Connectors extends Context.Service<
         kind: ConnectorKind,
         parent: ExternalRef | null
       ) {
-        yield* outlineOnly(kind);
+        yield* connectable(kind);
         const connection = tables.connections.get(kind);
         if (connection?.status !== "connected") {
           return yield* invalid(`${KIND_LABEL[kind]} не подключён`);
         }
-        const nodes = mockOutlineBrowse(tables.outline, parent);
+        const nodes =
+          kind === "clickup"
+            ? mockClickUpBrowse(
+                tables.clickup[connection.account?.teamId ?? ""] ?? [],
+                parent
+              )
+            : mockOutlineBrowse(tables.outline, parent);
         if (!nodes) {
           return yield* external("Не найдено");
         }
@@ -236,7 +246,7 @@ export class Connectors extends Context.Service<
 
       const selectionGet = Effect.fnUntraced(function* (projectId: string) {
         yield* projectExists(projectId);
-        return [viewOf(projectId, "outline")];
+        return SOURCE_KINDS.map((kind) => viewOf(projectId, kind));
       });
 
       /** Plays `sync_project` over the demo Outline. */
@@ -282,15 +292,24 @@ export class Connectors extends Context.Service<
             errorKind: connection.errorKind ?? "unauthorized",
           });
         }
-        const otherTeam = selection.accountRef !== connection.account?.teamId;
+        const team = connection.account?.teamId ?? "";
+        const otherTeam = selection.accountRef !== team;
         const { documents, missing } = resolveSelection(
           tables,
+          kind,
+          team,
           selection.items
         );
         // Another team's items stay as they are until the manager decides.
         const changed = otherTeam
           ? false
-          : applyDocuments(tables, projectId, documents.slice(0, MAX), now);
+          : applyDocuments(
+              tables,
+              projectId,
+              kind,
+              documents.slice(0, MAX),
+              now
+            );
         tables.selections.set(key, {
           ...selection,
           missing,
@@ -319,12 +338,12 @@ export class Connectors extends Context.Service<
         kind: ConnectorKind,
         items: SelectionItem[]
       ) {
-        yield* outlineOnly(kind);
+        yield* connectable(kind);
         yield* projectExists(projectId);
         const key = selectionKey(projectId, kind);
         if (items.length === 0) {
           tables.selections.delete(key);
-          applyDocuments(tables, projectId, [], 0);
+          applyDocuments(tables, projectId, kind, [], 0);
           yield* database.emit("project", projectId, projectId, "updated");
           return viewOf(projectId, kind);
         }
@@ -332,7 +351,12 @@ export class Connectors extends Context.Service<
         if (connection?.status === "disconnected" || !connection?.account) {
           return yield* invalid(`${KIND_LABEL[kind]} не подключён`);
         }
-        const { documents } = resolveSelection(tables, items);
+        const { documents } = resolveSelection(
+          tables,
+          kind,
+          connection.account.teamId,
+          items
+        );
         if (documents.length > MAX) {
           return yield* invalid(limitMessage(kind, documents.length));
         }
@@ -356,7 +380,9 @@ export class Connectors extends Context.Service<
         kind: ConnectorKind | null
       ) {
         yield* projectExists(projectId);
-        yield* syncSelection(projectId, kind ?? "outline");
+        for (const each of kind ? [kind] : SOURCE_KINDS) {
+          yield* syncSelection(projectId, each);
+        }
       });
 
       return Connectors.of({
@@ -380,6 +406,10 @@ export const MAX_CONNECTOR_DOCUMENTS = 200;
 const MAX = MAX_CONNECTOR_DOCUMENTS;
 
 const MOCK_OUTLINE_KEY = /^ol_api_[A-Za-z0-9]{20,}$/u;
+const MOCK_CLICKUP_TOKEN = /^pk_\d+_[A-Za-z0-9]{20,}$/u;
+
+/** The connectors that give a project its sources. */
+const SOURCE_KINDS: ConnectorKind[] = ["outline", "clickup"];
 
 const KIND_LABEL: Record<ConnectorKind, string> = {
   clickup: "ClickUp",
@@ -389,7 +419,58 @@ const KIND_LABEL: Record<ConnectorKind, string> = {
 
 /** What Rust says when a selection brings too many documents. */
 export function limitMessage(kind: ConnectorKind, count: number) {
+  if (kind === "clickup") {
+    return `Из ClickUp в проект загружается не больше ${MAX} задач, а в выбранном ${count}. Выберите списки или отдельные задачи.`;
+  }
   return `Из ${KIND_LABEL[kind]} в проект загружается не больше ${MAX} документов, а в выбранном ${count}. Выберите отдельные документы.`;
+}
+
+type Refusal = Exclude<ConnectOutcome, { connected: ConnectorView }>;
+
+/** Outline's check: the address, then the key. */
+function mockCheckOutline(host: string, key: string): Account | Refusal {
+  const origin = mockNormalizeHost(host);
+  if (typeof origin !== "string") {
+    return { rejected: { field: "host", reason: origin.reason } };
+  }
+  if (!key.trim()) {
+    return { rejected: { field: "key", reason: "Введите ключ" } };
+  }
+  if (!new URL(origin).hostname.includes(".")) {
+    return {
+      rejected: { field: "host", reason: "Не удалось подключиться к Outline" },
+    };
+  }
+  if (!MOCK_OUTLINE_KEY.test(key.trim())) {
+    return { rejected: { field: "key", reason: "Ключ не подошёл" } };
+  }
+  return { ...MOCK_OUTLINE_ACCOUNT, host: origin };
+}
+
+/** ClickUp's check: the token, then the workspace it opens. */
+function mockCheckClickUp(
+  key: string,
+  workspace: string | null
+): Account | Refusal {
+  if (!key.trim()) {
+    return { rejected: { field: "key", reason: "Введите токен" } };
+  }
+  if (!MOCK_CLICKUP_TOKEN.test(key.trim())) {
+    return { rejected: { field: "key", reason: "Токен не подошёл" } };
+  }
+  if (workspace === null) {
+    return { chooseWorkspace: { workspaces: MOCK_CLICKUP_WORKSPACES } };
+  }
+  const picked = MOCK_CLICKUP_WORKSPACES.find((item) => item.id === workspace);
+  if (!picked) {
+    return {
+      rejected: {
+        field: "key",
+        reason: "Токен не открывает это пространство",
+      },
+    };
+  }
+  return mockClickUpAccount(picked);
 }
 
 function selectionKey(projectId: string, kind: ConnectorKind) {
@@ -423,8 +504,42 @@ function mockNormalizeHost(input: string): string | { reason: string } {
   }
 }
 
+/** A document of a demo service, as a sync takes it. */
+interface MockDocument {
+  /** Only a title: the source is «нет текста». */
+  empty?: boolean;
+  id: string;
+  title: string;
+  updatedAt: number;
+  url: string;
+}
+
 /** The documents a selection brings, newest first, and what is gone. */
-function resolveSelection(tables: MockTables, items: SelectionItem[]) {
+function resolveSelection(
+  tables: MockTables,
+  kind: ConnectorKind,
+  team: string,
+  items: SelectionItem[]
+): { documents: MockDocument[]; missing: Set<string> } {
+  if (kind === "clickup") {
+    const { missing, tasks } = mockClickUpResolve(
+      tables.clickup[team] ?? [],
+      items
+    );
+    const documents = tasks
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        updatedAt: task.updatedAt,
+        url: mockClickUpUrl(task.id),
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return { documents, missing };
+  }
+  return resolveOutline(tables, items);
+}
+
+function resolveOutline(tables: MockTables, items: SelectionItem[]) {
   const excluded = new Set(
     items
       .filter((item) => item.itemKind === "exclude")
@@ -458,28 +573,36 @@ function resolveSelection(tables: MockTables, items: SelectionItem[]) {
       }
     }
   }
-  const documents = [...found.values()].sort(
-    (a, b) => b.updatedAt - a.updatedAt
-  );
+  const documents = [...found.values()]
+    .map((document) => ({
+      empty: document.empty,
+      id: document.id,
+      title: document.title,
+      updatedAt: document.updatedAt,
+      url: mockOutlineUrl("doc", document.id),
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
   return { documents, missing };
 }
 
 const MOCK_CHARS_PER_DOCUMENT = 2400;
 
 /**
- * Makes the project's Outline sources these documents; whether anything
- * changed. A document keeps its source while its version is the same.
+ * Makes the project's sources of the connector these documents; whether
+ * anything changed. A document keeps its source while its version is the
+ * same.
  */
 function applyDocuments(
   tables: MockTables,
   projectId: string,
-  documents: MockOutlineDocument[],
+  kind: ConnectorKind,
+  documents: MockDocument[],
   now: number
 ) {
   let changed = false;
   const wanted = new Map(documents.map((item) => [item.id, item]));
   for (const [id, { source }] of tables.sources) {
-    if (source.projectId !== projectId || !source.origin) {
+    if (source.projectId !== projectId || source.origin?.connector !== kind) {
       continue;
     }
     const document = wanted.get(source.origin.externalId);
@@ -493,7 +616,7 @@ function applyDocuments(
   let order = 0;
   for (const document of wanted.values()) {
     order += 1;
-    const id = `${projectId}:outline:${document.id}`;
+    const id = `${projectId}:${kind}:${document.id}`;
     const source: ProjectSource = {
       createdAt: now + order,
       error: document.empty ? "В документе только заголовок" : null,
@@ -501,10 +624,10 @@ function applyDocuments(
       id,
       name: document.title,
       origin: {
-        connector: "outline",
+        connector: kind,
         externalId: document.id,
         updatedAt: Math.max(document.updatedAt, now),
-        url: mockOutlineUrl("doc", document.id),
+        url: document.url,
       },
       projectId,
       size: document.empty ? 0 : MOCK_CHARS_PER_DOCUMENT,

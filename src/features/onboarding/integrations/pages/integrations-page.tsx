@@ -24,21 +24,20 @@ import { useDemoState } from "@/lib/use-demo-state";
 export const INTEGRATIONS_DEMO_STATES = ["partial"] as const;
 
 /*
- * Paper's mixed list: GitHub connected, the Outline key rejected, ClickUp
- * waiting for the browser ("Ждём браузер" opens its step, where "Открыть
- * вкладку ещё раз" finishes the sign-in).
+ * A mixed list: GitHub waiting for the browser ("Ждём браузер" opens its
+ * step), the Outline key rejected, ClickUp connected to its workspace.
  */
 function seedPartial() {
   cancelAllConnects();
-  setIntegration("github", {
-    account: CONNECTED_ACCOUNTS.github,
-    status: "connected",
-  });
+  setIntegration("github", { status: "connecting" });
   setIntegration("outline", {
     error: OUTLINE_REJECTED_SUMMARY,
     status: "error",
   });
-  setIntegration("clickup", { status: "connecting" });
+  setIntegration("clickup", {
+    account: CONNECTED_ACCOUNTS.clickup,
+    status: "connected",
+  });
 }
 
 const serviceHref = (service: ServiceId) =>

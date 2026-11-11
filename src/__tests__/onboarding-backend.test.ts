@@ -157,15 +157,4 @@ describe("IntegrationsBackend.layerMock", () => {
       assert.strictEqual(yield* Fiber.join(fiber), CONNECTED_ACCOUNTS.github);
     }).pipe(Effect.provide(IntegrationsBackend.layerMock))
   );
-
-  it.effect("waits for the ClickUp redirect", () =>
-    Effect.gen(function* () {
-      const backend = yield* IntegrationsBackend;
-      const fiber = yield* Effect.forkChild(backend.authorizeClickUp);
-      yield* TestClock.adjust(CONNECT_DELAY_MS.clickup - 1);
-      assert.isUndefined(fiber.pollUnsafe());
-      yield* TestClock.adjust(1);
-      assert.strictEqual(yield* Fiber.join(fiber), CONNECTED_ACCOUNTS.clickup);
-    }).pipe(Effect.provide(IntegrationsBackend.layerMock))
-  );
 });
