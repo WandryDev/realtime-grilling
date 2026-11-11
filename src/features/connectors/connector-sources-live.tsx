@@ -8,7 +8,7 @@ import type {
   SelectionItemView,
 } from "@/bindings";
 import {
-  setConnectorSelection,
+  saveConnectorSelection,
   syncConnector,
   updateConnectorSelection,
   useProjectConnector,
@@ -20,33 +20,39 @@ import {
   type ConnectTarget,
 } from "@/features/settings/dialogs/connect-service-dialog";
 
-import { OutlinePickerDialog } from "./outline-picker";
-import { OutlineSourcesBlock } from "./outline-sources";
+import { ConnectorPickerDialog } from "./connector-picker";
+import { ConnectorSourcesBlock } from "./connector-sources";
+import type { SourceConnector } from "./labels";
 
 /*
- * Outline in the sources of a project, on the stores: the connection, the
- * project's selection and its documents. «Подключить» (and «Обновить
- * ключ») opens the connect dialog over the page, so the wizard keeps its
- * draft and its step; once connected, the picker opens. The wizard has no
- * project before its first source: `ensureProject` saves the draft then.
+ * A connector (Outline, ClickUp) in the sources of a project, on the
+ * stores: the connection, the project's selection and its documents.
+ * «Подключить» (and «Обновить ключ» / «Обновить токен») opens the connect
+ * dialog over the page, so the wizard keeps its draft and its step; once
+ * connected, the picker opens. The wizard has no project before its first
+ * source: `ensureProject` saves the draft then.
  */
 
-export function OutlineSources({
+const NO_ITEMS: SelectionItemView[] = [];
+
+export function ConnectorSources({
   className,
   ensureProject,
+  kind,
   projectId,
 }: {
   className?: string;
   /** Saves the wizard's draft; its id. */
   ensureProject?: () => Promise<string | null>;
+  kind: SourceConnector;
   projectId: string | null;
 }) {
-  const connection = useIntegration("outline");
-  const view = useProjectConnector(projectId, "outline");
+  const connection = useIntegration(kind);
+  const view = useProjectConnector(projectId, kind);
   const sources = useProjectSources(projectId);
   const documents = useMemo(
-    () => sources.filter((source) => source.origin?.connector === "outline"),
-    [sources]
+    () => sources.filter((source) => source.origin?.connector === kind),
+    [kind, sources]
   );
   const [pickerOpen, setPickerOpen] = useState(false);
   const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(
@@ -58,11 +64,11 @@ export function OutlineSources({
     async (items: SelectionItem[]) => {
       const id = projectId ?? (await ensureProject?.()) ?? null;
       if (!id) {
-        return false;
+        return { saved: false } as const;
       }
-      return (await setConnectorSelection(id, "outline", items)) !== undefined;
+      return saveConnectorSelection(id, kind, items);
     },
-    [ensureProject, projectId]
+    [ensureProject, kind, projectId]
   );
 
   // Each edit starts from the store as it is when it runs: quick crosses
@@ -70,10 +76,10 @@ export function OutlineSources({
   const editItems = useCallback(
     (change: (items: SelectionItem[]) => SelectionItem[]) => {
       if (projectId) {
-        updateConnectorSelection(projectId, "outline", change);
+        updateConnectorSelection(projectId, kind, change);
       }
     },
-    [projectId]
+    [kind, projectId]
   );
 
   const removeItem = useCallback(
@@ -119,16 +125,16 @@ export function OutlineSources({
       return;
     }
     setSyncing(true);
-    await syncConnector(projectId, "outline");
+    await syncConnector(projectId, kind);
     setSyncing(false);
-  }, [projectId]);
+  }, [kind, projectId]);
 
   const connect = useCallback(() => {
     setConnectTarget({
       reconnect: connection.status === "error",
-      service: "outline",
+      service: kind,
     });
-  }, [connection.status]);
+  }, [connection.status, kind]);
   const closeConnect = useCallback((open: boolean) => {
     if (!open) {
       setConnectTarget(null);
@@ -138,10 +144,11 @@ export function OutlineSources({
 
   return (
     <>
-      <OutlineSourcesBlock
+      <ConnectorSourcesBlock
         className={className}
         connection={connection}
         documents={documents}
+        kind={kind}
         onConnect={connect}
         onExclude={exclude}
         onPick={openPicker}
@@ -150,8 +157,9 @@ export function OutlineSources({
         syncing={syncing || (view?.syncing ?? false)}
         view={view}
       />
-      <OutlinePickerDialog
-        items={view?.items ?? []}
+      <ConnectorPickerDialog
+        items={view?.items ?? NO_ITEMS}
+        kind={kind}
         onOpenChange={setPickerOpen}
         onSave={save}
         open={pickerOpen}

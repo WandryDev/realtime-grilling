@@ -4,11 +4,12 @@ import type {
   SelectionItemView,
 } from "@/bindings";
 import type { IntegrationState } from "@/data/integrations";
-import { OutlineSourcesBlock } from "@/features/connectors/outline-sources";
+import { ConnectorSourcesBlock } from "@/features/connectors/connector-sources";
 
 /*
- * «Источники Outline» on the project page and in the wizard: every state
- * of the block (connectors-outline task 4.4), at a fixed «now».
+ * The Outline and ClickUp blocks among the sources of the project page and
+ * the wizard: every state of each (connectors-outline task 4.4,
+ * connectors-clickup task 4.2), at a fixed «now».
  */
 
 const NOW = Date.UTC(2026, 10, 11, 12);
@@ -93,9 +94,11 @@ function view(extra: Partial<ProjectConnectorView> = {}): ProjectConnectorView {
   };
 }
 
+type BlockProps = Omit<Parameters<typeof ConnectorSourcesBlock>[0], "kind">;
+
 const STATES: {
   note: string;
-  props: Parameters<typeof OutlineSourcesBlock>[0];
+  props: BlockProps;
   title: string;
 }[] = [
   {
@@ -217,18 +220,171 @@ const STATES: {
   },
 ];
 
-export function OutlineSourcesStates() {
+const CLICKUP_CONNECTED: IntegrationState = {
+  account: "Pixel Agency",
+  lastOkAt: NOW - HOUR_MS,
+  status: "connected",
+  team: "Pixel Agency",
+  user: "Дима Капиш",
+};
+
+function task(
+  id: string,
+  name: string,
+  hoursAgo: number,
+  status: ProjectSource["status"] = "ready"
+): ProjectSource {
+  return {
+    ...source(id, name, hoursAgo, status),
+    error: status === "ready" ? null : "В задаче только название",
+    origin: {
+      connector: "clickup",
+      externalId: id,
+      updatedAt: NOW - hoursAgo * HOUR_MS,
+      url: `https://app.clickup.com/t/${id}`,
+    },
+  };
+}
+
+const TASKS = [
+  task("tm1-mis", "Интеграция с МИС", 1),
+  task("tm1-mis-auth", "Авторизация врачей в МИС", 1),
+  task("tm1-video", "Видеозвонок врача и пациента", 5),
+  task("tm1-pay", "Оплата консультации", 30),
+];
+
+function clickupView(
+  extra: Partial<ProjectConnectorView> = {}
+): ProjectConnectorView {
+  return {
+    ...view(),
+    items: [
+      item("list:ls-tm-1", "Телемедиа, этап 1"),
+      item("tm1-reviews", "Отзывы о враче", { itemKind: "exclude" }),
+    ],
+    kind: "clickup",
+    ...extra,
+  };
+}
+
+const CLICKUP_STATES: {
+  note: string;
+  props: BlockProps;
+  title: string;
+}[] = [
+  {
+    note: "ClickUp не подключён: «Подключить ClickUp» открывает диалог токена поверх страницы, мастер остаётся на шаге «Источники» с прежними данными.",
+    props: { connection: { status: "disconnected" }, documents: [] },
+    title: "ClickUp не подключён",
+  },
+  {
+    note: "Подключён, ничего не выбрано: «Выбрать в ClickUp» открывает дерево пространств: пространство → папки и списки → задачи с подзадачами.",
+    props: { connection: CLICKUP_CONNECTED, documents: [] },
+    title: "ClickUp: ничего не выбрано",
+  },
+  {
+    note: "Выбран список, одна задача исключена. У задач ссылка на ClickUp, время текста, крестик исключает задачу.",
+    props: {
+      connection: CLICKUP_CONNECTED,
+      documents: TASKS,
+      view: clickupView(),
+    },
+    title: "ClickUp: выбран список",
+  },
+  {
+    note: "Первая синхронизация большого списка идёт минуты: ClickUp отвечает не больше чем на 100 запросов в минуту, Grill ждёт сброса лимита.",
+    props: {
+      connection: CLICKUP_CONNECTED,
+      documents: TASKS.slice(0, 2),
+      view: clickupView({ syncing: true }),
+    },
+    title: "ClickUp: синхронизация",
+  },
+  {
+    note: "Токен удалили в ClickUp: задачи остаются с последним текстом, «Обновить токен».",
+    props: {
+      connection: {
+        ...CLICKUP_CONNECTED,
+        error: "Токен больше не подходит",
+        errorKind: "unauthorized",
+        status: "error",
+      },
+      documents: TASKS,
+      view: clickupView({
+        sync: {
+          error: "Токен больше не подходит",
+          errorKind: "unauthorized",
+          lastAttemptAt: NOW,
+          lastOkAt: NOW - 26 * HOUR_MS,
+          skipped: 0,
+        },
+      }),
+    },
+    title: "ClickUp: токен не подходит",
+  },
+  {
+    note: "Список удалили в ClickUp, другой выбран в прежнем пространстве до переподключения: «недоступно», у второго «другое пространство».",
+    props: {
+      connection: CLICKUP_CONNECTED,
+      documents: TASKS.slice(0, 2),
+      view: clickupView({
+        items: [
+          item("list:ls-tm-1", "Телемедиа, этап 1"),
+          item("list:ls-old", "Старый бэклог", { status: "unavailable" }),
+          item("list:ls-home", "Дела", {
+            otherAccount: true,
+            status: "unavailable",
+          }),
+        ],
+      }),
+    },
+    title: "ClickUp: недоступно",
+  },
+  {
+    note: "Список разросся до 230 открытых задач: в проекте 200 последних изменённых.",
+    props: {
+      connection: CLICKUP_CONNECTED,
+      documents: TASKS,
+      view: clickupView({
+        sync: {
+          error: null,
+          errorKind: null,
+          lastAttemptAt: NOW,
+          lastOkAt: NOW - HOUR_MS,
+          skipped: 30,
+        },
+      }),
+    },
+    title: "ClickUp: 30 не загружены",
+  },
+];
+
+function StatesGrid({
+  kind,
+  states,
+}: {
+  kind: "outline" | "clickup";
+  states: typeof STATES;
+}) {
   return (
     <div className="bg-background grid grid-cols-2 gap-x-12 gap-y-10 p-10">
-      {STATES.map((state) => (
+      {states.map((state) => (
         <figure className="flex flex-col gap-3" key={state.title}>
           <figcaption className="flex flex-col gap-0.5">
             <span className="text-sm font-semibold">{state.title}</span>
             <span className="text-muted-foreground text-xs">{state.note}</span>
           </figcaption>
-          <OutlineSourcesBlock now={NOW} {...state.props} />
+          <ConnectorSourcesBlock kind={kind} now={NOW} {...state.props} />
         </figure>
       ))}
     </div>
   );
+}
+
+export function OutlineSourcesStates() {
+  return <StatesGrid kind="outline" states={STATES} />;
+}
+
+export function ClickUpSourcesStates() {
+  return <StatesGrid kind="clickup" states={CLICKUP_STATES} />;
 }

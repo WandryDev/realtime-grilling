@@ -15,7 +15,7 @@ import type {
   SelectionItemView,
 } from "@/bindings";
 import { Badge } from "@/components/ui/badge";
-import { OutlineIcon } from "@/components/ui/brand-icons";
+import { ClickUpIcon, OutlineIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import {
   Item,
@@ -34,36 +34,53 @@ import { relativeTime } from "@/features/projects/project-data";
 import { cn } from "@/lib/utils";
 
 import { handleServiceLink } from "./api";
-import { skippedLabel, syncFailure, updatedLabel } from "./labels";
+import {
+  CONNECTOR_WORDS,
+  type ConnectorWords,
+  connectionFailure,
+  type SourceConnector,
+  skippedLabel,
+  syncFailure,
+  updatedLabel,
+} from "./labels";
 
 /*
- * Outline among the sources of a project (project-sources spec,
- * «Источники из коннекторов»; outline-connector spec, «Синхронизация»
- * and «Ошибки синхронизации»). The wizard's Sources step and the project
- * page draw it next to «Документы с компьютера».
+ * A connector among the sources of a project (project-sources spec,
+ * «Источники из коннекторов»; outline-connector and clickup-connector
+ * specs, «Синхронизация» and «Ошибки синхронизации»). The wizard's
+ * Sources step and the project page draw one block per service (Outline,
+ * ClickUp) next to «Документы с компьютера», each with its own words
+ * (`labels.ts`).
  *
  * - not connected: what it is for and «Подключить Outline»;
- * - connected, nothing picked: «Выбрать в Outline»;
- * - picked: the collections and documents as chips («недоступно» when
- *   Outline lost them, with a hint when they belong to another team),
- *   when it last updated with «Обновить», why it did not
- *   («Не обновлялось: ключ не подходит»), how many documents the limit
- *   left out, then the documents: a link to Outline, when the text last
- *   changed, «нет текста», and a cross that leaves one out.
+ * - connected, nothing picked: «Выбрать в Outline» / «Выбрать в ClickUp»;
+ * - picked: the containers and documents as chips («недоступно» when the
+ *   service lost them, with a hint when they belong to another team or
+ *   workspace), when it last updated with «Обновить», «Синхронизация…»
+ *   while a sync runs, why it did not («Не обновлялось: ключ не
+ *   подходит»), how many the limit left out, then the documents or tasks:
+ *   a link to the service, when the text last changed, «нет текста», and
+ *   a cross that leaves one out.
  *
- * Pure: the live wrapper (`OutlineSources`) passes the state and the
+ * Pure: the live wrapper (`ConnectorSources`) passes the state and the
  * handlers; /dev draws each state.
  */
 
 /** Rows shown before «Показать все». */
 const FIRST_ROWS = 8;
 
-export interface OutlineSourcesProps {
+const ICON: Record<SourceConnector, typeof OutlineIcon> = {
+  clickup: ClickUpIcon,
+  outline: OutlineIcon,
+};
+
+export interface ConnectorSourcesProps {
   className?: string;
   /** The connection in Settings. */
   connection: IntegrationState;
-  /** The project's Outline documents (sources with `origin`). */
+  /** The project's documents of the service (sources with `origin`). */
   documents: ProjectSource[];
+  kind: SourceConnector;
   /** Fixed «now» for the previews. */
   now?: number;
   onConnect?: () => void;
@@ -79,10 +96,11 @@ export interface OutlineSourcesProps {
   view?: ProjectConnectorView;
 }
 
-export function OutlineSourcesBlock({
+export function ConnectorSourcesBlock({
   className,
   connection,
   documents,
+  kind,
   now,
   onConnect,
   onExclude,
@@ -91,24 +109,25 @@ export function OutlineSourcesBlock({
   onSync,
   syncing = false,
   view,
-}: OutlineSourcesProps) {
+}: ConnectorSourcesProps) {
   const titleId = useId();
+  const words = CONNECTOR_WORDS[kind];
   const connected =
     connection.status === "connected" || connection.status === "error";
   const picked = view?.items ?? [];
   const chosen = picked.filter((item) => item.itemKind !== "exclude");
   const excluded = picked.filter((item) => item.itemKind === "exclude");
 
-  let subtitle: ReactNode = "Документация из базы знаний";
+  let subtitle: ReactNode = words.pitch;
   if (connected && chosen.length > 0) {
     subtitle = (
       <>
-        {connection.account ?? "Outline"},{" "}
+        {connection.account ?? words.service},{" "}
         {updatedLabel(view?.sync?.lastOkAt, now)}
       </>
     );
   } else if (connected) {
-    subtitle = `${connection.account ?? "Outline"}: выберите коллекции или документы`;
+    subtitle = `${connection.account ?? words.service}: ${words.pickHint}`;
   }
 
   return (
@@ -117,10 +136,10 @@ export function OutlineSourcesBlock({
       className={cn("flex flex-col gap-3.5", className)}
     >
       <div className="flex items-center gap-3">
-        <SourceTile kind="outline" size="lg" />
+        <SourceTile kind={kind} size="lg" />
         <div className="flex min-w-0 flex-1 flex-col">
           <h2 className="text-foreground text-base font-semibold" id={titleId}>
-            Outline
+            {words.service}
           </h2>
           <p className="text-muted-foreground text-sm">{subtitle}</p>
         </div>
@@ -131,28 +150,36 @@ export function OutlineSourcesBlock({
           onPick={onPick}
           onSync={onSync}
           syncing={syncing}
+          words={words}
         />
       </div>
       {chosen.length > 0 || excluded.length > 0 ? (
-        <SyncNotes connection={connection} now={now} view={view} />
+        <SyncNotes
+          connection={connection}
+          kind={kind}
+          now={now}
+          syncing={syncing}
+          view={view}
+        />
       ) : null}
       {chosen.length > 0 ? (
-        <ul aria-label="Выбрано в Outline" className="flex flex-wrap gap-1.5">
+        <ul aria-label={words.picked} className="flex flex-wrap gap-1.5">
           {chosen.map((item) => (
             <li key={item.externalId}>
-              <PickedChip item={item} onRemove={onRemoveItem} />
+              <PickedChip item={item} onRemove={onRemoveItem} words={words} />
             </li>
           ))}
           {excluded.map((item) => (
             <li key={item.externalId}>
-              <PickedChip item={item} onRemove={onRemoveItem} />
+              <PickedChip item={item} onRemove={onRemoveItem} words={words} />
             </li>
           ))}
         </ul>
       ) : null}
       {documents.length > 0 ? (
-        <OutlineDocuments
+        <ServiceDocuments
           documents={documents}
+          kind={kind}
           now={now}
           onExclude={onExclude}
         />
@@ -168,6 +195,7 @@ function HeaderActions({
   onPick,
   onSync,
   syncing,
+  words,
 }: {
   chosen: number;
   connection: IntegrationState;
@@ -175,6 +203,7 @@ function HeaderActions({
   onPick?: () => void;
   onSync?: () => void;
   syncing: boolean;
+  words: ConnectorWords;
 }) {
   if (connection.status === "connecting") {
     return (
@@ -187,14 +216,14 @@ function HeaderActions({
   if (connection.status === "disconnected") {
     return (
       <Button onClick={onConnect} size="sm" variant="secondary">
-        Подключить Outline
+        {words.connect}
       </Button>
     );
   }
   if (connection.status === "error") {
     return (
       <Button onClick={onConnect} size="sm" variant="secondary">
-        Обновить ключ
+        {words.reconnect}
       </Button>
     );
   }
@@ -202,7 +231,7 @@ function HeaderActions({
     <div className="flex items-center gap-1">
       {chosen > 0 ? (
         <Button
-          aria-label="Обновить документы Outline"
+          aria-label={words.refresh}
           disabled={syncing}
           onClick={onSync}
           size="sm"
@@ -217,38 +246,50 @@ function HeaderActions({
         </Button>
       ) : null}
       <Button onClick={onPick} size="sm" variant="secondary">
-        {chosen > 0 ? "Изменить выбор" : "Выбрать в Outline"}
+        {chosen > 0 ? "Изменить выбор" : words.pick}
       </Button>
     </div>
   );
 }
 
-/** Why the documents are not fresh, and what the limit left out. */
+/** A sync running, why the documents are not fresh, what the limit left out. */
 function SyncNotes({
   connection,
+  kind,
   now,
+  syncing,
   view,
 }: {
   connection: IntegrationState;
+  kind: SourceConnector;
   now?: number;
+  syncing: boolean;
   view?: ProjectConnectorView;
 }) {
+  const words = CONNECTOR_WORDS[kind];
   const sync = view?.sync ?? null;
-  let failure = syncFailure(sync);
-  if (!failure && connection.status === "disconnected") {
-    failure = "Outline отключён";
-  } else if (!failure && connection.status === "error") {
-    failure = "ключ не подходит";
+  let failure = syncFailure(sync, kind);
+  if (
+    !failure &&
+    (connection.status === "disconnected" || connection.status === "error")
+  ) {
+    failure = connectionFailure(connection.status, kind);
   }
   const skipped = sync?.skipped ?? 0;
-  if (!(failure || skipped > 0)) {
+  if (!(failure || skipped > 0 || syncing)) {
     return null;
   }
   const last = sync?.lastOkAt
-    ? `, документы с текстом от ${relativeTime(sync.lastOkAt, now)}`
+    ? `, ${words.items} с текстом от ${relativeTime(sync.lastOkAt, now)}`
     : "";
   return (
     <div className="flex flex-col gap-1 pl-11">
+      {syncing ? (
+        <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
+          <Spinner aria-hidden="true" className="size-3" />
+          Синхронизация…
+        </p>
+      ) : null}
       {failure ? (
         <p className="text-contradiction text-sm" role="status">
           Не обновлялось: {failure}
@@ -257,35 +298,31 @@ function SyncNotes({
       ) : null}
       {skipped > 0 ? (
         <p className="text-assumption text-sm">
-          {skippedLabel(skipped)}: в выборе больше 200 документов, в проекте 200
-          последних изменённых
+          {skippedLabel(skipped)}: в выборе больше 200 {words.unitMany}, в
+          проекте 200 последних изменённых
         </p>
       ) : null}
     </div>
   );
 }
 
-const ITEM_KIND_LABEL: Record<SelectionItemView["itemKind"], string> = {
-  container: "коллекция",
-  document: "документ",
-  exclude: "без документа",
-};
-
 function PickedChip({
   item,
   onRemove,
+  words,
 }: {
   item: SelectionItemView;
   onRemove?: (item: SelectionItemView) => void;
+  words: ConnectorWords;
 }) {
   const remove = useCallback(() => onRemove?.(item), [item, onRemove]);
   const unavailable = item.status === "unavailable";
   const excluded = item.itemKind === "exclude";
   let hint: string | undefined;
   if (item.otherAccount) {
-    hint = "выбрано в другой команде Outline";
+    hint = words.otherAccount;
   } else if (unavailable) {
-    hint = "удалено в Outline или нет доступа";
+    hint = words.unavailable;
   }
   return (
     <span
@@ -296,7 +333,7 @@ function PickedChip({
       title={hint}
     >
       <span className="text-muted-foreground text-xs">
-        {ITEM_KIND_LABEL[item.itemKind]}
+        {words.chip[item.itemKind]}
       </span>
       <span className={cn("max-w-60 truncate", excluded && "line-through")}>
         {item.title}
@@ -309,7 +346,7 @@ function PickedChip({
       {hint ? <span className="sr-only">: {hint}</span> : null}
       {item.otherAccount ? (
         <span aria-hidden="true" className="text-muted-foreground text-xs">
-          другая команда
+          {words.otherAccountShort}
         </span>
       ) : null}
       {onRemove ? (
@@ -329,12 +366,14 @@ function PickedChip({
   );
 }
 
-function OutlineDocuments({
+function ServiceDocuments({
   documents,
+  kind,
   now,
   onExclude,
 }: {
   documents: ProjectSource[];
+  kind: SourceConnector;
   now?: number;
   onExclude?: (source: ProjectSource) => void;
 }) {
@@ -343,10 +382,14 @@ function OutlineDocuments({
   const showAll = useCallback(() => setAll(true), []);
   return (
     <div className="flex flex-col">
-      <ul aria-label="Документы Outline" className="flex flex-col">
+      <ul
+        aria-label={CONNECTOR_WORDS[kind].documents}
+        className="flex flex-col"
+      >
         {shown.map((source) => (
           <li id={documentRowId(source.id)} key={source.id}>
-            <OutlineDocumentRow
+            <ServiceDocumentRow
+              kind={kind}
               now={now}
               onExclude={onExclude}
               source={source}
@@ -368,11 +411,13 @@ function OutlineDocuments({
   );
 }
 
-function OutlineDocumentRow({
+function ServiceDocumentRow({
+  kind,
   now,
   onExclude,
   source,
 }: {
+  kind: SourceConnector;
   now?: number;
   onExclude?: (source: ProjectSource) => void;
   source: ProjectSource;
@@ -386,10 +431,11 @@ function OutlineDocumentRow({
     ? `текст от ${relativeTime(source.origin.updatedAt, now)}`
     : "";
   const noText = source.status !== "ready";
+  const Icon = ICON[kind];
   return (
     <Item className="px-0 py-2.5 last:border-b-0" variant="divided">
       <ItemMedia>
-        <OutlineIcon aria-hidden="true" className="size-4" />
+        <Icon aria-hidden="true" className="size-4" />
       </ItemMedia>
       <ItemContent className="gap-0.5">
         <ItemTitle className="truncate">

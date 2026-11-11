@@ -28,7 +28,7 @@ import {
 } from "@/data/people";
 import { deleteProject, updateProject, useProject } from "@/data/projects";
 import { removeProjectSource, useProjectSources } from "@/data/sources";
-import { OutlineSources } from "@/features/connectors/outline-sources-live";
+import { ConnectorSources } from "@/features/connectors/connector-sources-live";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
@@ -419,7 +419,8 @@ function ProjectView({ id }: { id: string | null }) {
       integrations={
         data.demo ? null : (
           <div className="flex flex-col gap-4">
-            <OutlineSources projectId={project.id} />
+            <ConnectorSources kind="outline" projectId={project.id} />
+            <ConnectorSources kind="clickup" projectId={project.id} />
             <SoonIntegrations />
           </div>
         )

@@ -15,7 +15,8 @@ import { createSyncedStore } from "./synced-store";
 
 /*
  * What each project picked in the connectors (Outline's collections and
- * documents) with the state of its last sync. The project page and the
+ * documents, ClickUp's spaces, folders, lists and tasks) with the state of
+ * its last sync. The project page and the
  * wizard draw it next to the documents; Settings names the projects a
  * disconnect touches.
  *
@@ -100,6 +101,47 @@ export function setConnectorSelection(
     ),
     { error: "Не удалось сохранить выбор" }
   );
+}
+
+/** What became of a pick saved from the picker. */
+export type SaveSelectionResult =
+  | { saved: true }
+  /**
+   * Not saved. `refused`: why the backend refused it (`Invalid`, e.g. over
+   * 200 documents), for the picker to show; otherwise a toast said why.
+   */
+  | { refused?: string; saved: false };
+
+/**
+ * The picker's «Сохранить выбор»: like `setConnectorSelection`, but a
+ * refusal of the backend (`Invalid`: the limit of 200, not connected)
+ * comes back as `refused` instead of a toast, so the picker can say it
+ * and stay open.
+ */
+export async function saveConnectorSelection(
+  projectId: string,
+  kind: ConnectorKind,
+  items: SelectionItem[]
+): Promise<SaveSelectionResult> {
+  const result = await selectionsStore.mutate(
+    Connectors.use((connectors) =>
+      connectors.selectionSet(projectId, kind, items)
+    ).pipe(
+      Effect.map(() => ({ refused: undefined })),
+      Effect.catchTag("BackendError", (error) =>
+        error.kind === "Invalid"
+          ? Effect.succeed({ refused: error.message })
+          : Effect.fail(error)
+      )
+    ),
+    { error: "Не удалось сохранить выбор" }
+  );
+  if (!result) {
+    return { saved: false };
+  }
+  return result.refused === undefined
+    ? { saved: true }
+    : { refused: result.refused, saved: false };
 }
 
 /** The edits of each project's selection, one after another. */

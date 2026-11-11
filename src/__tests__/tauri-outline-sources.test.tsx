@@ -226,10 +226,11 @@ describe("Outline in the wizard (4.3)", () => {
   it("picks a collection on the Sources step («Шаг источников с подключённым Outline»)", async () => {
     await openSourcesStep();
 
-    // Files and Outline; GitHub and ClickUp are «скоро».
+    // Files, Outline and ClickUp; GitHub is «скоро».
     expect(screen.getByRole("button", { name: "Выбрать файлы" })).toBeTruthy();
     const soon = screen.getByRole("list", { name: "Интеграции" });
-    expect(within(soon).getAllByText("скоро")).toHaveLength(2);
+    expect(within(soon).getAllByText("скоро")).toHaveLength(1);
+    expect(within(soon).getByText("GitHub")).toBeTruthy();
 
     fireEvent.click(
       within(outlineBlock()).getByRole("button", { name: "Выбрать в Outline" })
@@ -291,6 +292,74 @@ describe("Outline in the wizard (4.3)", () => {
         .hasAttribute("disabled")
     ).toBe(true);
     expect(invokedWith("connector_selection_set")).toEqual([]);
+  });
+
+  it("expands and collapses a collection without checking it, loading it once", async () => {
+    await openSourcesStep();
+    fireEvent.click(
+      within(outlineBlock()).getByRole("button", { name: "Выбрать в Outline" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Документы из Outline",
+    });
+    const open = await within(dialog).findByRole("button", {
+      name: "Открыть Телемедиа",
+    });
+    expect(open.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(open);
+
+    expect(await within(dialog).findByText("Бриф Телемедиа")).toBeTruthy();
+    expect(within(dialog).getByText("Цели запуска")).toBeTruthy();
+    const close = within(dialog).getByRole("button", {
+      name: "Свернуть Телемедиа",
+    });
+    expect(close.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      within(dialog)
+        .getByRole("checkbox", { name: "Телемедиа" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+
+    fireEvent.click(close);
+    await waitFor(() => {
+      expect(within(dialog).queryByText("Бриф Телемедиа")).toBeNull();
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Открыть Телемедиа" })
+    );
+    expect(await within(dialog).findByText("Бриф Телемедиа")).toBeTruthy();
+
+    // The tree came once: opening it again asks nothing.
+    expect(
+      invokedWith("connector_browse").filter(
+        (args) =>
+          (args?.parent as { id: string } | null)?.id === "col-telemedia"
+      )
+    ).toHaveLength(1);
+    expect(invokedWith("connector_selection_set")).toEqual([]);
+  });
+
+  it("says a collection did not load and retries it («Повторить»)", async () => {
+    await openSourcesStep();
+    fireEvent.click(
+      within(outlineBlock()).getByRole("button", { name: "Выбрать в Outline" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Документы из Outline",
+    });
+    const open = await within(dialog).findByRole("button", {
+      name: "Открыть Телемедиа",
+    });
+    fake.failures.set("connector_browse", {
+      kind: "External",
+      message: "Outline не ответил",
+    });
+    fireEvent.click(open);
+
+    expect(await within(dialog).findByText("Outline не ответил")).toBeTruthy();
+    fake.failures.delete("connector_browse");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Повторить" }));
+    expect(await within(dialog).findByText("Бриф Телемедиа")).toBeTruthy();
   });
 
   it("leaves a document of a picked collection out, its nested one stays", async () => {

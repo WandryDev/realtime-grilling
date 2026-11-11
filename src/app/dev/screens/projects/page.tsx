@@ -7,7 +7,10 @@ import { PersonScreen } from "@/features/projects/screens/person-screen";
 import { ProjectScreen } from "@/features/projects/screens/project-screen";
 
 import { ScreenFlow, ScreenFrame } from "../_components/screen-frame";
-import { OutlineSourcesStates } from "./_outline-sources";
+import {
+  ClickUpSourcesStates,
+  OutlineSourcesStates,
+} from "./_connector-sources";
 
 export const metadata: Metadata = {
   title: "Grill, проекты",
@@ -31,6 +34,7 @@ const SCREENS = [
   { id: "person-add", title: "15 Добавить" },
   { id: "project-delete", title: "22 Удаление" },
   { id: "outline-sources", title: "23 Outline в источниках" },
+  { id: "clickup-sources", title: "24 ClickUp в источниках" },
 ];
 
 // Screens of the projects flow. Not shipped in the production build.
@@ -207,6 +211,15 @@ export default function ProjectsScreensPage() {
         width={1440}
       >
         <OutlineSourcesStates />
+      </ScreenFrame>
+      <ScreenFrame
+        height="auto"
+        id="clickup-sources"
+        note="Блок ClickUp в «Источниках» мастера и страницы проекта, отдельно от Outline. Задачи ClickUp идут агенту с описанием и последними комментариями; убрать их можно изменением выбора: снять список или исключить задачу (с подзадачами)."
+        title="24 Источники ClickUp — состояния"
+        width={1440}
+      >
+        <ClickUpSourcesStates />
       </ScreenFrame>
     </ScreenFlow>
   );

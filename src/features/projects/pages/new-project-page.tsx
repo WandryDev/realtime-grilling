@@ -34,7 +34,7 @@ import {
   useProjects,
 } from "@/data/projects";
 import { removeProjectSource, useProjectSources } from "@/data/sources";
-import { OutlineSources } from "@/features/connectors/outline-sources-live";
+import { ConnectorSources } from "@/features/connectors/connector-sources-live";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
@@ -549,7 +549,16 @@ export function NewProjectPage() {
           documents={documentsBlock}
           integrations={
             <div className="flex flex-col gap-5">
-              <OutlineSources ensureProject={ensureDraft} projectId={savedId} />
+              <ConnectorSources
+                ensureProject={ensureDraft}
+                kind="outline"
+                projectId={savedId}
+              />
+              <ConnectorSources
+                ensureProject={ensureDraft}
+                kind="clickup"
+                projectId={savedId}
+              />
               <SoonIntegrations />
             </div>
           }

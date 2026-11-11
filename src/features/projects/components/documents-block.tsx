@@ -247,13 +247,12 @@ function DocumentRow({
 
 const SOON: { description: string; kind: SourceKind }[] = [
   { description: "Код", kind: "github" },
-  { description: "Задачи и комментарии", kind: "clickup" },
 ];
 
 /**
- * GitHub and ClickUp until their connectors come: drawn with «скоро»,
- * nothing to pick (project-sources spec, «Коннекторы в мастере и на
- * странице проекта»). Outline has its own block.
+ * GitHub until its connector comes: drawn with «скоро», nothing to pick
+ * (project-sources spec, «Коннекторы в мастере и на странице проекта»).
+ * Outline and ClickUp have their own blocks.
  */
 export function SoonIntegrations({ className }: { className?: string }) {
   return (

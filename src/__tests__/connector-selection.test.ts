@@ -3,10 +3,13 @@ import { describe, expect, it, it as test } from "vitest";
 import type { SelectionItem } from "@/bindings";
 import {
   countDocuments,
+  countSelection,
+  nestedContext,
   type Picked,
   pickedFrom,
   type RowContext,
   rowState,
+  rulesOf,
   type Trees,
   toggle,
   toItems,
@@ -174,4 +177,86 @@ test("a nested document of a picked one can be left out and back in", () => {
   expect(rowState(selection, grandchild, IN_DOCUMENT).checked).toBe(false);
   selection = toggle(selection, grandchild, IN_DOCUMENT, true, trees);
   expect(ids(selection)).toEqual(["document:tm-1"]);
+});
+
+/*
+ * ClickUp (connectors-clickup design.md, decisions 2 and 3): containers
+ * nest, a container left out takes its tasks along, a task left out takes
+ * its subtasks along, a task picked by itself comes anyway.
+ */
+describe("nested containers and ClickUp's excludes", () => {
+  const rules = rulesOf("clickup");
+  const sub = fakeNode("sub", "Подзадача");
+  const parent = fakeNode("parent", "Задача", "document", [sub]);
+  const other = fakeNode("other", "Другая");
+  const listA = {
+    ...fakeNode("list:a", "Список А", "container"),
+    documentCount: 3,
+    hasChildren: true,
+  };
+  const listB = {
+    ...fakeNode("list:b", "Список Б", "container"),
+    documentCount: 4,
+    hasChildren: true,
+  };
+  const folder = fakeNode("folder:f", "Папка", "container", [listA]);
+  const space = {
+    ...fakeNode("space:s", "Пространство", "container"),
+    documentCount: 0,
+    hasChildren: true,
+  };
+  const spaces = [space];
+  const loaded: Trees = new Map([
+    ["space:s", [folder, listB]],
+    ["list:a", [parent, other]],
+  ]);
+
+  it("counts a picked space by its lists, less a list left out", () => {
+    expect(
+      countSelection(
+        picked(item("container", "space:s")),
+        spaces,
+        loaded,
+        rules
+      )
+    ).toEqual({ approximate: false, count: 7 });
+    expect(
+      countSelection(
+        picked(item("container", "space:s"), item("exclude", "list:b")),
+        spaces,
+        loaded,
+        rules
+      ).count
+    ).toBe(3);
+  });
+
+  it("is approximate while a picked space is not loaded", () => {
+    expect(
+      countSelection(picked(item("container", "space:s")), spaces, new Map())
+    ).toEqual({ approximate: true, count: 0 });
+  });
+
+  it("leaves a task out with its subtasks", () => {
+    const selection = picked(
+      item("container", "list:a"),
+      item("exclude", "parent")
+    );
+    expect(countSelection(selection, spaces, loaded, rules).count).toBe(1);
+    expect(
+      rowState(selection, sub, nestedContext(IN_CONTAINER, false, rules))
+        .checked
+    ).toBe(false);
+  });
+
+  it("checks a list inside a picked space and leaves it out on uncheck", () => {
+    const selection = toggle(
+      picked(item("container", "space:s")),
+      listB,
+      IN_CONTAINER,
+      false,
+      loaded
+    );
+    expect(ids(selection)).toEqual(["container:space:s", "exclude:list:b"]);
+    expect(ids(toggle(selection, space, TOP, false, loaded))).toEqual([]);
+  });
 });
