@@ -275,24 +275,30 @@ describe("questions in Tauri", () => {
     await call.findByRole("group", { name: AMO });
 
     fireEvent.click(
-      within(overlay.getByRole("group", { name: AMO })).getByRole("button", {
-        name: "Скрыть вопрос",
-      })
+      within(await overlay.findByRole("group", { name: AMO })).getByRole(
+        "button",
+        { name: "Скрыть вопрос" }
+      )
     );
 
-    await waitFor(() =>
-      expect(call.queryByRole("group", { name: AMO })).toBeNull()
-    );
+    // Each window re-reads on the event on its own: wait for both, not
+    // for one and then assume the other.
+    await waitFor(() => {
+      expect(call.queryByRole("group", { name: AMO })).toBeNull();
+      expect(overlay.queryByRole("group", { name: AMO })).toBeNull();
+    });
     expect(invokedWith("questions_act")).toEqual([
       { action: "hide", id: "q-amo" },
     ]);
-    expect(overlay.queryByRole("group", { name: AMO })).toBeNull();
     // In the topic's history, with «Вернуть»
-    const entry = call.getByText(AMO).closest("li");
-    if (!entry) {
-      throw new Error("The hidden question is not in the topic history");
-    }
-    expect(within(entry).getByText("Вы скрыли")).toBeTruthy();
+    const entry = await waitFor(() => {
+      const found = call.getByText(AMO).closest("li");
+      if (!found) {
+        throw new Error("The hidden question is not in the topic history");
+      }
+      expect(within(found).getByText("Вы скрыли")).toBeTruthy();
+      return found;
+    });
 
     fireEvent.click(within(entry).getByRole("button", { name: "Вернуть" }));
     await waitFor(() =>
