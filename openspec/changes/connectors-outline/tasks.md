@@ -30,7 +30,7 @@
 
 ## 5. Проверка и выпуск
 
-- [ ] 5.1 Прогнать `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate connectors-outline --strict` проходит.
+- [x] 5.1 Прогнать `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate connectors-outline --strict` проходит.
 - [ ] 5.2 Ручной прогон в подписанном debug-бандле с настоящим Outline:
   - подключение по ключу, ключ в Keychain и не в базе;
   - выбор коллекции в мастере, бриф по документам Outline;
@@ -39,4 +39,4 @@
   - отключение и повторное подключение.
 
   Проверка: сценарии `connectors` и `outline-connector` выполняются; ответ на открытый вопрос design.md (есть ли `text` в `documents.list`) записан.
-- [ ] 5.3 Changeset (`minor`) о подключении Outline и документах Outline в проектах; отметить подзадачу в ClickUp. Проверка: `.changeset/connectors-outline.md` есть; чеклист обновлён (если коннектор ClickUp авторизован).
+- [x] 5.3 Changeset (`minor`) о подключении Outline и документах Outline в проектах; отметить подзадачу в ClickUp. Проверка: `.changeset/connectors-outline.md` есть; чеклист обновлён (если коннектор ClickUp авторизован).
