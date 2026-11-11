@@ -21,6 +21,8 @@
 //! one ([`SyncFlights`]); [`sync_fresh`] (after the selection changed)
 //! waits for it and starts a new one. The sync runs in its own task: a
 //! caller that stops waiting (the 30 s before a call) leaves it running.
+//! Disconnecting the connector cancels its syncs ([`SyncFlights::cancel`]):
+//! whatever they wait for (ClickUp's rate limit) ends with them.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -28,7 +30,7 @@ use std::{
 };
 
 use tauri::{AppHandle, Manager, Runtime};
-use tokio::sync::watch;
+use tokio::{sync::watch, task::AbortHandle};
 
 use super::{
     ConnectorError, ConnectorKind, Connectors, DocText, ErrorKind, MAX_DOCUMENTS, RemoteDoc,
@@ -89,19 +91,35 @@ pub type SyncResult = Result<SyncOutcome, CommandError>;
 
 type Key = (String, ConnectorKind);
 
+/// A running sync: its result to wait for and its task to cancel.
+struct Running {
+    result: watch::Receiver<Option<SyncResult>>,
+    task: AbortHandle,
+}
+
 /// The running syncs.
 #[derive(Default)]
-pub struct SyncFlights(Mutex<HashMap<Key, watch::Receiver<Option<SyncResult>>>>);
+pub struct SyncFlights(Mutex<HashMap<Key, Running>>);
 
 impl SyncFlights {
-    fn state(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<Key, watch::Receiver<Option<SyncResult>>>> {
+    fn state(&self) -> std::sync::MutexGuard<'_, HashMap<Key, Running>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn is_running(&self, project_id: &str, kind: ConnectorKind) -> bool {
         self.state().contains_key(&(project_id.to_owned(), kind))
+    }
+
+    /// Cancels the connector's running syncs (it was disconnected): their
+    /// tasks stop wherever they wait, change nothing more, and the callers
+    /// waiting for them get an error. The place of each is freed when its
+    /// task is gone, so a new sync never starts beside a cancelled one.
+    pub fn cancel(&self, kind: ConnectorKind) {
+        for (key, running) in self.state().iter() {
+            if key.1 == kind {
+                running.task.abort();
+            }
+        }
     }
 }
 
@@ -114,10 +132,15 @@ async fn wait(mut receiver: watch::Receiver<Option<SyncResult>>) -> SyncResult {
 
 /// Runs `future` on the current Tokio runtime, else on Tauri's.
 pub(crate) fn spawn_detached(future: impl Future<Output = ()> + Send + 'static) {
+    spawn_abortable(future);
+}
+
+/// [`spawn_detached`], with a handle to cancel the task.
+fn spawn_abortable(future: impl Future<Output = ()> + Send + 'static) -> AbortHandle {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(future);
+        handle.spawn(future).abort_handle()
     } else {
-        tauri::async_runtime::spawn(future);
+        tauri::async_runtime::spawn(future).inner().abort_handle()
     }
 }
 
@@ -168,19 +191,27 @@ pub async fn sync_project<H: ConnectorHost>(
     let receiver = {
         let mut flights = connectors.flights.state();
         if let Some(running) = flights.get(&key) {
-            running.clone()
+            running.result.clone()
         } else {
             let (sender, receiver) = watch::channel(None);
-            flights.insert(key.clone(), receiver.clone());
             let flight = Flight {
                 host: Arc::clone(host),
-                key,
+                key: key.clone(),
                 sender: Some(sender),
             };
-            spawn_detached(async move {
+            // Spawned under the lock: the task can't leave its place
+            // before the place has its handle.
+            let task = spawn_abortable(async move {
                 let result = run(flight.host.as_ref(), &flight.key.0, flight.key.1).await;
                 flight.finish(result);
             });
+            flights.insert(
+                key,
+                Running {
+                    result: receiver.clone(),
+                    task,
+                },
+            );
             receiver
         }
     };
@@ -199,7 +230,7 @@ pub async fn sync_fresh<H: ConnectorHost>(
         .flights
         .state()
         .get(&(project_id.to_owned(), kind))
-        .cloned();
+        .map(|running| running.result.clone());
     if let Some(running) = running {
         let _ = wait(running).await;
     }
@@ -275,6 +306,7 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
     let session = Session {
         host: connection.account.host.clone(),
         credential,
+        team: Some(connection.account.team_id.clone()),
     };
     // A selection made with another team of the service stays as it is:
     // `unavailable`, and nothing is removed until the manager decides.

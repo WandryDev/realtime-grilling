@@ -83,7 +83,9 @@ export class Connectors extends Context.Service<
     browse: (kind, parent) =>
       call(() => commands.connectorBrowse(kind, parent)),
     connectApiKey: (kind, host, key) =>
-      call(() => commands.connectorConnectApiKey(kind, host, key)),
+      // No workspace yet: picking one (`chooseWorkspace`) comes with the
+      // ClickUp screens (connectors-clickup, task 3.1).
+      call(() => commands.connectorConnectApiKey(kind, host, key, null)),
     disconnect: (kind) =>
       Effect.asVoid(call(() => commands.connectorDisconnect(kind))),
     list: call(() => commands.connectorsList()),

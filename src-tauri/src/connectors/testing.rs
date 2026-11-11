@@ -510,6 +510,7 @@ impl Host {
             ConnectorKind::Outline,
             host,
             key,
+            None,
         ))
         .unwrap()
     }

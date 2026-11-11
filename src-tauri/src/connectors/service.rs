@@ -14,7 +14,8 @@ use specta::Type;
 
 use super::{
     Account, AuthMethod, BrowseNode, Capability, ConnectorError, ConnectorKind, Credential,
-    ErrorKind, ExternalRef, MAX_DOCUMENTS, SelectionItem, SelectionItemKind, Session,
+    ErrorKind, ExternalRef, MAX_DOCUMENTS, SelectionItem, SelectionItemKind, Session, Verified,
+    Workspace,
     outline::address,
     secrets::SecretError,
     sync::{self, ConnectorHost, failure_message, parts, secret_failure},
@@ -104,8 +105,8 @@ pub enum RejectedField {
     Key,
 }
 
-/// `connector_connect_api_key`: connected, or refused with what to show at
-/// which field (nothing was saved).
+/// `connector_connect_api_key`: connected, refused with what to show at
+/// which field, or a workspace to pick first (nothing was saved in either).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ConnectOutcome {
@@ -113,6 +114,12 @@ pub enum ConnectOutcome {
     Rejected {
         field: RejectedField,
         reason: String,
+    },
+    /// The key opens several workspaces (ClickUp): call again with the same
+    /// key and the picked one's id (connectors-clickup design.md, decision
+    /// 1).
+    ChooseWorkspace {
+        workspaces: Vec<Workspace>,
     },
 }
 
@@ -173,6 +180,33 @@ fn available(kind: ConnectorKind) -> CommandResult<()> {
 
 /* Connect and disconnect */
 
+/// What a refusal of the key says: Outline has a key, ClickUp a token.
+struct KeyWords {
+    empty: &'static str,
+    refused: &'static str,
+    forbidden: &'static str,
+    other_workspace: &'static str,
+}
+
+impl KeyWords {
+    fn of(kind: ConnectorKind) -> Self {
+        match kind {
+            ConnectorKind::ClickUp => Self {
+                empty: "Введите токен",
+                refused: "Токен не подошёл",
+                forbidden: "У токена нет доступа",
+                other_workspace: "Токен не открывает это пространство",
+            },
+            ConnectorKind::Outline | ConnectorKind::GitHub => Self {
+                empty: "Введите ключ",
+                refused: "Ключ не подошёл",
+                forbidden: "У ключа нет доступа",
+                other_workspace: "Ключ не открывает это пространство",
+            },
+        }
+    }
+}
+
 fn rejected(field: RejectedField, reason: impl Into<String>) -> ConnectOutcome {
     ConnectOutcome::Rejected {
         field,
@@ -180,12 +214,16 @@ fn rejected(field: RejectedField, reason: impl Into<String>) -> ConnectOutcome {
     }
 }
 
-/// Connects (or reconnects) a connector that signs in with a key.
+/// Connects (or reconnects) a connector that signs in with a key. A key
+/// that opens several workspaces connects only with `workspace`, one of
+/// them: without it the answer is [`ConnectOutcome::ChooseWorkspace`] and
+/// nothing is saved.
 pub async fn connect_api_key<H: ConnectorHost>(
     host: &Arc<H>,
     kind: ConnectorKind,
     address: &str,
     key: &str,
+    workspace: Option<&str>,
 ) -> CommandResult<ConnectOutcome> {
     available(kind)?;
     let (storage, connectors) = parts(host.as_ref())?;
@@ -195,6 +233,7 @@ pub async fn connect_api_key<H: ConnectorHost>(
             kind.label()
         )));
     };
+    let words = KeyWords::of(kind);
     let origin = if needs_host {
         match address::normalize(address) {
             Ok(origin) => Some(origin),
@@ -205,8 +244,9 @@ pub async fn connect_api_key<H: ConnectorHost>(
     };
     let key = key.trim();
     if key.is_empty() {
-        return Ok(rejected(RejectedField::Key, "Введите ключ"));
+        return Ok(rejected(RejectedField::Key, words.empty));
     }
+    let workspace = workspace.map(str::trim).filter(|id| !id.is_empty());
     let provider = connectors
         .provider(kind)
         .ok_or_else(|| CommandError::invalid(format!("{} пока нельзя подключить", kind.label())))?;
@@ -215,17 +255,36 @@ pub async fn connect_api_key<H: ConnectorHost>(
         credential: Credential::ApiKey {
             key: key.to_owned(),
         },
+        team: workspace.map(str::to_owned),
     };
-    let account = match provider.verify(&session).await {
-        Ok(account) => account,
+    // A service without an address has only the key's field to show a
+    // failure at.
+    let failure_field = if needs_host {
+        RejectedField::Host
+    } else {
+        RejectedField::Key
+    };
+    let account = match provider.verify_in(&session, workspace).await {
+        Ok(Verified::Account(account)) => match workspace {
+            Some(id) if id != account.team_id => {
+                return Ok(rejected(RejectedField::Key, words.other_workspace));
+            }
+            _ => account,
+        },
+        Ok(Verified::Choose(_)) if workspace.is_some() => {
+            return Ok(rejected(RejectedField::Key, words.other_workspace));
+        }
+        Ok(Verified::Choose(workspaces)) => {
+            return Ok(ConnectOutcome::ChooseWorkspace { workspaces });
+        }
         Err(ConnectorError::Unauthorized) => {
-            return Ok(rejected(RejectedField::Key, "Ключ не подошёл"));
+            return Ok(rejected(RejectedField::Key, words.refused));
         }
         Err(ConnectorError::Forbidden) => {
-            return Ok(rejected(RejectedField::Key, "У ключа нет доступа"));
+            return Ok(rejected(RejectedField::Key, words.forbidden));
         }
         Err(error) => {
-            return Ok(rejected(RejectedField::Host, failure_message(kind, &error)));
+            return Ok(rejected(failure_field, failure_message(kind, &error)));
         }
     };
 
@@ -302,9 +361,11 @@ fn resync_selections<H: ConnectorHost>(host: &Arc<H>, kind: ConnectorKind) {
 }
 
 /// Removes the secret, then the connection. The projects' selections and
-/// sources stay with their last text.
+/// sources stay with their last text; a sync of the connector that runs is
+/// cancelled (it may be waiting for ClickUp's rate limit).
 pub async fn disconnect<H: ConnectorHost>(host: &H, kind: ConnectorKind) -> CommandResult<()> {
     let (storage, connectors) = parts(host)?;
+    connectors.flights.cancel(kind);
     connectors.secrets.delete(kind).map_err(|error| {
         CommandError::external(format!("Не удалось удалить ключ из Keychain: {error}"))
     })?;
@@ -331,6 +392,7 @@ async fn session_of<H: ConnectorHost>(
     let session = connectors.secrets.get(kind).map(|credential| Session {
         host: connection.account.host.clone(),
         credential,
+        team: Some(connection.account.team_id.clone()),
     });
     Ok((connection, session))
 }

@@ -254,8 +254,10 @@ pub async fn connectors_list(app: AppHandle) -> CommandResult<Vec<ConnectorView>
 /// Checks the address and the key with the service, then saves the key in
 /// Keychain / Credential Manager and the connection (also to replace the
 /// key of a connected or broken one). A refusal is `rejected` with the
-/// field it belongs to, and nothing is saved. `External` when the OS store
-/// refused the key; `Invalid` for a connector that is «скоро».
+/// field it belongs to, and nothing is saved. A key that opens several
+/// workspaces (ClickUp) answers `chooseWorkspace`, nothing saved: call
+/// again with the same key and the picked `workspace`. `External` when the
+/// OS store refused the key; `Invalid` for a connector that is «скоро».
 #[tauri::command]
 #[specta::specta]
 pub async fn connector_connect_api_key(
@@ -263,8 +265,10 @@ pub async fn connector_connect_api_key(
     kind: ConnectorKind,
     host: String,
     key: String,
+    workspace: Option<String>,
 ) -> CommandResult<ConnectOutcome> {
-    connector_service::connect_api_key(&Arc::new(app), kind, &host, &key).await
+    connector_service::connect_api_key(&Arc::new(app), kind, &host, &key, workspace.as_deref())
+        .await
 }
 
 /// Removes the key from the OS store and the connection. The projects'

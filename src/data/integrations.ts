@@ -293,6 +293,15 @@ export async function connectWithKey(
       ok: false,
     };
   }
+  if (!outcome.connected) {
+    // `chooseWorkspace`: picking a workspace comes with the ClickUp screens
+    // (connectors-clickup, task 3.2); nothing was saved.
+    return {
+      field: "key",
+      message: "Токен открывает несколько пространств",
+      ok: false,
+    };
+  }
   await rereadAfterConnect();
   return { ok: true, state: toIntegration(service, outcome.connected) };
 }

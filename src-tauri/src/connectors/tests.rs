@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use super::{
     Account, AuthMethod, BoxFuture, BrowseNode, Capability, Connector, ConnectorError,
     ConnectorKind, Credential, DESCRIPTORS, Descriptor, DocText, ErrorKind, ExternalRef, RemoteDoc,
-    Resolved, SelectionItem, Session, SourceProvider,
+    Resolved, SelectionItem, Session, SourceProvider, Verified, Workspace,
     secrets::SecretStore as _,
     service::{self, ConnectOutcome, ConnectorStatus, RejectedField},
     sync::{self, SyncOutcome},
@@ -97,7 +97,7 @@ fn the_catalog_without_connections() {
     );
     // «скоро» can't be connected.
     for kind in [ConnectorKind::GitHub, ConnectorKind::ClickUp] {
-        let error = block_on(service::connect_api_key(&host, kind, "x", "y")).unwrap_err();
+        let error = block_on(service::connect_api_key(&host, kind, "x", "y", None)).unwrap_err();
         assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
     }
 }
@@ -270,6 +270,7 @@ fn a_refused_store_write_connects_nothing() {
         ConnectorKind::Outline,
         &fake.origin,
         KEY,
+        None,
     ))
     .unwrap_err();
     let CommandError::External { message, .. } = &error else {
@@ -297,6 +298,7 @@ fn a_failed_row_write_rolls_the_secret_back() {
         ConnectorKind::Outline,
         &fake.origin,
         KEY,
+        None,
     ));
     assert!(error.is_err());
     assert!(host.secrets.raw().is_empty(), "the new key is gone");
@@ -311,7 +313,8 @@ fn a_failed_row_write_rolls_the_secret_back() {
             &host,
             ConnectorKind::Outline,
             &fake.origin,
-            KEY
+            KEY,
+            None,
         ))
         .is_err()
     );
@@ -1373,6 +1376,7 @@ fn a_connect_that_cannot_read_the_old_key_writes_nothing() {
         ConnectorKind::Outline,
         &fake.origin,
         KEY,
+        None,
     ))
     .unwrap_err();
     assert!(error.to_string().contains("Keychain"), "{error}");
@@ -1598,4 +1602,251 @@ async fn prepare_lets_every_connector_sync_after_30_seconds() {
         Some(ErrorKind::Disconnected)
     );
     builds.cancel(&project);
+}
+
+/* Workspaces and nested containers (connectors-clickup, tasks 1.1–1.2) */
+
+/// A service whose key opens two workspaces (registered as Outline: the
+/// service's logic is the same for every connector that signs in with a
+/// key).
+struct TwoWorkspaces;
+
+fn two_workspaces() -> Vec<Workspace> {
+    vec![
+        Workspace {
+            id: "w-pixel".to_owned(),
+            name: "Pixel Agency".to_owned(),
+        },
+        Workspace {
+            id: "w-own".to_owned(),
+            name: "Личное".to_owned(),
+        },
+    ]
+}
+
+impl Connector for TwoWorkspaces {
+    fn descriptor(&self) -> &'static Descriptor {
+        ConnectorKind::Outline.descriptor()
+    }
+
+    fn verify<'a>(&'a self, _: &'a Session) -> BoxFuture<'a, Result<Account, ConnectorError>> {
+        Box::pin(async { Err(ConnectorError::Other("не тот вызов".to_owned())) })
+    }
+
+    fn verify_in<'a>(
+        &'a self,
+        session: &'a Session,
+        workspace: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Verified, ConnectorError>> {
+        Box::pin(async move {
+            if session.credential
+                != (Credential::ApiKey {
+                    key: KEY.to_owned(),
+                })
+            {
+                return Err(ConnectorError::Unauthorized);
+            }
+            let all = two_workspaces();
+            Ok(
+                match all.iter().find(|w| Some(w.id.as_str()) == workspace) {
+                    Some(picked) => Verified::Account(Account {
+                        host: session.host.clone(),
+                        team_id: picked.id.clone(),
+                        team_name: picked.name.clone(),
+                        user_name: Some("Дима".to_owned()),
+                    }),
+                    None => Verified::Choose(all),
+                },
+            )
+        })
+    }
+}
+
+impl SourceProvider for TwoWorkspaces {
+    fn browse<'a>(
+        &'a self,
+        _: &'a Session,
+        _: Option<&'a ExternalRef>,
+    ) -> BoxFuture<'a, Result<Vec<BrowseNode>, ConnectorError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        _: &'a Session,
+        _: &'a [SelectionItem],
+    ) -> BoxFuture<'a, Result<Resolved, ConnectorError>> {
+        Box::pin(async { Ok(Resolved::default()) })
+    }
+
+    fn fetch<'a>(
+        &'a self,
+        _: &'a Session,
+        _: &'a [RemoteDoc],
+    ) -> BoxFuture<'a, Result<Vec<DocText>, ConnectorError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+fn connect_in(host: &Arc<Host>, workspace: Option<&str>) -> ConnectOutcome {
+    block_on(service::connect_api_key(
+        host,
+        ConnectorKind::Outline,
+        "https://docs.example.com",
+        KEY,
+        workspace,
+    ))
+    .unwrap()
+}
+
+/// `clickup-connector`, «Несколько пространств»: nothing is saved until one
+/// is picked, then the connection is the picked one's.
+#[test]
+fn a_key_of_several_workspaces_connects_only_after_a_pick() {
+    let host = Host::with(Arc::new(TwoWorkspaces));
+    let outcome = connect_in(&host, None);
+    assert_eq!(
+        outcome,
+        ConnectOutcome::ChooseWorkspace {
+            workspaces: two_workspaces()
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&outcome).unwrap(),
+        json!({ "chooseWorkspace": { "workspaces": [
+            { "id": "w-pixel", "name": "Pixel Agency" },
+            { "id": "w-own", "name": "Личное" },
+        ] } })
+    );
+    assert!(host.secrets.raw().is_empty(), "no secret before the pick");
+    assert!(connections(&host).is_empty(), "no row before the pick");
+    assert!(host.events().is_empty());
+
+    let ConnectOutcome::Connected(view) = connect_in(&host, Some("w-own")) else {
+        panic!("connects to the picked one");
+    };
+    let account = view.account.unwrap();
+    assert_eq!(
+        (account.team_id.as_str(), account.team_name.as_str()),
+        ("w-own", "Личное")
+    );
+    assert_eq!(connections(&host)[0].account.team_id, "w-own");
+    assert_eq!(
+        host.secrets.get(ConnectorKind::Outline).unwrap(),
+        Credential::ApiKey {
+            key: KEY.to_owned()
+        }
+    );
+}
+
+/// A workspace the key doesn't open is refused at the key, nothing saved.
+#[test]
+fn a_workspace_the_key_does_not_open_is_refused() {
+    let host = Host::with(Arc::new(TwoWorkspaces));
+    assert_eq!(
+        connect_in(&host, Some("w-stranger")),
+        ConnectOutcome::Rejected {
+            field: RejectedField::Key,
+            reason: "Ключ не открывает это пространство".to_owned()
+        }
+    );
+    assert!(host.secrets.raw().is_empty());
+    assert!(connections(&host).is_empty());
+}
+
+/// Outline has one team per key: `verify_in` is its `verify`, and a
+/// workspace given is checked against that team.
+#[test]
+fn outline_connects_as_before_with_or_without_a_workspace() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    let connect = |workspace| {
+        block_on(service::connect_api_key(
+            &host,
+            ConnectorKind::Outline,
+            &fake.origin,
+            KEY,
+            workspace,
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        connect(Some("team-other")),
+        ConnectOutcome::Rejected {
+            field: RejectedField::Key,
+            reason: "Ключ не открывает это пространство".to_owned()
+        }
+    );
+    assert!(connections(&host).is_empty());
+    assert!(matches!(connect(Some(TEAM)), ConnectOutcome::Connected(_)));
+    assert!(matches!(connect(None), ConnectOutcome::Connected(_)));
+    assert_eq!(fake.state().requests("auth.info"), 3);
+}
+
+/// Task 1.2: a container left out of a picked container (a list in a
+/// picked space) is stored and given back like a left-out document; the
+/// ids are the connector's, opaque here.
+#[test]
+fn an_excluded_container_is_stored_like_an_excluded_document() {
+    let host = Host::with(Arc::new(TwoWorkspaces));
+    connect_in(&host, Some("w-pixel"));
+    let project = host.project("Телемедиа");
+    let items = vec![
+        collection("space:90"),
+        exclude("list:901"),
+        exclude("task-7"),
+        document("task-9"),
+    ];
+    block_on(service::selection_set(
+        host.as_ref(),
+        &project,
+        ConnectorKind::Outline,
+        items.clone(),
+    ))
+    .unwrap();
+    let view = selection_view(&host, &project);
+    let stored: Vec<SelectionItem> = view
+        .items
+        .iter()
+        .map(|item| SelectionItem {
+            item_kind: item.item_kind,
+            external_id: item.external_id.clone(),
+            title: item.title.clone(),
+            url: item.url.clone(),
+        })
+        .collect();
+    assert_eq!(stored, items);
+    assert!(view.items.iter().all(|item| !item.other_account));
+    assert!(view.items.iter().all(|item| item.status == ItemStatus::Ok));
+}
+
+/// Disconnecting cancels a sync that waits (for ClickUp's rate limit):
+/// its callers get an error at once and the place is free again.
+#[tokio::test(start_paused = true)]
+async fn disconnecting_cancels_a_running_sync() {
+    let slow = Scripted::new(false, Duration::from_secs(3600));
+    let host = Host::with(Arc::clone(&slow) as Arc<dyn SourceProvider>);
+    let project = seeded(&host).await;
+    let waiting = {
+        let (host, project) = (Arc::clone(&host), project.clone());
+        tokio::spawn(
+            async move { sync::sync_project(&host, &project, ConnectorKind::Outline).await },
+        )
+    };
+    while !slow.entered.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    let started = tokio::time::Instant::now();
+    service::disconnect(host.as_ref(), ConnectorKind::Outline)
+        .await
+        .unwrap();
+    let result = waiting.await.unwrap();
+    assert!(result.is_err(), "{result:?}");
+    assert!(tokio::time::Instant::now() - started < Duration::from_secs(60));
+    assert!(
+        !host
+            .connectors
+            .flights
+            .is_running(&project, ConnectorKind::Outline)
+    );
 }

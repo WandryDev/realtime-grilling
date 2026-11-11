@@ -22,6 +22,7 @@ fn session(fake: &FakeOutline) -> Session {
         credential: Credential::ApiKey {
             key: KEY.to_owned(),
         },
+        team: Some(TEAM.to_owned()),
     }
 }
 

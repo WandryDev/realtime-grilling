@@ -64,10 +64,12 @@ export const commands = {
 	 *  Checks the address and the key with the service, then saves the key in
 	 *  Keychain / Credential Manager and the connection (also to replace the
 	 *  key of a connected or broken one). A refusal is `rejected` with the
-	 *  field it belongs to, and nothing is saved. `External` when the OS store
-	 *  refused the key; `Invalid` for a connector that is «скоро».
+	 *  field it belongs to, and nothing is saved. A key that opens several
+	 *  workspaces (ClickUp) answers `chooseWorkspace`, nothing saved: call
+	 *  again with the same key and the picked `workspace`. `External` when the
+	 *  OS store refused the key; `Invalid` for a connector that is «скоро».
 	 */
-	connectorConnectApiKey: (kind: ConnectorKind, host: string, key: string) => typedError<ConnectOutcome, CommandError>(__TAURI_INVOKE("connector_connect_api_key", { kind, host, key })),
+	connectorConnectApiKey: (kind: ConnectorKind, host: string, key: string, workspace: string | null) => typedError<ConnectOutcome, CommandError>(__TAURI_INVOKE("connector_connect_api_key", { kind, host, key, workspace })),
 	/**
 	 *  Removes the key from the OS store and the connection. The projects'
 	 *  selections and sources stay with their last text.
@@ -617,8 +619,9 @@ export type AudioSource =
 "system";
 
 /**
- *  How a connector signs in. Only `apiKey` works in this change; the other
- *  two describe GitHub and ClickUp (design.md, decision 1).
+ *  How a connector signs in. Only `apiKey` works so far (Outline with an
+ *  address, ClickUp without one); the other two are for the connectors to
+ *  come.
  */
 export type AuthMethod = 
 /**  An address (when `host`) and an API key. */
@@ -719,15 +722,21 @@ export type BrowseNode = {
 	title: string,
 	/**  The node in the service, to open in the browser. */
 	url: string | null,
+	/**
+	 *  Something to expand: `connector_browse` with this node as the parent
+	 *  gives it unless `children` already has it.
+	 */
 	hasChildren: boolean,
 	/**
 	 *  Documents it brings into a project: a collection's all, a document
-	 *  with its nested ones.
+	 *  with its nested ones. Approximate for a container the service counts
+	 *  roughly, 0 for one it counts only when expanded (a ClickUp space).
 	 */
 	documentCount: number,
 	/**
-	 *  Nested documents, when the service gave them with the node (Outline
-	 *  gives a collection's whole tree at once); empty for a collection.
+	 *  What is inside, when the service gave it with the node (Outline gives
+	 *  a collection's whole tree at once, ClickUp a folder's lists): nested
+	 *  documents or containers. Empty otherwise.
 	 */
 	children: BrowseNode[],
 };
@@ -1190,13 +1199,21 @@ export type CommandError =
 { kind: "External"; message: string; reason?: CaptureFailure | null };
 
 /**
- *  `connector_connect_api_key`: connected, or refused with what to show at
- *  which field (nothing was saved).
+ *  `connector_connect_api_key`: connected, refused with what to show at
+ *  which field, or a workspace to pick first (nothing was saved in either).
  */
-export type ConnectOutcome = ({ connected: ConnectorView }) & { rejected?: never } | ({ rejected: {
+export type ConnectOutcome = ({ connected: ConnectorView }) & { chooseWorkspace?: never; rejected?: never } | ({ rejected: {
 	field: RejectedField,
 	reason: string,
-} }) & { connected?: never };
+} }) & { chooseWorkspace?: never; connected?: never } | 
+/**
+ *  The key opens several workspaces (ClickUp): call again with the same
+ *  key and the picked one's id (connectors-clickup design.md, decision
+ *  1).
+ */
+({ chooseWorkspace: {
+	workspaces: Workspace[],
+} }) & { connected?: never; rejected?: never };
 
 /**  The services the app knows; one connection per service. */
 export type ConnectorKind = "outline" | "github" | "clickup";
@@ -1311,7 +1328,11 @@ export type EvidenceSource =
 /**  The project: its description `P1` or a brief item `B1…Bn`. */
 "project";
 
-/**  A container or a document in the service. */
+/**
+ *  A container or a document in the service. The id is the connector's
+ *  own and opaque to the callers: containers may nest (a ClickUp space, its
+ *  folders, their lists), and the connector tells them apart by it.
+ */
 export type ExternalRef = {
 	id: string,
 	kind: RefKind,
@@ -1761,7 +1782,11 @@ export type RecordingStatus = {
 
 /**  What a node of the picker is. */
 export type RefKind = 
-/**  An Outline collection: all its documents, later ones too. */
+/**
+ *  A container: all its documents, later ones too (an Outline
+ *  collection; a ClickUp space, folder or list). It may hold other
+ *  containers.
+ */
 "container" | 
 /**  A document with its nested ones. */
 "document";
@@ -1828,7 +1853,7 @@ export type SelectionItemKind =
 "container" | 
 /**  A document with its nested ones. */
 "document" | 
-/**  A document of a selected container left out. */
+/**  A document or a container inside a selected container left out. */
 "exclude";
 
 /**  A selection item with its state. */
@@ -2222,6 +2247,15 @@ export type Value = null | boolean | number | string | Value[] | { [key in strin
 
 /**  A window a screen can hand over to. */
 export type WindowLabel = "main" | "widget" | "overlay";
+
+/**
+ *  A workspace a secret opens, to pick one when it opens several
+ *  (connectors-clickup design.md, decision 1).
+ */
+export type Workspace = {
+	id: string,
+	name: string,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

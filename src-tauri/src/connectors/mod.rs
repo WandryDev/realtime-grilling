@@ -80,8 +80,9 @@ impl ConnectorKind {
     }
 }
 
-/// How a connector signs in. Only `apiKey` works in this change; the other
-/// two describe GitHub and ClickUp (design.md, decision 1).
+/// How a connector signs in. Only `apiKey` works so far (Outline with an
+/// address, ClickUp without one); the other two are for the connectors to
+/// come.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AuthMethod {
@@ -184,14 +185,38 @@ pub fn mask(secret: &str) -> String {
     format!("***{tail}")
 }
 
-/// What a connector talks to: the service's address (Outline) and the
-/// secret.
+/// What a connector talks to: the service's address (Outline), the secret
+/// and the workspace of the connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     /// The normalized origin (`https://wandry.getoutline.com`); `None` for a
     /// service with one address.
     pub host: Option<String>,
     pub credential: Credential,
+    /// The connected workspace ([`Account::team_id`]): a service whose
+    /// secret opens several (ClickUp) works only in this one. `None` while
+    /// connecting.
+    pub team: Option<String>,
+}
+
+/// A workspace a secret opens, to pick one when it opens several
+/// (connectors-clickup design.md, decision 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+}
+
+/// What a sign-in check found: the account, or the workspaces to pick from
+/// first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verified {
+    Account(Account),
+    /// The secret opens several workspaces and none was picked (or the
+    /// picked one is not among them).
+    #[allow(dead_code, reason = "the ClickUp connector answers it (task 2.3)")]
+    Choose(Vec<Workspace>),
 }
 
 /// Who the secret belongs to, as the service says. Stored with the
@@ -287,13 +312,17 @@ impl ErrorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RefKind {
-    /// An Outline collection: all its documents, later ones too.
+    /// A container: all its documents, later ones too (an Outline
+    /// collection; a ClickUp space, folder or list). It may hold other
+    /// containers.
     Container,
     /// A document with its nested ones.
     Document,
 }
 
-/// A container or a document in the service.
+/// A container or a document in the service. The id is the connector's
+/// own and opaque to the callers: containers may nest (a ClickUp space, its
+/// folders, their lists), and the connector tells them apart by it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalRef {
@@ -310,12 +339,16 @@ pub struct BrowseNode {
     pub title: String,
     /// The node in the service, to open in the browser.
     pub url: Option<String>,
+    /// Something to expand: `connector_browse` with this node as the parent
+    /// gives it unless `children` already has it.
     pub has_children: bool,
     /// Documents it brings into a project: a collection's all, a document
-    /// with its nested ones.
+    /// with its nested ones. Approximate for a container the service counts
+    /// roughly, 0 for one it counts only when expanded (a ClickUp space).
     pub document_count: u32,
-    /// Nested documents, when the service gave them with the node (Outline
-    /// gives a collection's whole tree at once); empty for a collection.
+    /// What is inside, when the service gave it with the node (Outline gives
+    /// a collection's whole tree at once, ClickUp a folder's lists): nested
+    /// documents or containers. Empty otherwise.
     pub children: Vec<BrowseNode>,
 }
 
@@ -327,7 +360,7 @@ pub enum SelectionItemKind {
     Container,
     /// A document with its nested ones.
     Document,
-    /// A document of a selected container left out.
+    /// A document or a container inside a selected container left out.
     Exclude,
 }
 
@@ -367,8 +400,8 @@ pub struct RemoteDoc {
     pub url: Option<String>,
     /// Changes whenever the document does (Outline: `updatedAt`).
     pub version: String,
-    /// The text, when the listing already gave it: `fetch` then needs no
-    /// request.
+    /// What the listing already gave of the text, for `fetch`: Outline's
+    /// whole text (no request then), ClickUp's task without its comments.
     pub prefetched: Option<String>,
 }
 
@@ -393,9 +426,23 @@ pub struct DocText {
 pub trait Connector: Send + Sync {
     fn descriptor(&self) -> &'static Descriptor;
 
-    /// Checks the secret with one request; the account it belongs to.
+    /// Checks the secret with one request; the account it belongs to (the
+    /// workspace of `session.team` for a service with several).
     fn verify<'a>(&'a self, session: &'a Session)
     -> BoxFuture<'a, Result<Account, ConnectorError>>;
+
+    /// Checks the secret when connecting: the account in `workspace`, or the
+    /// workspaces to pick from when the secret opens several and none (or
+    /// one it doesn't open) is given. A service with one workspace per
+    /// secret answers [`Self::verify`]'s account.
+    fn verify_in<'a>(
+        &'a self,
+        session: &'a Session,
+        workspace: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Verified, ConnectorError>> {
+        let _ = workspace;
+        Box::pin(async move { self.verify(session).await.map(Verified::Account) })
+    }
 }
 
 /// `Capability::ProjectSources`.
