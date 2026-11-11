@@ -55,7 +55,9 @@ use super::{
 };
 use crate::{
     agent::{
-        claude_cli::{self, Agent, AgentError, AgentReply, AgentRequest, CallOptions, Usage},
+        claude_cli::{
+            self, Agent, AgentError, AgentReply, AgentRequest, CallOptions, OutputKind, Usage,
+        },
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
@@ -1097,7 +1099,11 @@ async fn run_topic_check(
         user_message: assembled.user_message.clone(),
         schema: topic_check::SCHEMA.to_owned(),
         process: process.clone(),
-        options: CallOptions::default(),
+        // Not a patch: the CLI must not ask for `ops`.
+        options: CallOptions {
+            output: OutputKind::Object,
+            ..CallOptions::default()
+        },
     };
     let reply = ask(call, request, stop).await;
     let mut record = AgentCallInput {

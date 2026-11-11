@@ -1171,6 +1171,12 @@ async fn a_long_topic_that_moved_on_gets_a_new_one() {
     .await;
 
     assert_eq!(topic_checks(&rig).len(), 1);
+    // The CLI takes its reply as an object, not a patch with `ops`.
+    let request = rig.agent.received(topic_checks(&rig)[0]).request;
+    assert_eq!(
+        request.options.output,
+        crate::agent::claude_cli::OutputKind::Object
+    );
     let (titles, current) = topic_titles(&rig);
     assert_eq!(titles, ["Очередь операторов", "Работа операторов в чатах"]);
     assert_eq!(current.as_deref(), Some("Работа операторов в чатах"));

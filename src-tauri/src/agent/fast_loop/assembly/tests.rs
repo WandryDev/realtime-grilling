@@ -178,11 +178,11 @@ fn the_prefix_with_gaps_is_byte_identical_between_calls() {
     assert_eq!(second, first);
 }
 
-/// The adopted variant `--rules spikes/question-quality/rules-full-v2.md`
-/// (task 4.3) is the rules the app runs: they don't drift apart.
+/// The adopted variant `--rules spikes/question-quality/rules-volume.md`
+/// (question-volume task 5.1) is the rules the app runs: they don't drift apart.
 #[test]
 fn the_adopted_rules_variant_is_the_rules() {
-    let full = include_str!("../../../../../spikes/question-quality/rules-full-v2.md");
+    let full = include_str!("../../../../../spikes/question-quality/rules-volume.md");
     assert_eq!(full, RULES);
     for rule in [
         "`G1…Gn`",
