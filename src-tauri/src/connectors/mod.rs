@@ -10,6 +10,7 @@
 //! Secrets live in the OS store ([`secrets`]); the database keeps the
 //! connection without them (`storage::connectors`).
 
+pub mod clickup;
 pub mod outline;
 pub mod secrets;
 pub mod service;
@@ -91,6 +92,7 @@ pub enum AuthMethod {
     /// A code the manager enters on the service's page.
     DeviceCode,
     /// OAuth in the browser.
+    #[allow(dead_code, reason = "ClickUp's OAuth comes later on the same frame")]
     BrowserOAuth,
 }
 
@@ -103,8 +105,10 @@ pub enum Capability {
     /// Search during a call (later).
     CallSearch,
     /// Incoming questions (later).
+    #[allow(dead_code, reason = "no connector has it yet")]
     Inbox,
     /// Writing the call's results (later).
+    #[allow(dead_code, reason = "no connector has it yet")]
     Publish,
 }
 
@@ -133,15 +137,13 @@ pub static DESCRIPTORS: [Descriptor; 3] = [
         capabilities: &[Capability::ProjectSources, Capability::CallSearch],
         available: false,
     },
+    // A personal token (`pk_…`), no address (connectors-clickup design.md,
+    // decision 1).
     Descriptor {
         kind: ConnectorKind::ClickUp,
-        auth: AuthMethod::BrowserOAuth,
-        capabilities: &[
-            Capability::ProjectSources,
-            Capability::Inbox,
-            Capability::Publish,
-        ],
-        available: false,
+        auth: AuthMethod::ApiKey { host: false },
+        capabilities: &[Capability::ProjectSources],
+        available: true,
     },
 ];
 
@@ -215,7 +217,6 @@ pub enum Verified {
     Account(Account),
     /// The secret opens several workspaces and none was picked (or the
     /// picked one is not among them).
-    #[allow(dead_code, reason = "the ClickUp connector answers it (task 2.3)")]
     Choose(Vec<Workspace>),
 }
 
@@ -478,14 +479,21 @@ pub struct Connectors {
 }
 
 impl Connectors {
-    /// The app's: Keychain / Credential Manager, the real Outline client.
+    /// The app's: Keychain / Credential Manager, the real Outline and
+    /// ClickUp clients.
     pub fn for_app() -> Self {
         Self::new(
             Arc::new(secrets::KeyringStore),
-            [(
-                ConnectorKind::Outline,
-                Arc::new(outline::OutlineConnector::default()) as Arc<dyn SourceProvider>,
-            )],
+            [
+                (
+                    ConnectorKind::Outline,
+                    Arc::new(outline::OutlineConnector::default()) as Arc<dyn SourceProvider>,
+                ),
+                (
+                    ConnectorKind::ClickUp,
+                    Arc::new(clickup::ClickUpConnector::default()) as Arc<dyn SourceProvider>,
+                ),
+            ],
         )
     }
 

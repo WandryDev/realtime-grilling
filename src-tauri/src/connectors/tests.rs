@@ -44,8 +44,10 @@ use crate::{
 // `Credential` never goes into a reply: it has neither serde nor specta.
 static_assertions::assert_not_impl_any!(Credential: Serialize, serde::de::DeserializeOwned, specta::Type);
 
+/// `connectors`, «Каталог коннекторов» (connectors-clickup): Outline and
+/// ClickUp work, GitHub is «скоро».
 #[test]
-fn outline_works_github_and_clickup_are_coming() {
+fn outline_and_clickup_work_github_is_coming() {
     let outline = ConnectorKind::Outline.descriptor();
     assert_eq!(outline.auth, AuthMethod::ApiKey { host: true });
     assert_eq!(outline.capabilities, [Capability::ProjectSources]);
@@ -54,8 +56,9 @@ fn outline_works_github_and_clickup_are_coming() {
     assert_eq!(github.auth, AuthMethod::DeviceCode);
     assert!(!github.available);
     let clickup = ConnectorKind::ClickUp.descriptor();
-    assert_eq!(clickup.auth, AuthMethod::BrowserOAuth);
-    assert!(!clickup.available);
+    assert_eq!(clickup.auth, AuthMethod::ApiKey { host: false });
+    assert_eq!(clickup.capabilities, [Capability::ProjectSources]);
+    assert!(clickup.available);
     assert_eq!(
         DESCRIPTORS
             .iter()
@@ -93,13 +96,18 @@ fn the_catalog_without_connections() {
     assert!(views.iter().all(|view| view.account.is_none()));
     assert_eq!(
         views.iter().map(|view| view.available).collect::<Vec<_>>(),
-        [true, false, false]
+        [true, false, true]
     );
     // «скоро» can't be connected.
-    for kind in [ConnectorKind::GitHub, ConnectorKind::ClickUp] {
-        let error = block_on(service::connect_api_key(&host, kind, "x", "y", None)).unwrap_err();
-        assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
-    }
+    let error = block_on(service::connect_api_key(
+        &host,
+        ConnectorKind::GitHub,
+        "x",
+        "y",
+        None,
+    ))
+    .unwrap_err();
+    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
 }
 
 #[test]

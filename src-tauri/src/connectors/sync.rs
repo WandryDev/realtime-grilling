@@ -475,6 +475,9 @@ pub(super) fn secret_failure(error: &SecretError) -> (ErrorKind, String, bool) {
 /// What to show for a failed call of the service.
 pub(super) fn failure_message(kind: ConnectorKind, error: &ConnectorError) -> String {
     match error {
+        ConnectorError::Unauthorized if kind == ConnectorKind::ClickUp => {
+            "Токен больше не подходит".to_owned()
+        }
         ConnectorError::Unauthorized => "Ключ больше не подходит".to_owned(),
         ConnectorError::Forbidden => format!("Нет доступа к {}", kind.label()),
         ConnectorError::NotFound => "Не найдено".to_owned(),

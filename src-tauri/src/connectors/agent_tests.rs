@@ -9,7 +9,11 @@ use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 
 use tokio::sync::oneshot;
 
-use super::testing::{FakeOutline, Host, KEY, block_on, collection};
+use super::{
+    ConnectorKind, SelectionItem, SelectionItemKind,
+    clickup::fake::{FakeClickUp, TOKEN},
+    testing::{FakeOutline, Host, KEY, block_on, collection},
+};
 use crate::{
     agent::{
         claude_cli::{Agent as _, AgentRequest, CallOptions, ClaudeCodeCli},
@@ -130,4 +134,64 @@ fn the_agent_gets_the_documents_but_never_the_key_or_a_tool() {
     };
     let (args, env, _) = run(&cli, dir.path(), fast);
     assert_isolated(&args, &env, &fake.origin);
+}
+
+/// `clickup-connector` (task 2.5): with ClickUp connected, the brief's call
+/// gets the tasks' text, never the token or ClickUp's address.
+#[test]
+fn the_agent_gets_the_tasks_but_never_the_clickup_token() {
+    let fake = FakeClickUp::start();
+    {
+        let mut state = fake.state();
+        state.add_space("s1", "Клиенты");
+        state.add_list("s1", None, "l1", 1);
+        state.edit("l1-1", "Интеграция с МИС до марта");
+    }
+    let host = Host::clickup(&fake);
+    host.connect_clickup(TOKEN, None);
+    let project = host.project("Телемедиа");
+    host.select_in(
+        ConnectorKind::ClickUp,
+        &project,
+        vec![SelectionItem {
+            item_kind: SelectionItemKind::Container,
+            external_id: "list:l1".to_owned(),
+            title: "Список l1".to_owned(),
+            url: None,
+        }],
+    )
+    .unwrap();
+    assert!(
+        host.secrets
+            .raw()
+            .values()
+            .any(|value| value.contains(TOKEN)),
+        "ClickUp is connected"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let cli = fake_cli(dir.path());
+    let id = project.clone();
+    let inputs = block_on(host.storage.read(move |db| brief_inputs::read(db, &id))).unwrap();
+    let message = compose(&inputs).unwrap();
+    let prompt = PromptFile::write(&dir.path().join("briefs"), &project).unwrap();
+    let (args, env, stdin) = run(
+        &cli,
+        dir.path(),
+        request(&prompt, &message, TreeSlot::default(), None),
+    );
+    let tools = args.iter().position(|arg| arg == "--tools").unwrap();
+    assert_eq!(args[tools + 1], "", "no tools");
+    for text in [TOKEN, "pk_", fake.base.as_str()] {
+        assert!(
+            !args.iter().any(|arg| arg.contains(text)),
+            "{text} in the arguments"
+        );
+        assert!(!env.contains(text), "{text} in the environment");
+        assert!(!stdin.contains(text), "{text} on stdin");
+    }
+    assert!(
+        stdin.contains("Интеграция с МИС до марта"),
+        "the task comes as material"
+    );
 }

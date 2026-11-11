@@ -642,12 +642,18 @@ pub async fn selection_set<H: ConnectorHost>(
             && let Ok(resolved) = provider.resolve(&session, &ours).await
             && resolved.docs.len() > MAX_DOCUMENTS
         {
-            return Err(CommandError::invalid(format!(
-                "Из {} в проект загружается не больше {MAX_DOCUMENTS} документов, а в выбранном \
-                 {}. Выберите отдельные документы.",
-                kind.label(),
-                resolved.docs.len()
-            )));
+            let count = resolved.docs.len();
+            return Err(CommandError::invalid(match kind {
+                ConnectorKind::ClickUp => format!(
+                    "Из ClickUp в проект загружается не больше {MAX_DOCUMENTS} задач, а в \
+                     выбранном {count}. Выберите списки или отдельные задачи."
+                ),
+                _ => format!(
+                    "Из {} в проект загружается не больше {MAX_DOCUMENTS} документов, а в \
+                     выбранном {count}. Выберите отдельные документы.",
+                    kind.label(),
+                ),
+            }));
         }
     }
     let id = project_id.to_owned();

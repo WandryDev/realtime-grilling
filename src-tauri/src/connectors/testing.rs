@@ -15,6 +15,7 @@ use tokio::{
 
 use super::{
     ConnectorKind, Connectors, SelectionItem, SelectionItemKind, SourceProvider,
+    clickup::{ClickUpConnector, fake::FakeClickUp},
     outline::{OutlineConnector, client::Limits},
     secrets::MemoryStore,
     service::{self, ConnectOutcome},
@@ -479,6 +480,31 @@ impl Host {
     }
 
     pub fn with(provider: Arc<dyn SourceProvider>) -> Arc<Self> {
+        Self::with_providers([(ConnectorKind::Outline, provider)])
+    }
+
+    /// The real Outline connector (short limits) and the ClickUp one at
+    /// `fake` (`connectors::clickup::fake`).
+    pub fn clickup(fake: &FakeClickUp) -> Arc<Self> {
+        Self::clickup_with(Arc::new(ClickUpConnector::with(
+            &fake.base,
+            Duration::from_secs(5),
+        )))
+    }
+
+    pub fn clickup_with(clickup: Arc<ClickUpConnector>) -> Arc<Self> {
+        Self::with_providers([
+            (
+                ConnectorKind::Outline,
+                Arc::new(OutlineConnector::with_limits(limits())) as Arc<dyn SourceProvider>,
+            ),
+            (ConnectorKind::ClickUp, clickup as Arc<dyn SourceProvider>),
+        ])
+    }
+
+    pub fn with_providers(
+        providers: impl IntoIterator<Item = (ConnectorKind, Arc<dyn SourceProvider>)>,
+    ) -> Arc<Self> {
         let secrets = Arc::new(MemoryStore::default());
         let data = tempfile::tempdir().unwrap();
         let storage = Storage::open_in(data.path());
@@ -488,7 +514,7 @@ impl Host {
             storage,
             connectors: Connectors::new(
                 Arc::clone(&secrets) as Arc<dyn super::secrets::SecretStore>,
-                [(ConnectorKind::Outline, provider)],
+                providers,
             ),
             secrets,
             sink: RecordingSink::default(),
@@ -513,6 +539,55 @@ impl Host {
             None,
         ))
         .unwrap()
+    }
+
+    /// Connects ClickUp with `token`, in `workspace` when given.
+    pub fn connect_clickup(
+        self: &Arc<Self>,
+        token: &str,
+        workspace: Option<&str>,
+    ) -> ConnectOutcome {
+        block_on(service::connect_api_key(
+            self,
+            ConnectorKind::ClickUp,
+            "",
+            token,
+            workspace,
+        ))
+        .unwrap()
+    }
+
+    /// Saves the selection in `kind` and waits for its sync.
+    pub fn select_in(
+        self: &Arc<Self>,
+        kind: ConnectorKind,
+        project_id: &str,
+        items: Vec<SelectionItem>,
+    ) -> SyncResult {
+        block_on(service::selection_set(
+            self.as_ref(),
+            project_id,
+            kind,
+            items,
+        ))?;
+        block_on(sync::sync_fresh(self, project_id, kind))
+    }
+
+    pub fn sync_in(self: &Arc<Self>, kind: ConnectorKind, project_id: &str) -> SyncResult {
+        block_on(sync::sync_project(self, project_id, kind))
+    }
+
+    /// The external ids of the project's sources of `kind`, sorted.
+    pub fn ids_of(&self, project_id: &str, kind: ConnectorKind) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .sources(project_id)
+            .into_iter()
+            .filter_map(|source| source.origin)
+            .filter(|origin| origin.connector == kind)
+            .map(|origin| origin.external_id)
+            .collect();
+        ids.sort();
+        ids
     }
 
     pub fn project(&self, name: &str) -> String {
