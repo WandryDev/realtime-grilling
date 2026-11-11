@@ -24,14 +24,26 @@ export type Picked = ReadonlyMap<string, SelectionItem>;
 /** How a service expands an exclude. */
 export interface Rules {
   /**
+   * A container's own count is the documents the sync brings (Outline's);
+   * otherwise it is the service's estimate (ClickUp's `task_count` may
+   * count closed tasks too) and only the backend knows the exact number.
+   */
+  readonly exactContainerCount: boolean;
+  /**
    * A left-out document takes its nested ones along (ClickUp: a task with
    * its subtasks); otherwise it goes alone (Outline).
    */
   readonly excludeTakesNested: boolean;
 }
 
-const OUTLINE_RULES: Rules = { excludeTakesNested: false };
-const CLICKUP_RULES: Rules = { excludeTakesNested: true };
+const OUTLINE_RULES: Rules = {
+  exactContainerCount: true,
+  excludeTakesNested: false,
+};
+const CLICKUP_RULES: Rules = {
+  exactContainerCount: false,
+  excludeTakesNested: true,
+};
 
 export function rulesOf(kind: ConnectorKind): Rules {
   return kind === "clickup" ? CLICKUP_RULES : OUTLINE_RULES;
@@ -259,6 +271,12 @@ export interface SelectionCount {
    */
   readonly approximate: boolean;
   readonly count: number;
+  /**
+   * The count has a service's estimate in it (a picked ClickUp list
+   * counted by its `task_count`): over the limit by it is not a refusal,
+   * the backend's exact count decides.
+   */
+  readonly estimated: boolean;
 }
 
 /**
@@ -277,6 +295,7 @@ export function countSelection(
   const seen = new Set<string>();
   let fromContainers = 0;
   let approximate = false;
+  let estimated = false;
 
   const walk = (nodes: readonly BrowseNode[], context: RowContext) => {
     for (const node of nodes) {
@@ -287,6 +306,7 @@ export function countSelection(
         if (checked && inside === undefined) {
           fromContainers += node.documentCount;
           approximate ||= node.documentCount === 0;
+          estimated ||= !rules.exactContainerCount && node.documentCount > 0;
         } else if (inside) {
           walk(inside, containerContext(checked));
         }
@@ -310,7 +330,7 @@ export function countSelection(
       approximate = true;
     }
   }
-  return { approximate, count: documents.size + fromContainers };
+  return { approximate, count: documents.size + fromContainers, estimated };
 }
 
 /** The number of `countSelection`. */

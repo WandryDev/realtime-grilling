@@ -52,13 +52,20 @@ function seedRejected() {
   });
 }
 
-/** The onboarding list keeps a refusal as «Исправить» until it is fixed. */
-function rememberRefusal() {
+/** What ClickUp says of a token it refused. */
+const TOKEN_REFUSED = "Токен не подошёл";
+
+/**
+ * The onboarding list keeps a refusal as «Исправить» until it is fixed,
+ * with its reason: only a refused token is «Токен не подошёл»; no answer,
+ * the limit or another workspace say so.
+ */
+function rememberRefusal(reason: string) {
   if (getIntegrations().clickup.status === "connected") {
     return;
   }
   setIntegration("clickup", {
-    error: CLICKUP_REJECTED_SUMMARY,
+    error: reason === TOKEN_REFUSED ? CLICKUP_REJECTED_SUMMARY : reason,
     status: "error",
   });
 }

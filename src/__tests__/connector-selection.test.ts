@@ -219,7 +219,7 @@ describe("nested containers and ClickUp's excludes", () => {
         loaded,
         rules
       )
-    ).toEqual({ approximate: false, count: 7 });
+    ).toEqual({ approximate: false, count: 7, estimated: true });
     expect(
       countSelection(
         picked(item("container", "space:s"), item("exclude", "list:b")),
@@ -233,7 +233,32 @@ describe("nested containers and ClickUp's excludes", () => {
   it("is approximate while a picked space is not loaded", () => {
     expect(
       countSelection(picked(item("container", "space:s")), spaces, new Map())
-    ).toEqual({ approximate: true, count: 0 });
+    ).toEqual({ approximate: true, count: 0, estimated: false });
+  });
+
+  it("is estimated by a picked list counted by ClickUp, exact once its tasks loaded", () => {
+    const selection = picked(item("container", "list:b"));
+    const top = [listB];
+    expect(countSelection(selection, top, new Map(), rules)).toEqual({
+      approximate: false,
+      count: 4,
+      estimated: true,
+    });
+    const tasks = [fakeNode("t1", "Задача 1"), fakeNode("t2", "Задача 2")];
+    expect(
+      countSelection(selection, top, new Map([["list:b", tasks]]), rules)
+    ).toEqual({ approximate: false, count: 2, estimated: false });
+  });
+
+  it("is exact by Outline's own count of a collection", () => {
+    expect(
+      countSelection(
+        picked(item("container", "list:b")),
+        [listB],
+        new Map(),
+        rulesOf("outline")
+      )
+    ).toEqual({ approximate: false, count: 4, estimated: false });
   });
 
   it("leaves a task out with its subtasks", () => {

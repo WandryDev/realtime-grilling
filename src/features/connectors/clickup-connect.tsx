@@ -68,8 +68,12 @@ export function useClickUpConnect({
   /** The `?demo=choose` state: the workspaces already asked for. */
   initialWorkspaces?: Workspace[] | null;
   onConnected?: () => void;
-  /** A refusal at the token field (the onboarding list remembers it). */
-  onRefused?: () => void;
+  /**
+   * A refusal at the token field with ClickUp's reason (the onboarding
+   * list remembers it): a refused token, but also no answer, the limit or
+   * a workspace the token doesn't open.
+   */
+  onRefused?: (reason: string) => void;
 } = {}): ClickUpConnectState {
   const keyRef = useRef<HTMLInputElement>(null);
   const [token, setToken] = useState(initialToken);
@@ -131,7 +135,7 @@ export function useClickUpConnect({
           : result.message
       );
       if (result.field) {
-        onRefused?.();
+        onRefused?.(result.message);
       }
       keyRef.current?.focus();
     },

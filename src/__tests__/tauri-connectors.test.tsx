@@ -61,6 +61,7 @@ const {
 const {
   connectWithKey,
   disconnectIntegration,
+  getIntegrations,
   refreshIntegrations,
   useIntegrations,
 } = await import("@/data/integrations");
@@ -685,6 +686,40 @@ describe("ClickUp in Settings and onboarding (connectors-clickup 3.2)", () => {
     expect(
       await screen.findByRole("dialog", { name: "Новый токен ClickUp" })
     ).toBeTruthy();
+  });
+
+  it("keeps ClickUp's reason on the onboarding list, not «Токен не подошёл», when ClickUp did not answer", async () => {
+    fake.answers.set("connector_connect_api_key", () => ({
+      rejected: { field: "key", reason: "ClickUp не ответил за 15 секунд" },
+    }));
+    render(<ServiceConnectPage service="clickup" />);
+    fireEvent.change(await screen.findByLabelText("Токен ClickUp"), {
+      target: { value: TOKEN },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+
+    expect(
+      await screen.findByText("ClickUp не ответил за 15 секунд")
+    ).toBeTruthy();
+    expect(getIntegrations().clickup).toEqual(
+      expect.objectContaining({
+        error: "ClickUp не ответил за 15 секунд",
+        status: "error",
+      })
+    );
+  });
+
+  it("keeps «Токен не подошёл» on the onboarding list for a refused token", async () => {
+    render(<ServiceConnectPage service="clickup" />);
+    fireEvent.change(await screen.findByLabelText("Токен ClickUp"), {
+      target: { value: "bad-token-123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+
+    expect(await screen.findByText(TOKEN_REFUSED)).toBeTruthy();
+    expect(getIntegrations().clickup.error).toBe(
+      "Токен не подошёл, проверьте его"
+    );
   });
 
   it("connects ClickUp in onboarding, then Settings shows the same workspace («Подключить ClickUp в онбординге»)", async () => {

@@ -26,17 +26,23 @@ export type TreeState =
   | { nodes: BrowseNode[]; status: "ready" }
   | { message: string; status: "error" };
 
-async function browse(kind: ConnectorKind, parent: ExternalRef | null) {
+/** A read that was interrupted: nothing came, «Повторить» asks again. */
+const BROWSE_INTERRUPTED = "Загрузка прервалась";
+
+async function browse(
+  kind: ConnectorKind,
+  parent: ExternalRef | null
+): Promise<Exclude<TreeState, { status: "loading" }>> {
   const exit = await appRuntime.runPromiseExit(
     Connectors.use((connectors) => connectors.browse(kind, parent))
   );
   if (Exit.isSuccess(exit)) {
-    return { nodes: exit.value, status: "ready" } as const;
+    return { nodes: exit.value, status: "ready" };
   }
   if (Cause.hasInterruptsOnly(exit.cause)) {
-    return { status: "loading" } as const;
+    return { message: BROWSE_INTERRUPTED, status: "error" };
   }
-  return { message: backendErrorOf(exit).message, status: "error" } as const;
+  return { message: backendErrorOf(exit).message, status: "error" };
 }
 
 /**
@@ -118,7 +124,7 @@ export function useLazyTree(kind: ConnectorKind): LazyTree {
         if (result.status === "ready") {
           loaded.current.add(id);
           setTrees((current) => new Map(current).set(id, result.nodes));
-        } else if (result.status === "error") {
+        } else {
           setErrors((current) => new Map(current).set(id, result.message));
         }
       });

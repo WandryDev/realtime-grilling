@@ -76,6 +76,8 @@ import {
  * pick brings ("примерно" while a picked container is not counted yet),
  * and over 200 the dialog says so and doesn't save; a refusal of the
  * backend (its exact count) shows the same way and keeps the dialog open.
+ * A count with ClickUp's estimate in it (a list's `task_count` may count
+ * closed tasks) says so too but lets «Сохранить выбор» ask the backend.
  */
 
 export function ConnectorPickerDialog({
@@ -169,11 +171,13 @@ function PickerBody({
     () => (searching ? searchTree(roots, query, trees) : null),
     [query, roots, searching, trees]
   );
-  const { approximate, count } = useMemo(
+  const { approximate, count, estimated } = useMemo(
     () => countSelection(picked, roots, trees, rules),
     [picked, roots, rules, trees]
   );
   const overLimit = count > MAX_CONNECTOR_DOCUMENTS;
+  // Over the limit by an estimate: the backend counts exactly on save.
+  const blocked = overLimit && !estimated;
   const changed = useMemo(
     () =>
       JSON.stringify(toItems(picked)) !==
@@ -296,6 +300,7 @@ function PickerBody({
       </div>
       <LimitNote
         count={count}
+        estimated={estimated}
         overLimit={overLimit}
         refused={refused}
         words={words}
@@ -304,7 +309,7 @@ function PickerBody({
         <DialogClose render={<Button variant="secondary" />}>
           Отмена
         </DialogClose>
-        <Button disabled={overLimit || saving || !changed} onClick={save}>
+        <Button disabled={blocked || saving || !changed} onClick={save}>
           {saving ? <Spinner aria-hidden="true" /> : null}
           Сохранить выбор
         </Button>
@@ -316,11 +321,14 @@ function PickerBody({
 /** Over the limit by the counter, or refused by the backend's count. */
 function LimitNote({
   count,
+  estimated,
   overLimit,
   refused,
   words,
 }: {
   count: number;
+  /** The count is the service's estimate: the save checks it. */
+  estimated: boolean;
   overLimit: boolean;
   refused?: string;
   words: ConnectorWords;
@@ -329,7 +337,8 @@ function LimitNote({
   if (refused) {
     text = refused;
   } else if (overLimit) {
-    text = `Из ${words.service} в проект загружается не больше ${MAX_CONNECTOR_DOCUMENTS} ${words.unitMany}, а выбрано ${count}. ${words.overLimitHint}`;
+    const about = estimated ? "примерно " : "";
+    text = `Из ${words.service} в проект загружается не больше ${MAX_CONNECTOR_DOCUMENTS} ${words.unitMany}, а выбрано ${about}${count}. ${words.overLimitHint}`;
   }
   return text ? (
     <p className="text-contradiction text-sm" role="alert">

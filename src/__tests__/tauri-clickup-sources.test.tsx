@@ -404,16 +404,50 @@ describe("ClickUp picker (4.1)", () => {
     expect(within(tasks).queryByText("Аптеки")).toBeNull();
   });
 
-  it("says about the limit of 200 and saves nothing («Слишком большое пространство»)", async () => {
+  it("says about the limit of 200 by ClickUp's count and lets the backend refuse («Слишком большое пространство»)", async () => {
     const dialog = await openPicker();
 
     fireEvent.click(
       await within(dialog).findByRole("checkbox", { name: "Внутреннее" })
     );
 
-    expect((await within(dialog).findByRole("alert")).textContent).toMatch(
-      LIMIT
+    // «Бэклог» is counted by ClickUp's task_count, closed tasks perhaps
+    // among them: only the backend's exact count refuses.
+    const note = await within(dialog).findByRole("alert");
+    expect(note.textContent).toMatch(LIMIT);
+    expect(note.textContent).toContain("примерно 340");
+    const save = within(dialog).getByRole("button", {
+      name: "Сохранить выбор",
+    });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(save);
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole("alert").textContent).toContain(
+        "в выбранном 340"
+      );
+    });
+    expect(screen.getByRole("dialog", { name: "Задачи из ClickUp" })).toBe(
+      dialog
     );
+    expect(fake.db.selections).toEqual([]);
+  });
+
+  it("refuses to save over the limit by the tasks it loaded", async () => {
+    const dialog = await openPicker();
+
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Открыть Внутреннее" })
+    );
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Открыть Бэклог" })
+    );
+    await within(dialog).findByText("Идея 0");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Бэклог" }));
+
+    const note = await within(dialog).findByRole("alert");
+    expect(note.textContent).toMatch(LIMIT);
+    expect(note.textContent).not.toContain("примерно");
     expect(
       within(dialog)
         .getByRole("button", { name: "Сохранить выбор" })
