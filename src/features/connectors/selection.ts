@@ -51,59 +51,45 @@ export interface RowContext {
   readonly inPickedDocument: boolean;
 }
 
+/** The loaded trees of the collections, by collection id. */
+export type Trees = ReadonlyMap<string, readonly BrowseNode[]>;
+
+function covered(context: RowContext) {
+  return context.inPickedContainer || context.inPickedDocument;
+}
+
 /**
- * Where the nested rows of a document sit. A document left out of a
- * collection goes alone (as in Rust): its nested ones stay picked.
+ * Where the nested rows of a document sit. A document left out goes alone
+ * (as in Rust): its nested ones stay picked.
  */
 export function nestedContext(
   context: RowContext,
   checked: boolean
 ): RowContext {
-  if (context.inPickedDocument || context.inPickedContainer) {
+  if (covered(context)) {
     return context;
   }
   return { inPickedContainer: false, inPickedDocument: checked };
 }
 
-/** Whether a row's box is checked, and whether it can change. */
+/**
+ * Whether a row's box is checked. A document that comes with a picked
+ * collection or a picked document is checked unless left out (Rust's
+ * `exclude` leaves it out of both).
+ */
 export function rowState(
   picked: Picked,
   node: BrowseNode,
   context: RowContext
-): { checked: boolean; locked: boolean } {
+): { checked: boolean } {
   const item = picked.get(node.id);
   if (node.kind === "container") {
-    return { checked: item?.itemKind === "container", locked: false };
+    return { checked: item?.itemKind === "container" };
   }
-  if (context.inPickedDocument) {
-    return { checked: true, locked: true };
+  if (covered(context)) {
+    return { checked: item?.itemKind !== "exclude" };
   }
-  if (context.inPickedContainer) {
-    return { checked: item?.itemKind !== "exclude", locked: false };
-  }
-  return { checked: item?.itemKind === "document", locked: false };
-}
-
-/** Toggles a row: a collection, a document, or one left out of a collection. */
-export function toggle(
-  picked: Picked,
-  node: BrowseNode,
-  context: RowContext,
-  checked: boolean
-): Picked {
-  if (node.kind === "container") {
-    return checked
-      ? withItem(picked, itemOf(node, "container"))
-      : without(picked, node.id);
-  }
-  if (context.inPickedContainer) {
-    return checked
-      ? without(picked, node.id)
-      : withItem(picked, itemOf(node, "exclude"));
-  }
-  return checked
-    ? withItem(picked, itemOf(node, "document"))
-    : without(picked, node.id);
+  return { checked: item?.itemKind === "document" };
 }
 
 /** Every node of a tree, its nested ones included. */
@@ -112,7 +98,7 @@ function flatten(nodes: readonly BrowseNode[]): BrowseNode[] {
 }
 
 /** The loaded nodes of every collection, by id. */
-function loadedNodes(trees: ReadonlyMap<string, readonly BrowseNode[]>) {
+function loadedNodes(trees: Trees) {
   const nodes = new Map<string, BrowseNode>();
   for (const tree of trees.values()) {
     for (const node of flatten(tree)) {
@@ -122,53 +108,116 @@ function loadedNodes(trees: ReadonlyMap<string, readonly BrowseNode[]>) {
   return nodes;
 }
 
-/** Documents of the picked collections, and their ids. */
-function pickedContainers(
-  picked: Picked,
-  containers: readonly BrowseNode[],
-  trees: ReadonlyMap<string, readonly BrowseNode[]>
-) {
-  let count = 0;
-  const ids = new Set<string>();
-  for (const container of containers) {
-    if (picked.get(container.id)?.itemKind === "container") {
-      count += container.documentCount;
-      for (const node of flatten(trees.get(container.id) ?? [])) {
-        ids.add(node.id);
+/**
+ * What the selection brings, as far as the loaded trees tell: the ids in
+ * the picked collections, and the ids the picked documents bring besides
+ * (each with its nested ones). A picked document not loaded counts as
+ * itself.
+ */
+function coverage(picked: Picked, trees: Trees) {
+  const nodes = loadedNodes(trees);
+  const inContainers = new Set<string>();
+  for (const [id, item] of picked) {
+    if (item.itemKind === "container") {
+      for (const node of flatten(trees.get(id) ?? [])) {
+        inContainers.add(node.id);
       }
     }
   }
-  return { count, ids };
+  const byDocuments = new Set<string>();
+  for (const item of picked.values()) {
+    if (item.itemKind !== "document") {
+      continue;
+    }
+    const node = nodes.get(item.externalId);
+    for (const id of node
+      ? flatten([node]).map((n) => n.id)
+      : [item.externalId]) {
+      if (!inContainers.has(id)) {
+        byDocuments.add(id);
+      }
+    }
+  }
+  return { byDocuments, inContainers, nodes };
+}
+
+/**
+ * Drops the excludes nothing brings any more (their collection or
+ * document was unchecked): Rust would ignore them, the counter too, but a
+ * later pick of that collection must not inherit them. An exclude of a
+ * document not loaded is kept: it can't be told.
+ */
+export function pruneExcludes(picked: Picked, trees: Trees): Picked {
+  const { byDocuments, inContainers, nodes } = coverage(picked, trees);
+  let next: Map<string, SelectionItem> | undefined;
+  for (const [id, item] of picked) {
+    const stale =
+      item.itemKind === "exclude" &&
+      nodes.has(id) &&
+      !inContainers.has(id) &&
+      !byDocuments.has(id);
+    if (stale) {
+      next ??= new Map(picked);
+      next.delete(id);
+    }
+  }
+  return next ?? picked;
+}
+
+/**
+ * Toggles a row: a collection, a document, or one that comes with a picked
+ * collection or document (left out, or back in). Excludes left without
+ * what brought them go.
+ */
+export function toggle(
+  picked: Picked,
+  node: BrowseNode,
+  context: RowContext,
+  checked: boolean,
+  trees: Trees
+): Picked {
+  let next: Picked;
+  if (node.kind === "container") {
+    next = checked
+      ? withItem(picked, itemOf(node, "container"))
+      : without(picked, node.id);
+  } else if (covered(context)) {
+    next = checked
+      ? without(picked, node.id)
+      : withItem(picked, itemOf(node, "exclude"));
+  } else {
+    next = checked
+      ? withItem(picked, itemOf(node, "document"))
+      : without(picked, node.id);
+  }
+  return pruneExcludes(next, trees);
 }
 
 /**
  * How many documents the selection brings, as far as the loaded tree
- * tells: a collection's count less what is left out, plus the picked
- * documents outside the picked collections, each with its nested ones.
+ * tells: the picked collections' counts, plus what the picked documents
+ * bring besides, less the excludes among them. Matches Rust's expansion:
+ * an exclude leaves one document out (its nested ones stay); an exclude
+ * nothing brings counts for nothing.
  */
 export function countDocuments(
   picked: Picked,
   containers: readonly BrowseNode[],
-  trees: ReadonlyMap<string, readonly BrowseNode[]>
+  trees: Trees
 ): number {
-  const nodes = loadedNodes(trees);
-  const { count: inContainers, ids: counted } = pickedContainers(
-    picked,
-    containers,
-    trees
-  );
-  let count = inContainers;
-  for (const item of picked.values()) {
-    const node = nodes.get(item.externalId);
-    const size = node?.documentCount ?? 1;
-    if (item.itemKind === "exclude") {
-      // A document left out goes alone, its nested ones stay.
+  const { byDocuments, inContainers } = coverage(picked, trees);
+  let count = byDocuments.size;
+  for (const container of containers) {
+    if (picked.get(container.id)?.itemKind === "container") {
+      count += container.documentCount;
+    }
+  }
+  for (const [id, item] of picked) {
+    if (
+      item.itemKind === "exclude" &&
+      (inContainers.has(id) || byDocuments.has(id))
+    ) {
       count -= 1;
-    } else if (item.itemKind === "document" && !counted.has(item.externalId)) {
-      count += size;
-      for (const nested of flatten(node ? [node] : [])) {
-        counted.add(nested.id);
-      }
     }
   }
   return Math.max(0, count);

@@ -457,6 +457,38 @@ describe("Outline on the project page (4.3)", () => {
       },
     ]);
   });
+
+  it("two quick crosses both count: the second starts from the first", async () => {
+    fake.db.selections = [telemediaSelection()];
+    fake.db.sources.push(
+      outlineSource("tm-brief", "Бриф Телемедиа"),
+      outlineSource("tm-contract", "Договор и этапы")
+    );
+    await reload();
+    openProjectPage();
+
+    const contract = await screen.findByRole("button", {
+      name: "Убрать Договор и этапы из проекта",
+    });
+    const brief = screen.getByRole("button", {
+      name: "Убрать Бриф Телемедиа из проекта",
+    });
+    fireEvent.click(contract);
+    fireEvent.click(brief);
+
+    await waitFor(() => {
+      expect(invokedWith("connector_selection_set")).toHaveLength(2);
+    });
+    const last = invokedWith("connector_selection_set")[1]?.items;
+    expect(last).toEqual([
+      expect.objectContaining({ itemKind: "container" }),
+      expect.objectContaining({
+        externalId: "tm-contract",
+        itemKind: "exclude",
+      }),
+      expect.objectContaining({ externalId: "tm-brief", itemKind: "exclude" }),
+    ]);
+  });
 });
 
 describe("Outline rows among the sources (4.4)", () => {

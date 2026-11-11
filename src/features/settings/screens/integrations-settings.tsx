@@ -142,20 +142,25 @@ function ConnectedDetails({
   }
   if (service === "outline") {
     const stale = state.errorKind === "unreachable";
+    const failed = state.errorKind === "other" && state.error !== undefined;
+    let line = `Обновлено ${since(state.lastOkAt)}`;
+    if (stale) {
+      line = `Не удалось обновить: Outline не ответил. Последний раз отвечал ${since(state.lastOkAt)}`;
+    } else if (failed) {
+      line = `Не удалось обновить: ${state.error}`;
+    }
     return (
       <div className="flex flex-col gap-1">
         <p className="font-mono text-xs">{state.account ?? OUTLINE.host}</p>
         {state.lastOkAt === undefined ? null : (
           <p
             className={
-              stale
+              stale || failed
                 ? "text-contradiction text-sm"
                 : "text-muted-foreground text-sm"
             }
           >
-            {stale
-              ? `Не удалось обновить: Outline не ответил. Последний раз отвечал ${since(state.lastOkAt)}`
-              : `Обновлено ${since(state.lastOkAt)}`}
+            {line}
           </p>
         )}
       </div>

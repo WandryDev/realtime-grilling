@@ -41,6 +41,7 @@ import {
   pickedFrom,
   type RowContext,
   rowState,
+  type Trees,
   toggle,
   toItems,
 } from "./selection";
@@ -49,13 +50,12 @@ import {
  * «Документы из Outline» (outline-connector spec, «Выбор документов для
  * проекта»): the team's collections, each opening its tree of documents.
  * A collection is picked whole (later documents too), a document with its
- * nested ones; unchecking a document of a picked collection leaves it out.
+ * nested ones; unchecking a document that comes with a picked collection
+ * or document leaves it out (alone: its nested ones stay).
  * The search filters by title (it opens every collection's tree); the
  * counter says how many documents the pick brings, and over 200 the
  * dialog says so and doesn't save.
  */
-
-type Trees = ReadonlyMap<string, readonly BrowseNode[]>;
 
 const TOP: RowContext = { inPickedContainer: false, inPickedDocument: false };
 
@@ -139,9 +139,9 @@ function PickerBody({
 
   const handleToggle = useCallback(
     (node: BrowseNode, context: RowContext, checked: boolean) => {
-      setPicked((current) => toggle(current, node, context, checked));
+      setPicked((current) => toggle(current, node, context, checked, trees));
     },
-    []
+    [trees]
   );
   const handleExpand = useCallback((id: string) => {
     setExpanded((current) => {
@@ -301,7 +301,6 @@ function CollectionRow({
         context={TOP}
         depth={0}
         expanded={expanded}
-        locked={false}
         node={container}
         onExpand={container.hasChildren ? expand : undefined}
         onToggle={onToggle}
@@ -341,14 +340,13 @@ function DocumentTree({
   return (
     <ul className="flex flex-col">
       {nodes.map((node) => {
-        const { checked, locked } = rowState(picked, node, context);
+        const { checked } = rowState(picked, node, context);
         return (
           <li className="flex flex-col" key={node.id}>
             <NodeLine
               checked={checked}
               context={context}
               depth={depth}
-              locked={locked}
               node={node}
               onToggle={onToggle}
             />
@@ -375,7 +373,6 @@ function NodeLine({
   context,
   depth,
   expanded,
-  locked,
   node,
   onExpand,
   onToggle,
@@ -384,7 +381,6 @@ function NodeLine({
   context: RowContext;
   depth: number;
   expanded?: boolean;
-  locked: boolean;
   node: BrowseNode;
   onExpand?: () => void;
   onToggle: (node: BrowseNode, context: RowContext, checked: boolean) => void;
@@ -425,7 +421,6 @@ function NodeLine({
       <Checkbox
         aria-label={node.title}
         checked={checked}
-        disabled={locked}
         onCheckedChange={change}
       />
       <span

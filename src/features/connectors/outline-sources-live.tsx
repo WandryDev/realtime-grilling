@@ -10,6 +10,7 @@ import type {
 import {
   setConnectorSelection,
   syncConnector,
+  updateConnectorSelection,
   useProjectConnector,
 } from "@/data/connector-selections";
 import { useIntegration } from "@/data/integrations";
@@ -29,15 +30,6 @@ import { OutlineSourcesBlock } from "./outline-sources";
  * draft and its step; once connected, the picker opens. The wizard has no
  * project before its first source: `ensureProject` saves the draft then.
  */
-
-function itemsOf(views: readonly SelectionItemView[]): SelectionItem[] {
-  return views.map(({ externalId, itemKind, title, url }) => ({
-    externalId,
-    itemKind,
-    title,
-    url,
-  }));
-}
 
 export function OutlineSources({
   className,
@@ -73,10 +65,12 @@ export function OutlineSources({
     [ensureProject, projectId]
   );
 
-  const replaceItems = useCallback(
-    (items: SelectionItem[]) => {
+  // Each edit starts from the store as it is when it runs: quick crosses
+  // queue instead of overwriting each other.
+  const editItems = useCallback(
+    (change: (items: SelectionItem[]) => SelectionItem[]) => {
       if (projectId) {
-        setConnectorSelection(projectId, "outline", items);
+        updateConnectorSelection(projectId, "outline", change);
       }
     },
     [projectId]
@@ -84,13 +78,11 @@ export function OutlineSources({
 
   const removeItem = useCallback(
     (item: SelectionItemView) => {
-      replaceItems(
-        itemsOf(view?.items ?? []).filter(
-          (entry) => entry.externalId !== item.externalId
-        )
+      editItems((items) =>
+        items.filter((entry) => entry.externalId !== item.externalId)
       );
     },
-    [replaceItems, view]
+    [editItems]
   );
 
   const exclude = useCallback(
@@ -99,12 +91,14 @@ export function OutlineSources({
       if (!externalId) {
         return;
       }
-      const items = itemsOf(view?.items ?? []);
-      const picked = items.find((item) => item.externalId === externalId);
-      // A document picked by itself leaves the selection; one of a
-      // collection is left out of it.
-      replaceItems(
-        picked
+      editItems((items) => {
+        const picked = items.find((item) => item.externalId === externalId);
+        if (picked?.itemKind === "exclude") {
+          return items;
+        }
+        // A document picked by itself leaves the selection; one that came
+        // with a collection or a picked document is left out of it.
+        return picked
           ? items.filter((item) => item !== picked)
           : [
               ...items,
@@ -114,10 +108,10 @@ export function OutlineSources({
                 title: source.name,
                 url: source.origin?.url ?? null,
               },
-            ]
-      );
+            ];
+      });
     },
-    [replaceItems, view]
+    [editItems]
   );
 
   const sync = useCallback(async () => {

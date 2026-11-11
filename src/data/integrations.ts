@@ -1,6 +1,6 @@
 "use client";
 
-import { Cause, Effect, Exit } from "effect";
+import { Effect, Exit } from "effect";
 import { useMemo } from "react";
 
 import type { ConnectorKind, ConnectorView, ErrorKind } from "@/bindings";
@@ -44,7 +44,10 @@ export interface IntegrationState {
   account?: string;
   /** `false`: «скоро», it can't be connected yet. Absent: available. */
   available?: boolean;
-  /** Problem description when status is "error". */
+  /**
+   * Problem description when status is "error"; with `connected` and
+   * errorKind `other`, why the last check failed (e.g. Keychain refused).
+   */
   error?: string;
   /**
    * The last failure: with `connected` and `unreachable` the connection
@@ -109,10 +112,16 @@ function toIntegration(
     return base;
   }
   const host = view.account?.host ?? undefined;
+  let error: string | undefined;
+  if (view.status === "error") {
+    error = errorText(view);
+  } else if (view.errorKind === "other") {
+    error = view.error ?? undefined;
+  }
   return {
     ...base,
     account: host ? hostLabel(host) : view.account?.teamName,
-    error: view.status === "error" ? errorText(view) : undefined,
+    error,
     host,
     status: view.status,
     team: view.account?.teamName,
@@ -262,22 +271,18 @@ export type ConnectKeyResult =
 export async function connectWithKey(
   service: IntegrationService,
   host: string,
-  key: string,
-  signal?: AbortSignal
+  key: string
 ): Promise<ConnectKeyResult> {
+  // Not cancelable: once the check passed, Rust saves the key whether
+  // anyone still waits or not, so nothing may say «Отменено». A screen
+  // left meanwhile sees the outcome through the store (DataChanged).
   const previous = getIntegrations()[service];
   setIntegration(service, { ...previous, status: "connecting" });
   const exit = await appRuntime.runPromiseExit(
-    Connectors.use((connectors) =>
-      connectors.connectApiKey(service, host, key)
-    ),
-    { signal }
+    Connectors.use((connectors) => connectors.connectApiKey(service, host, key))
   );
   clearIntegration(service);
   if (Exit.isFailure(exit)) {
-    if (Cause.hasInterruptsOnly(exit.cause)) {
-      return { field: null, message: "Отменено", ok: false };
-    }
     return { field: null, message: backendErrorOf(exit).message, ok: false };
   }
   const outcome = exit.value;

@@ -102,6 +102,45 @@ export function setConnectorSelection(
   );
 }
 
+/** The edits of each project's selection, one after another. */
+const edits = new Map<string, Promise<unknown>>();
+
+function itemsOf(view: ProjectConnectorView | undefined): SelectionItem[] {
+  return (view?.items ?? []).map(({ externalId, itemKind, title, url }) => ({
+    externalId,
+    itemKind,
+    title,
+    url,
+  }));
+}
+
+/**
+ * Changes the project's selection from what the store has when the edit
+ * runs: two quick edits (two crosses) queue, the second starts from the
+ * first's result, so none is lost. Resolves like `setConnectorSelection`.
+ */
+export function updateConnectorSelection(
+  projectId: string,
+  kind: ConnectorKind,
+  change: (items: SelectionItem[]) => SelectionItem[]
+): Promise<ProjectConnectorView | undefined> {
+  const key = `${projectId}:${kind}`;
+  const edit = (edits.get(key) ?? Promise.resolve()).then(() => {
+    const current = selectionsStore
+      .get()
+      .find((view) => view.projectId === projectId && view.kind === kind);
+    return setConnectorSelection(projectId, kind, change(itemsOf(current)));
+  });
+  edits.set(key, edit);
+  const forget = () => {
+    if (edits.get(key) === edit) {
+      edits.delete(key);
+    }
+  };
+  edit.then(forget, forget);
+  return edit;
+}
+
 /** «Обновить»: resolves when the sync is done. */
 export function syncConnector(projectId: string, kind: ConnectorKind) {
   return selectionsStore.mutate(

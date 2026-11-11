@@ -337,6 +337,46 @@ describe("Settings → Интеграции in the app (4.2)", () => {
     });
   });
 
+  it("says Keychain refused without breaking the connection", async () => {
+    setOutline({
+      ...connectedOutline(Date.now() - HOUR_MS),
+      error: "Нет доступа к Keychain: связка ключей заблокирована",
+      errorKind: "other",
+    });
+    await reload();
+    render(<SettingsPage section="integrations" />);
+
+    expect(
+      await within(outlineRow()).findByText(
+        "Не удалось обновить: Нет доступа к Keychain: связка ключей заблокирована"
+      )
+    ).toBeTruthy();
+    expect(within(outlineRow()).getByText("Подключено")).toBeTruthy();
+    expect(
+      within(outlineRow()).queryByRole("button", { name: "Обновить ключ" })
+    ).toBeNull();
+  });
+
+  it("shows a key without access as «Нет доступа» with «Обновить ключ»", async () => {
+    setOutline({
+      ...connectedOutline(Date.now() - HOUR_MS),
+      error: "Нет доступа к Outline",
+      errorKind: "forbidden",
+      status: "error",
+    });
+    await reload();
+    render(<SettingsPage section="integrations" />);
+
+    expect(
+      await within(outlineRow()).findByText(
+        "Нет доступа: у ключа не хватает прав"
+      )
+    ).toBeTruthy();
+    expect(
+      within(outlineRow()).getByRole("button", { name: "Обновить ключ" })
+    ).toBeTruthy();
+  });
+
   it("names the projects a disconnect touches and keeps their sources", async () => {
     setOutline(connectedOutline());
     fake.db.selections = [
