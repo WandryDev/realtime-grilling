@@ -143,18 +143,37 @@ async fn a_phrase_of_others_starts_a_call_one_of_me_does_not() {
 }
 
 /// «Клиент закончил фразу»: «обычно», the last call started 8 s ago and
-/// ended: a call at once.
+/// ended; the client speaks, then the manager: a call at once.
 #[tokio::test(start_paused = true)]
-async fn the_client_finished_a_phrase_after_the_gap() {
+async fn the_client_finished_a_turn() {
     let rig = Rig::new([]).await;
     rig.say(OTHERS, "Первая фраза клиента").await;
-    rig.until(8).await;
+    rig.until(7).await;
     rig.say(OTHERS, "Вторая фраза клиента").await;
+    assert_eq!(rig.starts(), [0], "the client may go on");
+    rig.until(8).await;
+    rig.say(ME, "Понял, а сколько у вас операторов?").await;
     assert_eq!(rig.starts(), [0, 8]);
 }
 
-/// «Слишком рано»: «реже», 12 s after the last start the call waits for the
-/// gap and starts at 30 s by itself, with no other phrase.
+/// «Клиент продолжает говорить»: the manager is silent; the call comes
+/// 20 s after the last start, by itself.
+#[tokio::test(start_paused = true)]
+async fn the_client_goes_on_and_the_interval_starts_the_call() {
+    let rig = Rig::new([]).await;
+    rig.say(OTHERS, "Первая фраза клиента").await;
+    for second in [8, 12, 16] {
+        rig.until(second).await;
+        rig.say(OTHERS, "И ещё про очередь").await;
+    }
+    rig.until(19).await;
+    assert_eq!(rig.starts(), [0]);
+    rig.until(21).await;
+    assert_eq!(rig.starts(), [0, 20]);
+}
+
+/// «Слишком рано»: «реже», 12 s after the last start the turn ended; the
+/// call waits for the 30 s gap and starts by itself.
 #[tokio::test(start_paused = true)]
 async fn too_early_starts_by_itself_once_the_gap_passes() {
     let rig = Rig::new([]).await;
@@ -162,6 +181,7 @@ async fn too_early_starts_by_itself_once_the_gap_passes() {
     rig.say(OTHERS, "Первая фраза клиента").await;
     rig.until(12).await;
     rig.say(OTHERS, "Слишком рано").await;
+    rig.say(ME, "Угу").await;
     rig.until(29).await;
     assert_eq!(rig.starts(), [0], "the gap hasn't passed");
     rig.until(31).await;
@@ -188,15 +208,16 @@ async fn the_managers_phrases_make_no_call_due() {
     assert_eq!(rig.starts(), [0]);
 }
 
-/// «Фраза во время вызова»: one call at a time; a phrase during the call
-/// starts the next one as soon as it ends (the gap passed), with no other
-/// phrase, and the next call gets it.
+/// «Фраза во время вызова»: one call at a time; the client and then the
+/// manager speak during a 25 s call: the next starts as it ends, with no
+/// other phrase, and gets the client's.
 #[tokio::test(start_paused = true)]
-async fn a_phrase_during_a_call_starts_the_next_when_it_ends() {
+async fn a_turn_during_a_call_starts_the_next_when_it_ends() {
     let rig = Rig::new([Step::empty().after(Duration::from_secs(25))]).await;
     rig.say(OTHERS, "Первая фраза").await;
-    rig.until(21).await;
+    rig.until(10).await;
     let during = rig.say(OTHERS, "Пока агент думает").await;
+    rig.say(ME, "Ясно").await;
     assert_eq!(rig.starts(), [0], "a call is running");
     rig.until(26).await;
     assert_eq!(rig.starts(), [0, 25]);
@@ -204,18 +225,34 @@ async fn a_phrase_during_a_call_starts_the_next_when_it_ends() {
     assert!(message.contains(&during.id), "{message}");
 }
 
-/// «Фраза во время вызова» with the gap still running at the end of the
-/// call: the next starts when the gap passes.
+/// A turn that ended during a short call: the next starts when the 5 s gap
+/// passes.
 #[tokio::test(start_paused = true)]
-async fn a_phrase_during_a_short_call_waits_for_the_gap() {
+async fn a_turn_during_a_short_call_waits_for_the_gap() {
     let rig = Rig::new([Step::empty().after(Duration::from_secs(2))]).await;
     rig.say(OTHERS, "Первая фраза").await;
     rig.until(1).await;
     rig.say(OTHERS, "Пока агент думает").await;
+    rig.say(ME, "Ага").await;
     rig.until(4).await;
     assert_eq!(rig.starts(), [0], "the call ended at 2 s, the gap is 5 s");
     rig.until(6).await;
     assert_eq!(rig.starts(), [0, 5]);
+}
+
+/// A phrase of the manager before the client's doesn't end the client's
+/// turn.
+#[tokio::test(start_paused = true)]
+async fn the_manager_before_the_client_is_no_turn_end() {
+    let rig = Rig::new([]).await;
+    rig.say(OTHERS, "Первая фраза клиента").await;
+    rig.until(6).await;
+    rig.say(ME, "А как сейчас?").await;
+    rig.say(OTHERS, "Сейчас всё вручную").await;
+    rig.until(19).await;
+    assert_eq!(rig.starts(), [0]);
+    rig.until(21).await;
+    assert_eq!(rig.starts(), [0, 20]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -224,15 +261,34 @@ async fn the_frequency_is_read_at_every_phrase() {
     rig.setting(settings::QUESTION_FREQUENCY, json!("often"));
     rig.say(OTHERS, "Раз").await;
     rig.until(6).await;
-    rig.say(OTHERS, "Два: вызов кончился, промежутка нет").await;
-    assert_eq!(rig.starts(), [0, 6]);
+    rig.say(OTHERS, "Два").await;
+    rig.say(ME, "Понял").await;
+    assert_eq!(rig.starts(), [0, 6], "no gap after a turn");
 
     rig.setting(settings::QUESTION_FREQUENCY, json!("rare"));
     rig.until(20).await;
     rig.say(OTHERS, "Три: 14 с после второго").await;
+    rig.say(ME, "Угу").await;
     assert_eq!(rig.starts(), [0, 6]);
     rig.until(37).await;
     assert_eq!(rig.starts(), [0, 6, 36]);
+}
+
+#[test]
+fn intervals_by_frequency() {
+    let interval = |value: Value| {
+        settings::question_interval(&settings::SettingsMap::from([(
+            settings::QUESTION_FREQUENCY.to_owned(),
+            value,
+        )]))
+    };
+    assert_eq!(interval(json!("rare")), Duration::from_secs(45));
+    assert_eq!(interval(json!("normal")), Duration::from_secs(20));
+    assert_eq!(interval(json!("often")), Duration::from_secs(10));
+    assert_eq!(
+        settings::question_interval(&settings::SettingsMap::new()),
+        Duration::from_secs(20)
+    );
 }
 
 #[test]
@@ -1033,6 +1089,7 @@ fn store(rig: &Rig, text: &str) -> TranscriptSegment {
 async fn client_says(rig: &Rig, text: &str) {
     store(rig, text);
     rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.fast_loop.phrase(&rig.recording, ME);
     settle().await;
 }
 
@@ -1060,6 +1117,7 @@ async fn operators(rig: &Rig, reply: impl FnOnce(&TranscriptSegment) -> Step) ->
     );
     rig.agent.push(reply(&phrase));
     rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.fast_loop.phrase(&rig.recording, ME);
     rig.until(30).await;
     phrase
 }
@@ -1201,6 +1259,7 @@ async fn a_failed_topic_check_does_not_stop_the_loop() {
     store(&rig, "Операторы отвечают по очереди");
     rig.agent.push(Step::patch(json!({ "ops": [] })));
     rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.fast_loop.phrase(&rig.recording, ME);
     rig.until(50).await;
     assert_eq!(
         topic_check_calls(&rig)[1].outcome,

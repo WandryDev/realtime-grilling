@@ -1,12 +1,15 @@
 //! One scheduler per recording (design.md, decision 2): a task that hears
 //! the live phrases and decides when the agent is called.
 //!
-//! A call starts once a phrase of «Остальные» came since the last call
-//! started, no call runs, and the least gap of `questionFrequency` (read at
-//! every phrase of «Остальные») has passed since the last start
-//! (question-volume design.md, decision 1). A phrase that came during a call
-//! or before the gap passed starts the call by itself when both are over,
-//! without waiting for another phrase. After a failed call the next starts
+//! A call is due once a phrase of «Остальные» came since the last call
+//! started and no call runs (question-volume design.md, decision 1): when
+//! the client finished a turn (a phrase of «Я» came after theirs), once the
+//! least gap of `questionFrequency` passed since the last start; while the
+//! manager is silent, once its interval passed. The first call of a
+//! recording starts at the first phrase of «Остальные». The settings are
+//! read at every phrase of «Остальные». A call due during another one, or
+//! before its time, starts by itself when both are over, without waiting
+//! for another phrase. After a failed call the next starts
 //! by itself 30 s later (not before); `agent_retry` starts one at once.
 //! `NotLoggedIn` stops the calls until a status check finds the agent ready;
 //! `RateLimited` until the limit resets; then the next phrase of «Остальные»
@@ -163,6 +166,7 @@ impl LoopConfig {
 
 /// When `questionFrequency` can't be read: `normal`'s.
 const DEFAULT_GAP: Duration = Duration::from_secs(5);
+const DEFAULT_INTERVAL: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 enum Message {
@@ -471,7 +475,9 @@ impl FastLoop {
                     },
                     last_start: None,
                     client_since_last: false,
+                    turn_ended: false,
                     gap: DEFAULT_GAP,
+                    interval: DEFAULT_INTERVAL,
                     retry_at: None,
                     halt: None,
                 };
@@ -608,8 +614,13 @@ struct Scheduler {
     /// A phrase of «Остальные» came since the last call started: the next
     /// call is due once the gap passes and no call runs.
     client_since_last: bool,
-    /// The least gap between starts, as last read.
+    /// A phrase of «Я» came after the client's since the last start: the
+    /// client finished a turn.
+    turn_ended: bool,
+    /// The least gap between starts after a turn, as last read.
     gap: Duration,
+    /// The gap between starts while the manager is silent, as last read.
+    interval: Duration,
     retry_at: Option<Instant>,
     halt: Option<Halt>,
 }
@@ -660,6 +671,7 @@ impl Scheduler {
                             self.halt = None;
                             // The phrases of the halt wait for the next one.
                             self.client_since_last = false;
+                            self.turn_ended = false;
                             self.report(AgentLoopState::Idle);
                         }
                     }
@@ -680,6 +692,7 @@ impl Scheduler {
                 () = sleep_until(resets_at) => {
                     self.halt = None;
                     self.client_since_last = false;
+                    self.turn_ended = false;
                     self.report(AgentLoopState::Idle);
                 }
             }
@@ -695,40 +708,52 @@ impl Scheduler {
         self.call.fast_loop.forget(&self.call.recording_id);
     }
 
-    /// A phrase came: one of «Остальные» makes a call due and reads the
-    /// gap again.
+    /// A phrase came: one of «Остальные» makes a call due (and reads the
+    /// settings again); one of «Я» after it ends the client's turn.
     async fn phrase(&mut self, channel: TranscriptChannel) {
-        if channel != TranscriptChannel::Others {
+        if channel == TranscriptChannel::Me {
+            self.turn_ended |= self.client_since_last;
             return;
         }
         self.client_since_last = true;
-        self.gap = match self.call.fast_loop.0.config.min_gap {
-            Some(gap) => gap,
-            None => database(&self.call.fast_loop.0.host, |connection| {
-                Ok(settings::question_gap(&settings::get(connection)?))
-            })
-            .await
-            .unwrap_or(DEFAULT_GAP),
-        };
+        self.turn_ended = false;
+        let (gap, interval) = database(&self.call.fast_loop.0.host, |connection| {
+            let settings = settings::get(connection)?;
+            Ok((
+                settings::question_gap(&settings),
+                settings::question_interval(&settings),
+            ))
+        })
+        .await
+        .unwrap_or((DEFAULT_GAP, DEFAULT_INTERVAL));
+        self.gap = self.call.fast_loop.0.config.min_gap.unwrap_or(gap);
+        self.interval = interval;
     }
 
     /// When the next call is due, while no call runs: a phrase of
     /// «Остальные» came since the last start, nothing stops the calls, no
     /// retry is waited for; at once for the first call, else once the gap
-    /// passed since the last start.
+    /// (the client finished a turn) or the interval passed since the last
+    /// start.
     fn due_at(&self) -> Option<Instant> {
         if !self.client_since_last || self.halt.is_some() || self.retry_at.is_some() {
             return None;
         }
+        let wait = if self.turn_ended {
+            self.gap
+        } else {
+            self.interval
+        };
         Some(
             self.last_start
-                .map_or_else(Instant::now, |last| last + self.gap),
+                .map_or_else(Instant::now, |last| last + wait),
         )
     }
 
     fn start_call(&mut self) -> JoinHandle<CallEnd> {
         self.last_start = Some(Instant::now());
         self.client_since_last = false;
+        self.turn_ended = false;
         self.retry_at = None;
         self.halt = None;
         self.report(AgentLoopState::Thinking);

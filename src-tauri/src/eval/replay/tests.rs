@@ -108,7 +108,7 @@ fn message(agent: &FakeAgent, index: usize) -> String {
     agent.received(index).request.user_message
 }
 
-/// «Фраза во время вызова»: the call takes 8 s; a phrase of the client
+/// «Фраза во время вызова»: the call takes 8 s; a turn of the client
 /// meanwhile is not in it, and starts the next one when it ends.
 #[tokio::test(start_paused = true)]
 async fn a_phrase_during_a_call_goes_to_the_next_one() {
@@ -116,7 +116,9 @@ async fn a_phrase_during_a_call_goes_to_the_next_one() {
     let corpus = corpus(vec![
         segment(1, OTHERS, 2_000, "Звонки идут на личные телефоны"),
         segment(2, OTHERS, 5_000, "Ночью никто не отвечает"),
+        segment(4, ME, 6_000, "Понятно"),
         segment(3, OTHERS, 30_000, "Пациенты ждут по десять минут"),
+        segment(5, ME, 31_000, "Ясно"),
     ]);
     let report = replay(&corpus, agent.clone(), &options(), FAST).await;
 
@@ -138,8 +140,9 @@ async fn a_phrase_during_a_call_goes_to_the_next_one() {
     assert!((2_000..2_200).contains(&starts[0]), "{starts:?}");
     // The first call ends at 10 s, past the 5 s gap: the next at once.
     assert!((10_000..10_300).contains(&starts[1]), "{starts:?}");
+    // 20 s after the second start: the interval passed, a call at once.
     assert!((30_000..30_200).contains(&starts[2]), "{starts:?}");
-    assert_eq!(report.run.segments_fed, 3);
+    assert_eq!(report.run.segments_fed, 5);
 }
 
 /// A call whose agent waits on the real world (a CLI is a child process):
@@ -177,7 +180,9 @@ async fn the_clock_follows_a_call_that_waits_on_the_real_world() {
     let corpus = corpus(vec![
         segment(1, OTHERS, 2_000, "Звонки идут на личные телефоны"),
         segment(2, OTHERS, 2_200, "Ночью никто не отвечает"),
+        segment(4, ME, 2_400, "Понятно"),
         segment(3, OTHERS, 30_000, "Пациенты ждут по десять минут"),
+        segment(5, ME, 31_000, "Ясно"),
     ]);
     let report = replay(&corpus, agent.clone(), &options(), FOLLOW).await;
 
