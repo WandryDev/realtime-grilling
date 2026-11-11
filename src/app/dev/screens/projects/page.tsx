@@ -7,6 +7,7 @@ import { PersonScreen } from "@/features/projects/screens/person-screen";
 import { ProjectScreen } from "@/features/projects/screens/project-screen";
 
 import { ScreenFlow, ScreenFrame } from "../_components/screen-frame";
+import { OutlineSourcesStates } from "./_outline-sources";
 
 export const metadata: Metadata = {
   title: "Grill, проекты",
@@ -29,6 +30,7 @@ const SCREENS = [
   { id: "person-edit", title: "14 Редактирование" },
   { id: "person-add", title: "15 Добавить" },
   { id: "project-delete", title: "22 Удаление" },
+  { id: "outline-sources", title: "23 Outline в источниках" },
 ];
 
 // Screens of the projects flow. Not shipped in the production build.
@@ -196,6 +198,15 @@ export default function ProjectsScreensPage() {
           proposals={null}
           sections={["people", "calls", "sources"]}
         />
+      </ScreenFrame>
+      <ScreenFrame
+        height="auto"
+        id="outline-sources"
+        note="Блок Outline в «Источниках» мастера и страницы проекта. Документы Outline идут агенту так же, как файлы; убрать их можно только изменением выбора: снять коллекцию или исключить документ."
+        title="23 Источники Outline — состояния"
+        width={1440}
+      >
+        <OutlineSourcesStates />
       </ScreenFrame>
     </ScreenFlow>
   );

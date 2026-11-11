@@ -34,6 +34,7 @@ import {
   useProjects,
 } from "@/data/projects";
 import { removeProjectSource, useProjectSources } from "@/data/sources";
+import { OutlineSources } from "@/features/connectors/outline-sources-live";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";
@@ -356,11 +357,15 @@ export function NewProjectPage() {
 
   /* -------------------------------------------------- Step 2 */
 
-  const documentsBlock = useWizardDocuments({
-    active: view === "sources",
+  const ensureDraft = useWizardDraft({
     description,
     name,
     onDraft: setDraftId,
+    savedId,
+  });
+  const documentsBlock = useWizardDocuments({
+    active: view === "sources",
+    ensureDraft,
     savedId,
   });
 
@@ -542,7 +547,12 @@ export function NewProjectPage() {
       content = (
         <SourcesStep
           documents={documentsBlock}
-          integrations={<SoonIntegrations />}
+          integrations={
+            <div className="flex flex-col gap-5">
+              <OutlineSources ensureProject={ensureDraft} projectId={savedId} />
+              <SoonIntegrations />
+            </div>
+          }
         />
       );
       break;
@@ -641,30 +651,25 @@ export function NewProjectPage() {
 }
 
 /**
- * "Документы с компьютера" of step 2. Documents belong to a project, so the
- * first of them saves it (`onDraft` gets its id); the wizard fills it in
- * at "Собрать бриф". Files dropped on the window count while `active`.
+ * The project of step 2. Documents and an Outline pick belong to a
+ * project, so the first of them saves it (`onDraft` gets its id); the
+ * wizard fills it in at "Собрать бриф".
  */
-function useWizardDocuments({
-  active,
+function useWizardDraft({
   description,
   name,
   onDraft,
   savedId,
 }: {
-  active: boolean;
   description: string;
   name: string;
   onDraft: (id: string) => void;
   savedId: string | null;
 }) {
-  const documents = useProjectSources(savedId);
-  const { add, adding, rejected } = useAddDocuments(savedId);
-
   // One draft however fast files come: every add awaits the same
   // `createProject` (two drops before it resolves must not make two).
   const draft = useRef<Promise<string | null> | null>(null);
-  const ensureDraft = useCallback(() => {
+  return useCallback(() => {
     if (savedId) {
       return Promise.resolve(savedId);
     }
@@ -682,6 +687,23 @@ function useWizardDocuments({
     });
     return draft.current;
   }, [description, name, onDraft, savedId]);
+}
+
+/**
+ * "Документы с компьютера" of step 2. Files dropped on the window count
+ * while `active`.
+ */
+function useWizardDocuments({
+  active,
+  ensureDraft,
+  savedId,
+}: {
+  active: boolean;
+  ensureDraft: () => Promise<string | null>;
+  savedId: string | null;
+}) {
+  const documents = useProjectSources(savedId);
+  const { add, adding, rejected } = useAddDocuments(savedId);
 
   const addPaths = useCallback(
     async (paths: string[]) => {

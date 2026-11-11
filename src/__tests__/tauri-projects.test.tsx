@@ -399,9 +399,9 @@ describe("project page: what is not the brief", () => {
       )
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Разобрать" })).toBeNull();
-    // Integrations come later: drawn, nothing to pick.
+    // GitHub and ClickUp come later: drawn, nothing to pick.
     const integrations = screen.getByRole("list", { name: "Интеграции" });
-    expect(within(integrations).getAllByText("скоро")).toHaveLength(3);
+    expect(within(integrations).getAllByText("скоро")).toHaveLength(2);
   });
 
   it("adds documents from the dialog and a drop, and removes them", async () => {
@@ -646,12 +646,12 @@ describe("new project wizard", () => {
       screen.getByRole("heading", { name: "Откуда брать контекст" })
     ).toBeTruthy();
 
-    // Integrations come later.
+    // GitHub and ClickUp come later.
     expect(
       within(screen.getByRole("list", { name: "Интеграции" })).getAllByText(
         "скоро"
       )
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Выбрать файлы" }));
     // The first document saves the project: documents belong to one.
     const list = await screen.findByRole("list", { name: "Документы проекта" });

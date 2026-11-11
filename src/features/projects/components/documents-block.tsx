@@ -100,7 +100,7 @@ export function documentRowId(sourceId: string) {
 export function DocumentsBlock({
   adding = false,
   className,
-  documents,
+  documents: sources,
   dropActive = false,
   dropSupported,
   onPick,
@@ -121,6 +121,8 @@ export function DocumentsBlock({
   rejected?: RejectedDocument[];
 }) {
   const titleId = useId();
+  // A connector's documents are listed with their service.
+  const documents = sources.filter((source) => !source.origin);
   return (
     <section
       aria-labelledby={titleId}
@@ -244,14 +246,14 @@ function DocumentRow({
 }
 
 const SOON: { description: string; kind: SourceKind }[] = [
-  { description: "Документация", kind: "outline" },
   { description: "Код", kind: "github" },
   { description: "Задачи и комментарии", kind: "clickup" },
 ];
 
 /**
- * Outline, GitHub and ClickUp until the integrations come: drawn with
- * «скоро», nothing to pick (project-sources spec).
+ * GitHub and ClickUp until their connectors come: drawn with «скоро»,
+ * nothing to pick (project-sources spec, «Коннекторы в мастере и на
+ * странице проекта»). Outline has its own block.
  */
 export function SoonIntegrations({ className }: { className?: string }) {
   return (

@@ -28,6 +28,7 @@ import {
 } from "@/data/people";
 import { deleteProject, updateProject, useProject } from "@/data/projects";
 import { removeProjectSource, useProjectSources } from "@/data/sources";
+import { OutlineSources } from "@/features/connectors/outline-sources-live";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
@@ -415,7 +416,14 @@ function ProjectView({ id }: { id: string | null }) {
           onExportBrief={handleExportBrief}
         />
       }
-      integrations={data.demo ? null : <SoonIntegrations />}
+      integrations={
+        data.demo ? null : (
+          <div className="flex flex-col gap-4">
+            <OutlineSources projectId={project.id} />
+            <SoonIntegrations />
+          </div>
+        )
+      }
       notes={project.notes}
       onAddPerson={openAddPerson}
       onAnchorChange={handleAnchor}
