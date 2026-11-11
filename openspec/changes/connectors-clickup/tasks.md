@@ -62,7 +62,7 @@
 ## 5. Проверка и выпуск
 
 - [ ] 5.1 Прогнать гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate connectors-clickup --strict` проходит.
-- [ ] 5.2 Changeset (`minor`) о подключении ClickUp и задачах ClickUp в проектах. Проверка: файл `.changeset/connectors-clickup.md` есть.
+- [x] 5.2 Changeset (`minor`) о подключении ClickUp и задачах ClickUp в проектах. Проверка: файл `.changeset/connectors-clickup.md` есть.
 
 ## 6. Ручной прогон
 
