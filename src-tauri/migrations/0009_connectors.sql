@@ -68,7 +68,9 @@ CREATE TABLE project_connector_sync (
 --
 -- A connector's document: `kind` `connector`, `connector`, `external_id`
 -- (the document in the service), `external_url` and `external_version`
--- (Outline: `updatedAt`); its text is in the row, `stored_path` is empty,
+-- (Outline: `updatedAt`), `account_ref` (the team of the service it was
+-- synced with: while the selection keeps items of another team, that
+-- team's documents stay); its text is in the row, `stored_path` is empty,
 -- `extension` `md`, `size` the text's bytes, `sha256` the text's hash.
 -- The same content is a file of a project once; two documents of a
 -- service may have the same text, but a document is in a project once.
@@ -92,10 +94,11 @@ CREATE TABLE project_sources_new (
   external_id      TEXT,
   external_url     TEXT,
   external_version TEXT,
+  account_ref      TEXT,
   CHECK (
-    (kind = 'file' AND connector IS NULL AND external_id IS NULL)
+    (kind = 'file' AND connector IS NULL AND external_id IS NULL AND account_ref IS NULL)
     OR (kind = 'connector' AND connector IS NOT NULL AND external_id IS NOT NULL
-        AND stored_path = '')
+        AND account_ref IS NOT NULL AND stored_path = '')
   )
 ) STRICT;
 

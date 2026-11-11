@@ -37,8 +37,11 @@ pub fn normalize(input: &str) -> Result<String, String> {
     if !valid_host {
         return Err("Не похоже на адрес Outline".to_owned());
     }
+    // Digits only: `u16::from_str` would take `+80` too.
     if let Some(port) = port
-        && (port.is_empty() || port.parse::<u16>().is_err())
+        && (port.is_empty()
+            || !port.bytes().all(|byte| byte.is_ascii_digit())
+            || port.parse::<u16>().is_err())
     {
         return Err("Не похоже на адрес Outline".to_owned());
     }
@@ -119,7 +122,14 @@ mod tests {
             "docs pixel agency",
             "https://docs.pixel.agency:http",
             "https://docs.pixel.agency:99999",
+            "https://docs.pixel.agency:+80",
+            "docs.pixel.agency:-1",
+            "docs.pixel.agency: 80",
             "-bad.example",
+            // IPv6 literals are not taken (a self-hosted Outline has a name
+            // or 127.0.0.1).
+            "http://[::1]:3000",
+            "https://[2001:db8::1]",
         ] {
             assert!(normalize(input).is_err(), "{input}");
         }

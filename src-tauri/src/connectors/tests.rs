@@ -1045,7 +1045,7 @@ async fn prepare_waits_for_a_silent_outline_at_most_30_seconds() {
                 db,
                 &id,
                 ConnectorKind::Outline,
-                TEAM,
+                Some(TEAM),
                 &[collection("tm")],
                 1,
             )?;
@@ -1063,6 +1063,7 @@ async fn prepare_waits_for_a_silent_outline_at_most_30_seconds() {
                     truncated: false,
                     error: None,
                 }],
+                account_ref: TEAM.to_owned(),
                 removals: Vec::new(),
             };
             sources::apply_connector_changes(db, &id, ConnectorKind::Outline, &changes, 1)?;
@@ -1204,4 +1205,397 @@ fn connection_writes_send_their_events() {
         serde_json::to_value(stored::selection_changed("p", kind)).unwrap(),
         json!({ "entity": "connectorSelections", "id": "outline", "projectId": "p", "change": "updated" })
     );
+}
+
+/* Review fixes */
+
+fn selection_view(host: &Host, project: &str) -> service::ProjectConnectorView {
+    block_on(service::selection_get(host, project)).unwrap()[0].clone()
+}
+
+/// Reconnects the fake as another team that has its own collection `b`
+/// and no longer the first team's `tm`.
+fn switch_team(host: &Arc<Host>, fake: &FakeOutline) {
+    {
+        let mut state = fake.state();
+        state.team = ("team-other".to_owned(), "Другая".to_owned());
+        state.delete_collection("tm");
+        state.add_collection("b", "Вторая", 2);
+    }
+    host.connect(fake);
+}
+
+/// Saving the selection again keeps another team's item that team's:
+/// «другая команда», its documents stay (nothing of it is removed until
+/// the manager decides).
+#[test]
+fn saving_again_keeps_the_other_teams_items_and_sources() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    fake.state().add_collection("tm", "Телемедиа", 2);
+    host.connect(&fake);
+    let project = host.project("Телемедиа");
+    host.select(&project, vec![collection("tm")]).unwrap();
+    switch_team(&host, &fake);
+
+    host.select(&project, vec![collection("tm"), collection("b")])
+        .unwrap();
+    let view = selection_view(&host, &project);
+    let other: Vec<_> = view
+        .items
+        .iter()
+        .map(|item| (item.external_id.as_str(), item.other_account))
+        .collect();
+    assert_eq!(other, [("tm", true), ("b", false)]);
+    assert_eq!(host.outline_ids(&project), ["b-1", "b-2", "tm-1", "tm-2"]);
+    host.sync(&project).unwrap();
+    assert_eq!(host.outline_ids(&project), ["b-1", "b-2", "tm-1", "tm-2"]);
+}
+
+/// With another team's item kept, the connected team's documents still
+/// leave: archived ones on a sync, unpicked ones with their item.
+#[test]
+fn another_teams_items_protect_only_that_teams_sources() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    fake.state().add_collection("tm", "Телемедиа", 2);
+    host.connect(&fake);
+    let project = host.project("Телемедиа");
+    host.select(&project, vec![collection("tm")]).unwrap();
+    switch_team(&host, &fake);
+    host.select(&project, vec![collection("tm"), collection("b")])
+        .unwrap();
+
+    fake.state().archive("b-1");
+    host.sync(&project).unwrap();
+    assert_eq!(host.outline_ids(&project), ["b-2", "tm-1", "tm-2"]);
+
+    host.select(&project, vec![collection("tm")]).unwrap();
+    assert_eq!(host.outline_ids(&project), ["tm-1", "tm-2"]);
+
+    // The manager takes the other team's item off too: its documents go.
+    host.select(&project, Vec::new()).unwrap();
+    assert!(host.outline_ids(&project).is_empty());
+}
+
+/// `outline-connector`: the selection can always be changed or removed,
+/// Outline connected or not; only something new needs the connection.
+#[test]
+fn a_disconnected_selection_can_be_cut_but_not_grown() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    fake.state().add_collection("tm", "Телемедиа", 2);
+    fake.state().add_collection("dc", "Документы", 1);
+    host.connect(&fake);
+    let project = host.project("Телемедиа");
+    host.select(&project, vec![collection("tm"), collection("dc")])
+        .unwrap();
+    block_on(service::disconnect(host.as_ref(), ConnectorKind::Outline)).unwrap();
+
+    let view = block_on(service::selection_set(
+        host.as_ref(),
+        &project,
+        ConnectorKind::Outline,
+        vec![collection("tm")],
+    ))
+    .unwrap();
+    assert_eq!(view.items.len(), 1);
+    assert_eq!(view.items[0].external_id, "tm");
+    assert!(!view.items[0].other_account);
+
+    let error = block_on(service::selection_set(
+        host.as_ref(),
+        &project,
+        ConnectorKind::Outline,
+        vec![collection("tm"), collection("new")],
+    ))
+    .unwrap_err();
+    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+    assert_eq!(selection_view(&host, &project).items.len(), 1);
+
+    // Reconnected: the kept item is the team's own and syncs.
+    host.connect(&fake);
+    host.sync(&project).unwrap();
+    assert_eq!(host.outline_ids(&project), ["tm-1", "tm-2"]);
+}
+
+/// A Keychain that refuses to read (locked, the prompt denied) is not a
+/// revoked key: the connection stands, the error says Keychain.
+#[test]
+fn a_refused_keychain_read_does_not_break_the_connection() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    fake.state().add_collection("tm", "Телемедиа", 2);
+    host.connect(&fake);
+    let project = host.project("Телемедиа");
+    host.select(&project, vec![collection("tm")]).unwrap();
+    host.secrets.fail_reads(true);
+
+    block_on(service::verify(host.as_ref(), ConnectorKind::Outline)).unwrap();
+    let connection = connections(&host)[0].clone();
+    assert_eq!(connection.status, ConnectionStatus::Connected);
+    assert_eq!(connection.error_kind, Some(ErrorKind::Other));
+    assert!(
+        connection.error.as_deref().unwrap().contains("Keychain"),
+        "{:?}",
+        connection.error
+    );
+
+    let outcome = host.sync(&project).unwrap();
+    assert!(matches!(
+        outcome,
+        SyncOutcome::Failed {
+            kind: ErrorKind::Other,
+            ..
+        }
+    ));
+    assert_eq!(host.outline_ids(&project), ["tm-1", "tm-2"]);
+    let error = block_on(service::browse(host.as_ref(), ConnectorKind::Outline, None)).unwrap_err();
+    assert!(error.to_string().contains("Keychain"), "{error}");
+    assert_eq!(connections(&host)[0].status, ConnectionStatus::Connected);
+
+    host.secrets.fail_reads(false);
+    block_on(service::verify(host.as_ref(), ConnectorKind::Outline)).unwrap();
+    assert_eq!(connections(&host)[0].error_kind, None);
+}
+
+/// A connect that can't read the key already there writes nothing: a
+/// rollback could not put it back.
+#[test]
+fn a_connect_that_cannot_read_the_old_key_writes_nothing() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    host.connect(&fake);
+    let before = host.secrets.raw();
+    host.secrets.fail_reads(true);
+    let error = block_on(service::connect_api_key(
+        &host,
+        ConnectorKind::Outline,
+        &fake.origin,
+        KEY,
+    ))
+    .unwrap_err();
+    assert!(error.to_string().contains("Keychain"), "{error}");
+    assert_eq!(host.secrets.raw(), before);
+}
+
+/// A 403 on `auth.info` refuses the whole key: `error`, «Нет доступа»; a
+/// 403 on one collection only makes that item unavailable.
+#[test]
+fn a_forbidden_key_breaks_the_connection_a_forbidden_collection_does_not() {
+    let host = Host::new();
+    let fake = FakeOutline::start();
+    fake.state().add_collection("tm", "Телемедиа", 2);
+    fake.state().add_collection("hidden", "Секрет", 1);
+    host.connect(&fake);
+    let project = host.project("Телемедиа");
+    host.select(&project, vec![collection("tm"), collection("hidden")])
+        .unwrap();
+
+    fake.state().collections[1].forbidden = true;
+    host.sync(&project).unwrap();
+    let view = selection_view(&host, &project);
+    assert_eq!(view.items[1].status, ItemStatus::Unavailable);
+    assert_eq!(connections(&host)[0].status, ConnectionStatus::Connected);
+    block_on(service::verify(host.as_ref(), ConnectorKind::Outline)).unwrap();
+    assert_eq!(connections(&host)[0].status, ConnectionStatus::Connected);
+
+    fake.state().auth_forbidden = true;
+    block_on(service::verify(host.as_ref(), ConnectorKind::Outline)).unwrap();
+    let view = &block_on(service::list(host.as_ref())).unwrap()[0];
+    assert_eq!(view.status, ConnectorStatus::Error);
+    assert_eq!(view.error_kind, Some(ErrorKind::Forbidden));
+    assert_eq!(view.error.as_deref(), Some("Нет доступа к Outline"));
+}
+
+/// A project with an Outline connection, a selection of `tm`, a key in
+/// the store and no request made, for a provider of the test's own.
+async fn seeded(host: &Arc<Host>) -> String {
+    let project = host
+        .storage
+        .write(&host.sink, |db| {
+            projects::create(
+                db,
+                projects::ProjectCreate {
+                    name: "Телемедиа".to_owned(),
+                    ..projects::ProjectCreate::default()
+                },
+            )
+        })
+        .await
+        .unwrap()
+        .id;
+    let id = project.clone();
+    host.storage
+        .write(&host.sink, move |db| {
+            let account = Account {
+                host: Some("https://wandry.getoutline.com".to_owned()),
+                team_id: TEAM.to_owned(),
+                team_name: "Wandry".to_owned(),
+                user_name: None,
+            };
+            stored::save_connected(db, ConnectorKind::Outline, &account, 1)?;
+            stored::replace_selection(
+                db,
+                &id,
+                ConnectorKind::Outline,
+                Some(TEAM),
+                &[collection("tm")],
+                1,
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .await
+        .unwrap();
+    host.secrets
+        .set(
+            ConnectorKind::Outline,
+            &Credential::ApiKey {
+                key: KEY.to_owned(),
+            },
+        )
+        .unwrap();
+    project
+}
+
+/// A provider whose `resolve` panics, or answers «unreachable» after
+/// `delay` (tokio's clock).
+struct Scripted {
+    panics: bool,
+    delay: Duration,
+    entered: AtomicBool,
+}
+
+impl Scripted {
+    fn new(panics: bool, delay: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            panics,
+            delay,
+            entered: AtomicBool::new(false),
+        })
+    }
+}
+
+impl Connector for Scripted {
+    fn descriptor(&self) -> &'static Descriptor {
+        ConnectorKind::Outline.descriptor()
+    }
+
+    fn verify<'a>(&'a self, _: &'a Session) -> BoxFuture<'a, Result<Account, ConnectorError>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+impl SourceProvider for Scripted {
+    fn browse<'a>(
+        &'a self,
+        _: &'a Session,
+        _: Option<&'a ExternalRef>,
+    ) -> BoxFuture<'a, Result<Vec<BrowseNode>, ConnectorError>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        _: &'a Session,
+        _: &'a [SelectionItem],
+    ) -> BoxFuture<'a, Result<Resolved, ConnectorError>> {
+        self.entered.store(true, Ordering::SeqCst);
+        Box::pin(async move {
+            assert!(!self.panics, "a bug in the connector");
+            tokio::time::sleep(self.delay).await;
+            Err(ConnectorError::Unreachable("Outline не ответил".to_owned()))
+        })
+    }
+
+    fn fetch<'a>(
+        &'a self,
+        _: &'a Session,
+        _: &'a [RemoteDoc],
+    ) -> BoxFuture<'a, Result<Vec<DocText>, ConnectorError>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// A sync that panics frees its place: the callers get an error, the
+/// project is not «syncing» forever, and the next request starts anew.
+#[test]
+fn a_panicking_sync_leaves_no_flight_behind() {
+    let host = Host::with(Scripted::new(true, Duration::ZERO) as Arc<dyn SourceProvider>);
+    let project = block_on(seeded(&host));
+    for _ in 0..2 {
+        let (first, second) = block_on(async {
+            tokio::join!(
+                sync::sync_project(&host, &project, ConnectorKind::Outline),
+                sync::sync_project(&host, &project, ConnectorKind::Outline),
+            )
+        });
+        assert!(first.is_err(), "{first:?}");
+        assert!(second.is_err(), "{second:?}");
+        assert!(
+            !host
+                .connectors
+                .flights
+                .is_running(&project, ConnectorKind::Outline)
+        );
+    }
+}
+
+/// The 30 s before a call cut only the waiting: the connectors after a
+/// slow one still sync (here GitHub, «не подключён»).
+#[tokio::test(start_paused = true)]
+async fn prepare_lets_every_connector_sync_after_30_seconds() {
+    let slow = Scripted::new(false, Duration::from_secs(40));
+    let host = Host::with(Arc::clone(&slow) as Arc<dyn SourceProvider>);
+    *host.agent.lock().unwrap() = Some(Arc::new(Waiting));
+    let project = seeded(&host).await;
+    let id = project.clone();
+    host.storage
+        .write(&host.sink, move |db| {
+            stored::replace_selection(
+                db,
+                &id,
+                ConnectorKind::GitHub,
+                Some(TEAM),
+                &[collection("repo")],
+                1,
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .await
+        .unwrap();
+
+    let builds = BriefBuilds::default();
+    let task = {
+        let (host, builds, project) = (Arc::clone(&host), builds.clone(), project.clone());
+        tokio::spawn(async move { prepare(&host, &builds, &project).await })
+    };
+    while !slow.entered.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    task.await.unwrap().unwrap();
+    let github = || {
+        let id = project.clone();
+        let host = Arc::clone(&host);
+        async move {
+            host.storage
+                .read(move |db| stored::sync_state(db, &id, ConnectorKind::GitHub))
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(github().await, None, "Outline is still being synced");
+    let mut state = None;
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        state = github().await;
+        if state.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        state.and_then(|state| state.error_kind),
+        Some(ErrorKind::Disconnected)
+    );
+    builds.cancel(&project);
 }

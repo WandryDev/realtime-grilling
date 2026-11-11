@@ -16,7 +16,8 @@ use super::{
     Account, AuthMethod, BrowseNode, Capability, ConnectorError, ConnectorKind, Credential,
     ErrorKind, ExternalRef, MAX_DOCUMENTS, SelectionItem, SelectionItemKind, Session,
     outline::address,
-    sync::{self, ConnectorHost, failure_message, parts, secret_message},
+    secrets::SecretError,
+    sync::{self, ConnectorHost, failure_message, parts, secret_failure},
 };
 use crate::{
     error::{CommandError, CommandResult},
@@ -229,8 +230,17 @@ pub async fn connect_api_key<H: ConnectorHost>(
     };
 
     // The OS store first: what was there before comes back if the row
-    // can't be written.
-    let previous = connectors.secrets.get(kind).ok();
+    // can't be written. A key that can't be read can't be put back: then
+    // nothing is written.
+    let previous = match connectors.secrets.get(kind) {
+        Ok(previous) => Some(previous),
+        Err(SecretError::Missing) => None,
+        Err(error) => {
+            return Err(CommandError::external(format!(
+                "Нет доступа к Keychain, ключ не сохранён: {error}"
+            )));
+        }
+    };
     connectors
         .secrets
         .set(kind, &session.credential)
@@ -312,20 +322,16 @@ pub async fn disconnect<H: ConnectorHost>(host: &H, kind: ConnectorKind) -> Comm
 async fn session_of<H: ConnectorHost>(
     host: &H,
     kind: ConnectorKind,
-) -> CommandResult<(StoredConnection, Result<Session, String>)> {
+) -> CommandResult<(StoredConnection, Result<Session, SecretError>)> {
     let (storage, connectors) = parts(host)?;
     let connection = storage
         .read(move |db| stored::connection(db, kind))
         .await?
         .ok_or_else(|| CommandError::invalid(format!("{} не подключён", kind.label())))?;
-    let session = connectors
-        .secrets
-        .get(kind)
-        .map(|credential| Session {
-            host: connection.account.host.clone(),
-            credential,
-        })
-        .map_err(|error| secret_message(&error));
+    let session = connectors.secrets.get(kind).map(|credential| Session {
+        host: connection.account.host.clone(),
+        credential,
+    });
     Ok((connection, session))
 }
 
@@ -360,7 +366,10 @@ fn failure(kind: ConnectorKind, error: &ConnectorError) -> (ErrorKind, String, b
 }
 
 /// Checks one connection with the service: a refused secret breaks it, a
-/// network failure only marks «не удалось обновить».
+/// network failure only marks «не удалось обновить». A 403 here is a
+/// refusal of the whole key (`auth.info` needs nothing but the key): the
+/// connection goes to `error` with «Нет доступа»; a 403 on one collection
+/// or document only makes that item unavailable.
 pub async fn verify<H: ConnectorHost>(host: &H, kind: ConnectorKind) -> CommandResult<()> {
     let (_, connectors) = parts(host)?;
     let Some(provider) = connectors.provider(kind) else {
@@ -369,13 +378,15 @@ pub async fn verify<H: ConnectorHost>(host: &H, kind: ConnectorKind) -> CommandR
     let (_, session) = session_of(host, kind).await?;
     let session = match session {
         Ok(session) => session,
-        Err(message) => {
-            return record(host, kind, Err((ErrorKind::Unauthorized, message, true))).await;
-        }
+        Err(error) => return record(host, kind, Err(secret_failure(&error))).await,
     };
     match provider.verify(&session).await {
         Ok(account) => record(host, kind, Ok(Some(&account))).await,
-        Err(error) => record(host, kind, Err(failure(kind, &error))).await,
+        Err(error) => {
+            let (error_kind, message, breaks) = failure(kind, &error);
+            let breaks = breaks || matches!(error, ConnectorError::Forbidden);
+            record(host, kind, Err((error_kind, message, breaks))).await
+        }
     }
 }
 
@@ -412,13 +423,10 @@ pub async fn browse<H: ConnectorHost>(
     let (_, session) = session_of(host, kind).await?;
     let session = match session {
         Ok(session) => session,
-        Err(message) => {
-            record(
-                host,
-                kind,
-                Err((ErrorKind::Unauthorized, message.clone(), true)),
-            )
-            .await?;
+        Err(error) => {
+            let failed = secret_failure(&error);
+            let message = failed.1.clone();
+            record(host, kind, Err(failed)).await?;
             return Err(CommandError::external(message));
         }
     };
@@ -526,8 +534,11 @@ fn view(
 /// Replaces the project's selection in the connector. A selection that
 /// brings more than [`MAX_DOCUMENTS`] documents is `Invalid` and not saved;
 /// when the service can't be asked the selection is saved and the sync
-/// keeps the 200 most recently changed. The caller starts the sync
-/// ([`sync::sync_fresh`]).
+/// keeps the 200 most recently changed. Items already picked keep their
+/// team (another team's stay that team's); new ones get the connected
+/// team. Without a connection the selection can still be cut down (the
+/// spec: it can always be changed or removed), but nothing new is added.
+/// The caller starts the sync ([`sync::sync_fresh`]).
 pub async fn selection_set<H: ConnectorHost>(
     host: &H,
     project_id: &str,
@@ -537,13 +548,36 @@ pub async fn selection_set<H: ConnectorHost>(
     available(kind)?;
     let (storage, connectors) = parts(host)?;
     let id = project_id.to_owned();
-    storage.read(move |db| projects::exists(db, &id)).await?;
-    let account_ref = if items.is_empty() {
-        String::new()
-    } else {
-        let (connection, session) = session_of(host, kind).await?;
+    let (connection, before) = storage
+        .read(move |db| {
+            projects::exists(db, &id)?;
+            Ok((
+                stored::connection(db, kind)?,
+                stored::selection(db, &id, kind)?,
+            ))
+        })
+        .await?;
+    let team = connection.map(|connection| connection.account.team_id);
+    if let Some(team) = &team
+        && !items.is_empty()
+    {
+        // The limit counts what the connected team's items bring.
+        let ours: Vec<SelectionItem> = items
+            .iter()
+            .filter(|item| {
+                before
+                    .iter()
+                    .find(|stored| {
+                        stored.item.item_kind == item.item_kind
+                            && stored.item.external_id == item.external_id.trim()
+                    })
+                    .is_none_or(|stored| &stored.account_ref == team)
+            })
+            .cloned()
+            .collect();
+        let (_, session) = session_of(host, kind).await?;
         if let (Ok(session), Some(provider)) = (session, connectors.provider(kind))
-            && let Ok(resolved) = provider.resolve(&session, &items).await
+            && let Ok(resolved) = provider.resolve(&session, &ours).await
             && resolved.docs.len() > MAX_DOCUMENTS
         {
             return Err(CommandError::invalid(format!(
@@ -553,12 +587,12 @@ pub async fn selection_set<H: ConnectorHost>(
                 resolved.docs.len()
             )));
         }
-        connection.account.team_id
-    };
+    }
     let id = project_id.to_owned();
     storage
         .write(host, move |db| {
-            let events = stored::replace_selection(db, &id, kind, &account_ref, &items, now_ms())?;
+            let events =
+                stored::replace_selection(db, &id, kind, team.as_deref(), &items, now_ms())?;
             Ok(((), events))
         })
         .await?;

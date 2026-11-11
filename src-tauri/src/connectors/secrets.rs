@@ -135,6 +135,7 @@ impl SecretStore for KeyringStore {
 pub struct MemoryStore {
     entries: Mutex<HashMap<String, String>>,
     fail_writes: Mutex<bool>,
+    fail_reads: Mutex<bool>,
 }
 
 #[cfg(test)]
@@ -143,6 +144,14 @@ impl MemoryStore {
     pub fn fail_writes(&self, fail: bool) {
         *self
             .fail_writes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = fail;
+    }
+
+    /// Every `get` fails from now on (a locked Keychain, a denied prompt).
+    pub fn fail_reads(&self, fail: bool) {
+        *self
+            .fail_reads
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = fail;
     }
@@ -159,6 +168,13 @@ impl MemoryStore {
 #[cfg(test)]
 impl SecretStore for MemoryStore {
     fn get(&self, kind: ConnectorKind) -> Result<Credential, SecretError> {
+        if *self
+            .fail_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            return Err(SecretError::Store("Связка ключей заблокирована".to_owned()));
+        }
         let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         decode(entries.get(&account(kind)).ok_or(SecretError::Missing)?)
     }

@@ -174,8 +174,15 @@ pub async fn prepare<H: BriefHost>(
     builds: &BriefBuilds,
     project_id: &str,
 ) -> CommandResult<bool> {
-    // A timeout drops only the waiting: the sync runs on in its own task.
-    let _ = tokio::time::timeout(SYNC_BEFORE_CALL, host.sync_connectors(project_id)).await;
+    // The sync runs in its own task and the timeout drops only the
+    // waiting: every connector's sync goes on after the 30 s.
+    let (done, synced) = tokio::sync::oneshot::channel();
+    let sync = host.sync_connectors(project_id);
+    crate::connectors::sync::spawn_detached(async move {
+        sync.await;
+        let _ = done.send(());
+    });
+    let _ = tokio::time::timeout(SYNC_BEFORE_CALL, synced).await;
     if builds.is_building(project_id) {
         return Ok(false);
     }

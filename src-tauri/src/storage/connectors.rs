@@ -269,13 +269,16 @@ pub fn selection(
 }
 
 /// Replaces the project's selection in the connector. Items already there
-/// (same kind and id) keep their status; the same item twice is kept once.
+/// (same kind and id) keep their team and status: an item of another team
+/// stays that team's; a new item gets `new_account` (the connected team),
+/// and without one it is `Invalid` (nothing can be added while the
+/// connector is not connected). The same item twice is kept once.
 /// `NotFound` for an unknown project.
 pub fn replace_selection(
     connection: &Connection,
     project_id: &str,
     kind: ConnectorKind,
-    account_ref: &str,
+    new_account: Option<&str>,
     items: &[SelectionItem],
     now: i64,
 ) -> CommandResult<Vec<DataChanged>> {
@@ -291,13 +294,25 @@ pub fn replace_selection(
             return Err(CommandError::invalid("У пункта выбора нет идентификатора"));
         }
         let kept = before.iter().find(|stored| {
-            stored.item.item_kind == item.item_kind
-                && stored.item.external_id == external_id
-                && stored.account_ref == account_ref
+            stored.item.item_kind == item.item_kind && stored.item.external_id == external_id
         });
-        let status = match kept.map(|stored| stored.status) {
-            Some(ItemStatus::Unavailable) => "unavailable",
-            _ => "ok",
+        let (account_ref, status) = match kept {
+            Some(stored) => (
+                stored.account_ref.as_str(),
+                match stored.status {
+                    ItemStatus::Unavailable => "unavailable",
+                    ItemStatus::Ok => "ok",
+                },
+            ),
+            None => (
+                new_account.ok_or_else(|| {
+                    CommandError::invalid(format!(
+                        "{} не подключён: новое в выборе не добавить",
+                        kind.label()
+                    ))
+                })?,
+                "ok",
+            ),
         };
         connection.execute(
             "INSERT INTO connector_selections

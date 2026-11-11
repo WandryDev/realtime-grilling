@@ -10,6 +10,7 @@ mod tests;
 
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::Duration,
 };
 
@@ -130,6 +131,10 @@ fn stop_on(result: &Result<impl Sized, ConnectorError>) -> Result<(), ConnectorE
     }
 }
 
+/// An `exclude` leaves a document out of whatever brings it: its picked
+/// collection or a picked document it is nested in. It goes alone: its
+/// nested documents stay. A document picked by itself is never left out
+/// (the picker keeps an id either picked or excluded).
 async fn resolve(client: &Client, selection: &[SelectionItem]) -> Result<Resolved, ConnectorError> {
     let excluded: HashSet<&str> = selection
         .iter()
@@ -138,6 +143,11 @@ async fn resolve(client: &Client, selection: &[SelectionItem]) -> Result<Resolve
         .collect();
     let mut collections = Collections::default();
     let mut found: Vec<Document> = Vec::new();
+    let picked: HashSet<&str> = selection
+        .iter()
+        .filter(|item| item.item_kind == SelectionItemKind::Document)
+        .map(|item| item.external_id.as_str())
+        .collect();
     let mut unavailable_items = Vec::new();
     for item in selection {
         match item.item_kind {
@@ -178,7 +188,9 @@ async fn resolve(client: &Client, selection: &[SelectionItem]) -> Result<Resolve
     let docs = found
         .iter()
         .filter(|document| document.is_live())
-        .filter(|document| !excluded.contains(document.id.as_str()))
+        .filter(|document| {
+            !excluded.contains(document.id.as_str()) || picked.contains(document.id.as_str())
+        })
         .filter(|document| seen.insert(document.id.clone()))
         .map(|document| remote(client, document))
         .collect();
@@ -323,14 +335,22 @@ impl SourceProvider for OutlineConnector {
     }
 }
 
+/// How many collection trees `browse_collections` reads at once: a big
+/// team's dozens of collections would otherwise hit «too many requests».
+pub const BROWSE_CONCURRENCY: usize = 6;
+
 /// The collections with how many documents each brings, their trees read
-/// side by side.
+/// side by side, [`BROWSE_CONCURRENCY`] at a time.
 async fn browse_collections(client: &Client) -> Result<Vec<BrowseNode>, ConnectorError> {
     let collections = client.collections().await?;
+    let permits = Arc::new(tokio::sync::Semaphore::new(BROWSE_CONCURRENCY));
     let mut tasks = tokio::task::JoinSet::new();
     for (index, collection) in collections.iter().enumerate() {
-        let (client, id) = (client.clone(), collection.id.clone());
-        tasks.spawn(async move { (index, client.collection_documents(&id).await) });
+        let (client, id, permits) = (client.clone(), collection.id.clone(), Arc::clone(&permits));
+        tasks.spawn(async move {
+            let _permit = permits.acquire_owned().await;
+            (index, client.collection_documents(&id).await)
+        });
     }
     let mut counts = vec![0_usize; collections.len()];
     while let Some(joined) = tasks.join_next().await {

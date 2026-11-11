@@ -92,6 +92,11 @@ pub struct State {
     pub list_without_text: bool,
     /// Waits before each answer.
     pub delay: Duration,
+    /// `auth.info` answers 403: the key itself has no access.
+    pub auth_forbidden: bool,
+    /// Requests being answered now, and the most at once.
+    pub in_flight: usize,
+    pub max_in_flight: usize,
     pub log: Vec<Logged>,
     clock: u32,
 }
@@ -197,6 +202,9 @@ impl FakeOutline {
             html: false,
             list_without_text: false,
             delay: Duration::ZERO,
+            auth_forbidden: false,
+            in_flight: 0,
+            max_in_flight: 0,
             log: Vec::new(),
             clock: 0,
         }));
@@ -263,6 +271,8 @@ async fn respond(mut socket: TcpStream, state: Arc<Mutex<State>>) {
             content_type: header("content-type"),
         });
         let (status, extra, payload) = route(&mut state, &method, &body, header("authorization"));
+        state.in_flight += 1;
+        state.max_in_flight = state.max_in_flight.max(state.in_flight);
         (status, extra, payload, state.delay, state.stall)
     };
     if stall {
@@ -271,6 +281,7 @@ async fn respond(mut socket: TcpStream, state: Arc<Mutex<State>>) {
     if !delay.is_zero() {
         tokio::time::sleep(delay).await;
     }
+    state.lock().unwrap().in_flight -= 1;
     let reason = match status {
         200 => "OK",
         401 => "Unauthorized",
@@ -375,6 +386,7 @@ fn route(
     }
     let id = body["id"].as_str().unwrap_or_default();
     match method {
+        "auth.info" if state.auth_forbidden => error(403, "Authorization error"),
         "auth.info" => ok(
             json!({
                 "user": { "id": "user-1", "name": state.user, "email": "dima@example.com" },

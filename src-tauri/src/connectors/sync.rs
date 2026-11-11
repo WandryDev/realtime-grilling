@@ -113,11 +113,46 @@ async fn wait(mut receiver: watch::Receiver<Option<SyncResult>>) -> SyncResult {
 }
 
 /// Runs `future` on the current Tokio runtime, else on Tauri's.
-fn spawn_detached(future: impl Future<Output = ()> + Send + 'static) {
+pub(crate) fn spawn_detached(future: impl Future<Output = ()> + Send + 'static) {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.spawn(future);
     } else {
         tauri::async_runtime::spawn(future);
+    }
+}
+
+/// A running sync's place in [`SyncFlights`]. Finishing sends the result;
+/// dropped without it (the sync panicked) the place is freed all the same
+/// and the waiting callers get an error, so the next request starts anew.
+struct Flight<H: ConnectorHost> {
+    host: Arc<H>,
+    key: Key,
+    sender: Option<watch::Sender<Option<SyncResult>>>,
+}
+
+impl<H: ConnectorHost> Flight<H> {
+    fn finish(mut self, result: SyncResult) {
+        self.leave();
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(Some(result));
+        }
+    }
+
+    fn leave(&self) {
+        if let Some(connectors) = self.host.connectors() {
+            connectors.flights.state().remove(&self.key);
+        }
+    }
+}
+
+impl<H: ConnectorHost> Drop for Flight<H> {
+    fn drop(&mut self) {
+        if self.sender.is_some() {
+            self.leave();
+            // The sender goes after the place: no request joins a closed
+            // channel.
+            self.sender = None;
+        }
     }
 }
 
@@ -137,13 +172,14 @@ pub async fn sync_project<H: ConnectorHost>(
         } else {
             let (sender, receiver) = watch::channel(None);
             flights.insert(key.clone(), receiver.clone());
-            let host = Arc::clone(host);
+            let flight = Flight {
+                host: Arc::clone(host),
+                key,
+                sender: Some(sender),
+            };
             spawn_detached(async move {
-                let result = run(host.as_ref(), &key.0, key.1).await;
-                if let Some(connectors) = host.connectors() {
-                    connectors.flights.state().remove(&key);
-                }
-                let _ = sender.send(Some(result));
+                let result = run(flight.host.as_ref(), &flight.key.0, flight.key.1).await;
+                flight.finish(result);
             });
             receiver
         }
@@ -229,15 +265,9 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
     let credential = match connectors.secrets.get(kind) {
         Ok(credential) => credential,
         Err(error) => {
-            let message = secret_message(&error);
+            let (error_kind, message, breaks) = secret_failure(&error);
             return fail_with(
-                host,
-                storage,
-                project_id,
-                kind,
-                ErrorKind::Unauthorized,
-                &message,
-                true,
+                host, storage, project_id, kind, error_kind, &message, breaks,
             )
             .await;
         }
@@ -283,19 +313,24 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
         }
     };
 
-    let mut changes = ConnectorChanges {
+    // Documents of another team's items stay until the manager decides;
+    // the connected team's ones go when nothing brings them any more.
+    let kept_teams: HashSet<&str> = foreign
+        .iter()
+        .map(|item| item.account_ref.as_str())
+        .collect();
+    let keep: HashSet<&str> = docs.iter().map(|doc| doc.external_id.as_str()).collect();
+    let changes = ConnectorChanges {
+        account_ref: team.clone(),
         upserts: documents(&wanted, texts),
-        removals: Vec::new(),
-    };
-    if foreign.is_empty() {
-        let keep: HashSet<&str> = docs.iter().map(|doc| doc.external_id.as_str()).collect();
-        changes.removals = start
+        removals: start
             .existing
             .iter()
             .filter(|source| !keep.contains(source.external_id.as_str()))
+            .filter(|source| !kept_teams.contains(source.account_ref.as_str()))
             .map(|source| source.external_id.clone())
-            .collect();
-    }
+            .collect(),
+    };
     let mut unavailable = resolved.unavailable;
     unavailable.extend(foreign.into_iter().map(|item| item.item.external_id));
 
@@ -328,11 +363,11 @@ async fn clear<H: ConnectorHost>(
 ) -> SyncResult {
     let id = project_id.to_owned();
     let changes = ConnectorChanges {
-        upserts: Vec::new(),
         removals: existing
             .iter()
             .map(|source| source.external_id.clone())
             .collect(),
+        ..ConnectorChanges::default()
     };
     let changed = storage
         .write(host, move |db| {
@@ -391,7 +426,17 @@ fn documents(wanted: &[RemoteDoc], texts: Vec<DocText>) -> Vec<ConnectorDocument
 pub(super) fn secret_message(error: &SecretError) -> String {
     match error {
         SecretError::Missing => "Ключ не найден в Keychain: обновите ключ".to_owned(),
-        SecretError::Store(why) => format!("Не удалось прочитать ключ из Keychain: {why}"),
+        SecretError::Store(why) => format!("Нет доступа к Keychain: {why}"),
+    }
+}
+
+/// What a failed read of the secret means for the connection: a missing
+/// key breaks it («Обновить ключ»); a Keychain that refused (locked, the
+/// prompt denied) does not: the key may well be there and still valid.
+pub(super) fn secret_failure(error: &SecretError) -> (ErrorKind, String, bool) {
+    match error {
+        SecretError::Missing => (ErrorKind::Unauthorized, secret_message(error), true),
+        SecretError::Store(_) => (ErrorKind::Other, secret_message(error), false),
     }
 }
 

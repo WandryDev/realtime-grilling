@@ -362,6 +362,8 @@ pub struct ConnectorSource {
     pub version: String,
     pub title: String,
     pub url: Option<String>,
+    /// The team of the service it was synced with.
+    pub account_ref: String,
 }
 
 /// The project's documents of the connector.
@@ -371,7 +373,8 @@ pub fn connector_sources(
     kind: ConnectorKind,
 ) -> CommandResult<Vec<ConnectorSource>> {
     let mut statement = connection.prepare(
-        "SELECT id, external_id, coalesce(external_version, ''), name, external_url
+        "SELECT id, external_id, coalesce(external_version, ''), name, external_url,
+                coalesce(account_ref, '')
            FROM project_sources
           WHERE project_id = ?1 AND kind = 'connector' AND connector = ?2
           ORDER BY created_at, id",
@@ -383,6 +386,7 @@ pub fn connector_sources(
             version: row.get(2)?,
             title: row.get(3)?,
             url: row.get(4)?,
+            account_ref: row.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -407,6 +411,8 @@ pub struct ConnectorDocument {
 /// What a sync changes in the project's documents of a connector.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConnectorChanges {
+    /// The team of the service the upserted documents come from.
+    pub account_ref: String,
     /// New documents and new versions; an existing row keeps its id.
     pub upserts: Vec<ConnectorDocument>,
     /// External ids of documents to remove.
@@ -433,7 +439,7 @@ pub fn apply_connector_changes(
             "UPDATE project_sources
                 SET name = ?4, size = ?5, sha256 = ?6, text = ?7, text_chars = ?8,
                     truncated = ?9, status = ?10, error = ?11, external_url = ?12,
-                    external_version = ?13, updated_at = ?14
+                    external_version = ?13, updated_at = ?14, account_ref = ?15
               WHERE project_id = ?1 AND kind = 'connector' AND connector = ?2
                 AND external_id = ?3",
             params![
@@ -450,7 +456,8 @@ pub fn apply_connector_changes(
                 document.error,
                 document.url,
                 document.version,
-                now
+                now,
+                changes.account_ref
             ],
         )?;
         if updated == 0 {
@@ -458,9 +465,9 @@ pub fn apply_connector_changes(
                 "INSERT INTO project_sources
                    (id, project_id, kind, name, extension, size, sha256, stored_path, text,
                     text_chars, truncated, status, error, created_at, updated_at, connector,
-                    external_id, external_url, external_version)
+                    external_id, external_url, external_version, account_ref)
                  VALUES (?1, ?2, 'connector', ?3, 'md', ?4, ?5, '', ?6, ?7, ?8, ?9, ?10, ?11,
-                         ?11, ?12, ?13, ?14, ?15)",
+                         ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     new_id(),
                     project_id,
@@ -476,7 +483,8 @@ pub fn apply_connector_changes(
                     kind.as_str(),
                     document.external_id,
                     document.url,
-                    document.version
+                    document.version,
+                    changes.account_ref
                 ],
             )?;
         }
@@ -769,7 +777,7 @@ mod tests {
     fn upsert(connection: &Connection, project: &str, documents: Vec<ConnectorDocument>) -> bool {
         let changes = ConnectorChanges {
             upserts: documents,
-            removals: Vec::new(),
+            ..ConnectorChanges::default()
         };
         apply_connector_changes(
             connection,
@@ -820,8 +828,9 @@ mod tests {
         let twice = connection.execute(
             "INSERT INTO project_sources
                (id, project_id, kind, name, extension, size, sha256, stored_path, status,
-                created_at, updated_at, connector, external_id)
-             VALUES ('x', ?1, 'connector', 'Д', 'md', 0, ?2, '', 'ready', 1, 1, 'outline', 'd1')",
+                created_at, updated_at, connector, external_id, account_ref)
+             VALUES ('x', ?1, 'connector', 'Д', 'md', 0, ?2, '', 'ready', 1, 1, 'outline', 'd1',
+                     'team')",
             [&first, &"e".repeat(64)],
         );
         assert!(
@@ -834,6 +843,9 @@ mod tests {
             // A file is not a document of a service.
             "UPDATE project_sources SET connector = 'outline' WHERE kind = 'file'",
             "UPDATE project_sources SET connector = 'notion' WHERE external_id = 'd1'",
+            // A connector's document knows its team; a file has none.
+            "UPDATE project_sources SET account_ref = NULL WHERE external_id = 'd1'",
+            "UPDATE project_sources SET account_ref = 'team' WHERE kind = 'file'",
         ] {
             assert!(connection.execute(sql, []).is_err(), "{sql}");
         }
@@ -873,7 +885,7 @@ mod tests {
                 &connection,
                 project,
                 ConnectorKind::Outline,
-                "team",
+                Some("team"),
                 &items,
                 1,
             )
@@ -969,8 +981,8 @@ mod tests {
 
         // Removing every document of Outline gives the files' fingerprint.
         let removals = ConnectorChanges {
-            upserts: Vec::new(),
             removals: vec!["d1".to_owned(), "d2".to_owned()],
+            ..ConnectorChanges::default()
         };
         assert!(
             apply_connector_changes(&connection, &id, ConnectorKind::Outline, &removals, 11)

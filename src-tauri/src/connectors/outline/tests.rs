@@ -376,6 +376,51 @@ fn a_document_brings_its_nested_ones_and_excludes_stay_out() {
         ids(&resolved),
         ["grandchild", "other-child", "tm-1", "tm-2"]
     );
+
+    // The picker's rules (selection.ts): an exclude leaves a nested
+    // document of a picked one out too, alone; an exclude nothing brings
+    // (its collection was unchecked) changes nothing; a document picked by
+    // itself is never left out.
+    let resolved =
+        block_on(connector().resolve(&session, &[document("tm-1"), exclude("child")])).unwrap();
+    assert_eq!(ids(&resolved), ["grandchild", "tm-1"]);
+    let resolved =
+        block_on(connector().resolve(&session, &[document("tm-2"), exclude("child")])).unwrap();
+    assert_eq!(ids(&resolved), ["other-child", "tm-2"]);
+    let resolved = block_on(connector().resolve(
+        &session,
+        &[collection("tm"), document("tm-1"), exclude("tm-1")],
+    ))
+    .unwrap();
+    assert_eq!(
+        ids(&resolved),
+        ["child", "grandchild", "other-child", "tm-1", "tm-2"]
+    );
+}
+
+/// A big team's collections: their trees are read at most
+/// `BROWSE_CONCURRENCY` at a time, not all at once (429s).
+#[test]
+fn browsing_reads_at_most_six_trees_at_once() {
+    let fake = FakeOutline::start();
+    {
+        let mut state = fake.state();
+        for index in 0..20 {
+            state.add_collection(&format!("c{index}"), &format!("Коллекция {index}"), 1);
+        }
+        state.delay = Duration::from_millis(40);
+    }
+    let nodes = block_on(connector().browse(&session(&fake), None)).unwrap();
+    assert_eq!(nodes.len(), 20);
+    assert!(nodes.iter().all(|node| node.document_count == 1));
+    let state = fake.state();
+    assert_eq!(state.requests("collections.documents"), 20);
+    assert!(
+        state.max_in_flight <= super::BROWSE_CONCURRENCY,
+        "{} at once",
+        state.max_in_flight
+    );
+    assert!(state.max_in_flight > 1, "still side by side");
 }
 
 /// «Коллекцию удалили», an archived document, a document without access.
