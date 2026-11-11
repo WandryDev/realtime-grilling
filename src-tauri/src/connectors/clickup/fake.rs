@@ -101,6 +101,8 @@ pub struct State {
     pub throttle_reset: Option<u64>,
     /// Answers 503.
     pub down: bool,
+    /// The subtasks in a task's answer come without their description.
+    pub bare_subtasks: bool,
     /// Teams the token no longer opens: their resources answer 401
     /// (`OAUTH_027`).
     pub foreign_teams: Vec<String>,
@@ -274,7 +276,17 @@ impl State {
                 .tasks
                 .iter()
                 .filter(|sub| sub.parent.as_deref() == Some(task.id.as_str()))
-                .map(|sub| self.task_json(sub, false))
+                .map(|sub| {
+                    let mut value = self.task_json(sub, false);
+                    if self.bare_subtasks
+                        && let Some(fields) = value.as_object_mut()
+                    {
+                        for field in ["text_content", "description", "markdown_description"] {
+                            fields.remove(field);
+                        }
+                    }
+                    value
+                })
                 .collect();
         }
         value
@@ -304,6 +316,7 @@ impl FakeClickUp {
             throttled: 0,
             throttle_reset: None,
             down: false,
+            bare_subtasks: false,
             foreign_teams: Vec::new(),
             log: Vec::new(),
             clock: 1_767_225_600_000,

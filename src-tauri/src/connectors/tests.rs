@@ -1858,3 +1858,188 @@ async fn disconnecting_cancels_a_running_sync() {
             .is_running(&project, ConnectorKind::Outline)
     );
 }
+
+/* Cancelled syncs (connectors-clickup review) */
+
+/// A cancelled sync frees its place at once: the project is no longer
+/// «syncing» on the read after the disconnect, and the cancelled task,
+/// leaving later, doesn't free the place of a sync started after it.
+#[tokio::test]
+async fn a_cancelled_sync_frees_its_place_at_once() {
+    let silent = Arc::new(Silent {
+        entered: AtomicBool::new(false),
+    });
+    let host = Host::with(Arc::clone(&silent) as Arc<dyn SourceProvider>);
+    let project = seeded(&host).await;
+    let outline = ConnectorKind::Outline;
+    let first = {
+        let (host, project) = (Arc::clone(&host), project.clone());
+        tokio::spawn(async move { sync::sync_project(&host, &project, outline).await })
+    };
+    while !silent.entered.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    host.connectors.flights.cancel(outline);
+    assert!(!host.connectors.flights.is_running(&project, outline));
+    let views = service::selection_get(host.as_ref(), &project)
+        .await
+        .unwrap();
+    assert!(!views[0].syncing);
+
+    silent.entered.store(false, Ordering::SeqCst);
+    let second = {
+        let (host, project) = (Arc::clone(&host), project.clone());
+        tokio::spawn(async move { sync::sync_project(&host, &project, outline).await })
+    };
+    while !silent.entered.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    assert!(first.await.unwrap().is_err(), "the cancelled one's callers");
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        host.connectors.flights.is_running(&project, outline),
+        "the newer sync keeps its place"
+    );
+    host.connectors.flights.cancel(outline);
+    assert!(second.await.unwrap().is_err());
+}
+
+const NEW_KEY: &str = "ol_api_rotated_7Hq2LmT9vRb4KcN8wYp3HsDa";
+
+/// A service whose old key ([`KEY`]) is revoked: a sync with it waits
+/// until `release`, then is refused; the new key ([`NEW_KEY`]) works.
+#[derive(Default)]
+struct Rotated {
+    entered: AtomicBool,
+    release: tokio::sync::Notify,
+    fresh: std::sync::atomic::AtomicUsize,
+}
+
+fn key_of(session: &Session) -> &str {
+    match &session.credential {
+        Credential::ApiKey { key } => key,
+        Credential::OAuth { access, .. } => access,
+    }
+}
+
+impl Connector for Rotated {
+    fn descriptor(&self) -> &'static Descriptor {
+        ConnectorKind::Outline.descriptor()
+    }
+
+    fn verify<'a>(
+        &'a self,
+        session: &'a Session,
+    ) -> BoxFuture<'a, Result<Account, ConnectorError>> {
+        Box::pin(async move {
+            if key_of(session) != NEW_KEY {
+                return Err(ConnectorError::Unauthorized);
+            }
+            Ok(Account {
+                host: session.host.clone(),
+                team_id: TEAM.to_owned(),
+                team_name: "Wandry".to_owned(),
+                user_name: None,
+            })
+        })
+    }
+}
+
+impl SourceProvider for Rotated {
+    fn browse<'a>(
+        &'a self,
+        _: &'a Session,
+        _: Option<&'a ExternalRef>,
+    ) -> BoxFuture<'a, Result<Vec<BrowseNode>, ConnectorError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        session: &'a Session,
+        _: &'a [SelectionItem],
+    ) -> BoxFuture<'a, Result<Resolved, ConnectorError>> {
+        Box::pin(async move {
+            if key_of(session) == NEW_KEY {
+                self.fresh.fetch_add(1, Ordering::SeqCst);
+                return Ok(Resolved::default());
+            }
+            self.entered.store(true, Ordering::SeqCst);
+            self.release.notified().await;
+            Err(ConnectorError::Unauthorized)
+        })
+    }
+
+    fn fetch<'a>(
+        &'a self,
+        _: &'a Session,
+        _: &'a [RemoteDoc],
+    ) -> BoxFuture<'a, Result<Vec<DocText>, ConnectorError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// A reconnect with a new key cancels the sync that runs with the old one:
+/// the resync starts anew with the new key, and the old key's refusal,
+/// coming after, neither breaks the new connection nor reaches anyone.
+#[tokio::test]
+async fn a_reconnect_cancels_the_sync_of_the_old_key() {
+    let rotated = Arc::new(Rotated::default());
+    let host = Host::with(Arc::clone(&rotated) as Arc<dyn SourceProvider>);
+    let project = seeded(&host).await;
+    let outline = ConnectorKind::Outline;
+    let old = {
+        let (host, project) = (Arc::clone(&host), project.clone());
+        tokio::spawn(async move { sync::sync_project(&host, &project, outline).await })
+    };
+    while !rotated.entered.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    let outcome = service::connect_api_key(
+        &host,
+        outline,
+        "https://wandry.getoutline.com",
+        NEW_KEY,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ConnectOutcome::Connected(_)),
+        "{outcome:?}"
+    );
+    // The old key's answer comes now: 401.
+    rotated.release.notify_one();
+    assert!(old.await.unwrap().is_err(), "the old sync was cancelled");
+    for _ in 0..500 {
+        if rotated.fresh.load(Ordering::SeqCst) > 0
+            && !host.connectors.flights.is_running(&project, outline)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        rotated.fresh.load(Ordering::SeqCst),
+        1,
+        "a sync with the new key"
+    );
+    let connection = host
+        .storage
+        .read(move |db| stored::connection(db, outline))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(connection.status, ConnectionStatus::Connected);
+    assert_eq!(connection.error, None);
+    let id = project.clone();
+    let state = host
+        .storage
+        .read(move |db| stored::sync_state(db, &id, outline))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.error, None, "{state:?}");
+}

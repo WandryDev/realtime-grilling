@@ -1,6 +1,6 @@
 //! ClickUp's rate limit (connectors-clickup design.md, decision 4): 100
 //! requests a minute per token on most plans. The [`RateGate`] of a
-//! connection keeps what the last answer said and lets every request wait
+//! token keeps what the last answer said and lets every request wait
 //! its turn:
 //!
 //! - the remaining requests at 0 with the reset ahead: wait until the reset
@@ -96,7 +96,7 @@ struct State {
     next_free: Option<Instant>,
 }
 
-/// The rate limit of one connection, shared by all its requests.
+/// The rate limit of one token, shared by all its requests.
 #[derive(Debug)]
 pub struct RateGate {
     permits: Semaphore,
@@ -185,6 +185,12 @@ impl RateGate {
                 }
             }
         }
+    }
+
+    /// Nothing remains of the window and its reset is still ahead.
+    pub fn limited(&self) -> bool {
+        let state = self.state();
+        state.remaining == Some(0) && state.reset_at.is_some_and(|reset| reset > Instant::now())
     }
 
     /// When the next request may go (`None`: now); takes its place.

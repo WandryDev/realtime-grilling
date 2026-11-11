@@ -21,12 +21,18 @@
 //! one ([`SyncFlights`]); [`sync_fresh`] (after the selection changed)
 //! waits for it and starts a new one. The sync runs in its own task: a
 //! caller that stops waiting (the 30 s before a call) leaves it running.
-//! Disconnecting the connector cancels its syncs ([`SyncFlights::cancel`]):
-//! whatever they wait for (ClickUp's rate limit) ends with them.
+//! Disconnecting or reconnecting the connector cancels its syncs
+//! ([`SyncFlights::cancel`]): whatever they wait for (ClickUp's rate limit)
+//! ends with them, their place is free at once (the project is no longer
+//! «syncing»), and nothing they would still write lands: a sync of the old
+//! key never marks the new connection broken.
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -91,35 +97,66 @@ pub type SyncResult = Result<SyncOutcome, CommandError>;
 
 type Key = (String, ConnectorKind);
 
+/// A sync's cancellation: once set, none of its writes lands.
+#[derive(Clone, Default)]
+struct Cancelled(Arc<AtomicBool>);
+
+impl Cancelled {
+    fn set(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// Checked inside each write's transaction: the writes are one after
+    /// another, so a write that runs after [`SyncFlights::cancel`] (a
+    /// reconnect saved after it) changes nothing.
+    fn check(&self) -> CommandResult<()> {
+        if self.0.load(Ordering::SeqCst) {
+            Err(CommandError::storage("Синхронизация прервана"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// A running sync: its result to wait for and its task to cancel.
 struct Running {
+    /// Tells this sync's place from a later one's.
+    id: u64,
     result: watch::Receiver<Option<SyncResult>>,
     task: AbortHandle,
+    cancelled: Cancelled,
 }
 
 /// The running syncs.
 #[derive(Default)]
-pub struct SyncFlights(Mutex<HashMap<Key, Running>>);
+pub struct SyncFlights {
+    running: Mutex<HashMap<Key, Running>>,
+    next: AtomicU64,
+}
 
 impl SyncFlights {
     fn state(&self) -> std::sync::MutexGuard<'_, HashMap<Key, Running>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn is_running(&self, project_id: &str, kind: ConnectorKind) -> bool {
         self.state().contains_key(&(project_id.to_owned(), kind))
     }
 
-    /// Cancels the connector's running syncs (it was disconnected): their
-    /// tasks stop wherever they wait, change nothing more, and the callers
-    /// waiting for them get an error. The place of each is freed when its
-    /// task is gone, so a new sync never starts beside a cancelled one.
+    /// Cancels the connector's running syncs (it was disconnected or
+    /// reconnected): their tasks stop wherever they wait, their writes
+    /// still to come change nothing, and the callers waiting for them get
+    /// an error. Their places are freed now: the next read sees no sync,
+    /// and the next request starts a new one.
     pub fn cancel(&self, kind: ConnectorKind) {
-        for (key, running) in self.state().iter() {
-            if key.1 == kind {
-                running.task.abort();
+        self.state().retain(|key, running| {
+            if key.1 != kind {
+                return true;
             }
-        }
+            running.cancelled.set();
+            running.task.abort();
+            false
+        });
     }
 }
 
@@ -150,6 +187,8 @@ fn spawn_abortable(future: impl Future<Output = ()> + Send + 'static) -> AbortHa
 struct Flight<H: ConnectorHost> {
     host: Arc<H>,
     key: Key,
+    id: u64,
+    cancelled: Cancelled,
     sender: Option<watch::Sender<Option<SyncResult>>>,
 }
 
@@ -161,9 +200,17 @@ impl<H: ConnectorHost> Flight<H> {
         }
     }
 
+    /// Frees the place unless it was freed already (cancelled) and taken
+    /// by a newer sync.
     fn leave(&self) {
         if let Some(connectors) = self.host.connectors() {
-            connectors.flights.state().remove(&self.key);
+            let mut flights = connectors.flights.state();
+            if flights
+                .get(&self.key)
+                .is_some_and(|running| running.id == self.id)
+            {
+                flights.remove(&self.key);
+            }
         }
     }
 }
@@ -194,22 +241,34 @@ pub async fn sync_project<H: ConnectorHost>(
             running.result.clone()
         } else {
             let (sender, receiver) = watch::channel(None);
+            let id = connectors.flights.next.fetch_add(1, Ordering::Relaxed);
+            let cancelled = Cancelled::default();
             let flight = Flight {
                 host: Arc::clone(host),
                 key: key.clone(),
+                id,
+                cancelled: cancelled.clone(),
                 sender: Some(sender),
             };
             // Spawned under the lock: the task can't leave its place
             // before the place has its handle.
             let task = spawn_abortable(async move {
-                let result = run(flight.host.as_ref(), &flight.key.0, flight.key.1).await;
+                let result = run(
+                    flight.host.as_ref(),
+                    &flight.key.0,
+                    flight.key.1,
+                    &flight.cancelled,
+                )
+                .await;
                 flight.finish(result);
             });
             flights.insert(
                 key,
                 Running {
+                    id,
                     result: receiver.clone(),
                     task,
+                    cancelled,
                 },
             );
             receiver
@@ -262,7 +321,12 @@ struct Start {
     existing: Vec<ConnectorSource>,
 }
 
-async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) -> SyncResult {
+async fn run<H: ConnectorHost>(
+    host: &H,
+    project_id: &str,
+    kind: ConnectorKind,
+    cancelled: &Cancelled,
+) -> SyncResult {
     let (storage, connectors) = parts(host)?;
     let id = project_id.to_owned();
     let start = storage
@@ -277,30 +341,28 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
         .await?;
 
     if start.items.is_empty() {
-        return clear(host, storage, project_id, kind, &start.existing).await;
+        return clear(host, storage, project_id, kind, &start.existing, cancelled).await;
     }
     let (Some(connection), Some(provider)) = (start.connection, connectors.provider(kind)) else {
         let message = format!("{} отключён", kind.label());
-        record_failure(
-            host,
-            storage,
-            project_id,
-            kind,
-            ErrorKind::Disconnected,
-            &message,
-            false,
-        )
-        .await?;
+        let failure = Failure {
+            error_kind: ErrorKind::Disconnected,
+            message: &message,
+            breaks: false,
+        };
+        record_failure(host, storage, project_id, kind, &failure, cancelled).await?;
         return Ok(SyncOutcome::Disconnected);
     };
     let credential = match connectors.secrets.get(kind) {
         Ok(credential) => credential,
         Err(error) => {
             let (error_kind, message, breaks) = secret_failure(&error);
-            return fail_with(
-                host, storage, project_id, kind, error_kind, &message, breaks,
-            )
-            .await;
+            let failure = Failure {
+                error_kind,
+                message: &message,
+                breaks,
+            };
+            return fail_with(host, storage, project_id, kind, &failure, cancelled).await;
         }
     };
     let session = Session {
@@ -319,7 +381,7 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
 
     let resolved = match provider.resolve(&session, &selection).await {
         Ok(resolved) => resolved,
-        Err(error) => return fail(host, storage, project_id, kind, &error).await,
+        Err(error) => return fail(host, storage, project_id, kind, &error, cancelled).await,
     };
     let (docs, skipped) = within_limit(resolved.docs);
     let known: HashMap<&str, &ConnectorSource> = start
@@ -341,7 +403,7 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
     } else {
         match provider.fetch(&session, &wanted).await {
             Ok(texts) => texts,
-            Err(error) => return fail(host, storage, project_id, kind, &error).await,
+            Err(error) => return fail(host, storage, project_id, kind, &error, cancelled).await,
         }
     };
 
@@ -366,9 +428,10 @@ async fn run<H: ConnectorHost>(host: &H, project_id: &str, kind: ConnectorKind) 
     let mut unavailable = resolved.unavailable;
     unavailable.extend(foreign.into_iter().map(|item| item.item.external_id));
 
-    let id = project_id.to_owned();
+    let (id, cancelled) = (project_id.to_owned(), cancelled.clone());
     let changed = storage
         .write(host, move |db| {
+            cancelled.check()?;
             let now = now_ms();
             let changed = sources::apply_connector_changes(db, &id, kind, &changes, now)?;
             stored::set_item_statuses(db, &id, kind, &unavailable, now)?;
@@ -392,8 +455,9 @@ async fn clear<H: ConnectorHost>(
     project_id: &str,
     kind: ConnectorKind,
     existing: &[ConnectorSource],
+    cancelled: &Cancelled,
 ) -> SyncResult {
-    let id = project_id.to_owned();
+    let (id, cancelled) = (project_id.to_owned(), cancelled.clone());
     let changes = ConnectorChanges {
         removals: existing
             .iter()
@@ -403,6 +467,7 @@ async fn clear<H: ConnectorHost>(
     };
     let changed = storage
         .write(host, move |db| {
+            cancelled.check()?;
             let changed = sources::apply_connector_changes(db, &id, kind, &changes, now_ms())?;
             stored::clear_sync_state(db, &id, kind)?;
             let events: Vec<DataChanged> = if changed {
@@ -485,24 +550,29 @@ pub(super) fn failure_message(kind: ConnectorKind, error: &ConnectorError) -> St
     }
 }
 
+/// What a failed sync writes.
+struct Failure<'a> {
+    error_kind: ErrorKind,
+    message: &'a str,
+    /// The service refused the secret: the connection breaks.
+    breaks: bool,
+}
+
 async fn fail<H: ConnectorHost>(
     host: &H,
     storage: &Storage,
     project_id: &str,
     kind: ConnectorKind,
     error: &ConnectorError,
+    cancelled: &Cancelled,
 ) -> SyncResult {
     let message = failure_message(kind, error);
-    fail_with(
-        host,
-        storage,
-        project_id,
-        kind,
-        error.kind(),
-        &message,
-        error.refuses_secret(),
-    )
-    .await
+    let failure = Failure {
+        error_kind: error.kind(),
+        message: &message,
+        breaks: error.refuses_secret(),
+    };
+    fail_with(host, storage, project_id, kind, &failure, cancelled).await
 }
 
 async fn fail_with<H: ConnectorHost>(
@@ -510,14 +580,13 @@ async fn fail_with<H: ConnectorHost>(
     storage: &Storage,
     project_id: &str,
     kind: ConnectorKind,
-    error_kind: ErrorKind,
-    message: &str,
-    breaks: bool,
+    failure: &Failure<'_>,
+    cancelled: &Cancelled,
 ) -> SyncResult {
-    record_failure(host, storage, project_id, kind, error_kind, message, breaks).await?;
+    record_failure(host, storage, project_id, kind, failure, cancelled).await?;
     Ok(SyncOutcome::Failed {
-        kind: error_kind,
-        message: message.to_owned(),
+        kind: failure.error_kind,
+        message: failure.message.to_owned(),
     })
 }
 
@@ -527,13 +596,18 @@ async fn record_failure<H: ConnectorHost>(
     storage: &Storage,
     project_id: &str,
     kind: ConnectorKind,
-    error_kind: ErrorKind,
-    message: &str,
-    breaks: bool,
+    failure: &Failure<'_>,
+    cancelled: &Cancelled,
 ) -> CommandResult<()> {
-    let (id, message) = (project_id.to_owned(), message.to_owned());
+    let (id, message, cancelled) = (
+        project_id.to_owned(),
+        failure.message.to_owned(),
+        cancelled.clone(),
+    );
+    let (error_kind, breaks) = (failure.error_kind, failure.breaks);
     storage
         .write(host, move |db| {
+            cancelled.check()?;
             let now = now_ms();
             let mut events = stored::record_sync_failure(db, &id, kind, error_kind, &message, now)?;
             if error_kind != ErrorKind::Disconnected {

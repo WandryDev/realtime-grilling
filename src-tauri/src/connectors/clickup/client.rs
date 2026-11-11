@@ -2,7 +2,7 @@
 //! {base}/…` with `Authorization: pk_…` (no `Bearer`). Read only: the app
 //! never calls a method that changes anything.
 //!
-//! Every request goes through the connection's [`RateGate`] and has 15 s.
+//! Every request goes through its token's [`RateGate`] and has 15 s.
 //! 401 → `Unauthorized`, 403 → `Forbidden`, 404 → `NotFound`; no answer, a
 //! timeout, a server error or an answer that is not ClickUp's JSON →
 //! `Unreachable`. No error and no `Debug` carries the token.
@@ -26,6 +26,7 @@ pub const COMMENT_PAGE: usize = 25;
 pub const COMMENT_PAGES: usize = 2;
 
 pub const NOT_CLICKUP: &str = "ClickUp ответил непонятно";
+pub const NO_ANSWER: &str = "ClickUp не ответил за 15 секунд";
 
 /// One token of one ClickUp.
 #[derive(Clone)]
@@ -329,6 +330,11 @@ impl Client {
         }
     }
 
+    /// The token's limit is spent and its reset still ahead.
+    pub fn limited(&self) -> bool {
+        self.gate.limited()
+    }
+
     pub async fn user(&self) -> Result<User, ConnectorError> {
         Ok(self.get::<UserEnvelope>("/user", &[]).await?.user)
     }
@@ -502,7 +508,7 @@ impl Client {
 /// Never the request itself in the message: its headers carry the token.
 fn unreachable(error: &reqwest::Error) -> ConnectorError {
     let why = if error.is_timeout() {
-        "ClickUp не ответил за 15 секунд"
+        NO_ANSWER
     } else if error.is_connect() {
         "Не удалось подключиться к ClickUp"
     } else {

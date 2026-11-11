@@ -17,7 +17,7 @@ mod tests;
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -76,12 +76,18 @@ impl<'a> Node<'a> {
     }
 }
 
+/// How many tokens' rate gates are kept (the connected one, the ones just
+/// typed in).
+const GATES: usize = 4;
+
 pub struct ClickUpConnector {
     http: reqwest::Client,
     base: String,
     timeout: Duration,
-    /// The connection's rate limit: one connection per kind, so one gate.
-    gate: Arc<RateGate>,
+    /// The rate limit of each token (ClickUp counts it per token), the most
+    /// recently used last, keyed by the token's hash: a new token starts
+    /// with a fresh limit, not the old one's wait.
+    gates: Mutex<Vec<(String, Arc<RateGate>)>>,
 }
 
 impl Default for ClickUpConnector {
@@ -104,14 +110,24 @@ impl ClickUpConnector {
             http,
             base: base.to_owned(),
             timeout,
-            gate: Arc::new(RateGate::default()),
+            gates: Mutex::new(Vec::new()),
         }
     }
 
-    /// The connection's rate limit (the tests look into it).
-    #[cfg(test)]
-    pub fn gate(&self) -> &Arc<RateGate> {
-        &self.gate
+    /// The rate gate of `token`: the one its requests already go through,
+    /// else a fresh one.
+    pub fn gate(&self, token: &str) -> Arc<RateGate> {
+        let key = crate::projects::sha256_hex(token.as_bytes());
+        let mut gates = self.gates.lock().unwrap_or_else(PoisonError::into_inner);
+        let gate = match gates.iter().position(|(known, _)| *known == key) {
+            Some(index) => gates.remove(index).1,
+            None => Arc::new(RateGate::default()),
+        };
+        gates.push((key, Arc::clone(&gate)));
+        if gates.len() > GATES {
+            gates.remove(0);
+        }
+        gate
     }
 
     pub fn client(&self, session: &Session) -> Result<Client, ConnectorError> {
@@ -122,9 +138,27 @@ impl ClickUpConnector {
             self.http.clone(),
             &self.base,
             key,
-            Arc::clone(&self.gate),
+            self.gate(key),
             self.timeout,
         ))
+    }
+
+    /// The sign-in check within the request's time (15 s), whatever the
+    /// token's limit makes it wait for: a sync waiting for the limit holds
+    /// the gate, and the check must not hang behind it.
+    async fn check(
+        &self,
+        session: &Session,
+        workspace: Option<&str>,
+    ) -> Result<Verified, ConnectorError> {
+        let client = self.client(session)?;
+        match tokio::time::timeout(self.timeout, verify_in(&client, workspace)).await {
+            Ok(verified) => verified,
+            Err(_) if client.limited() => {
+                Err(ConnectorError::Unreachable(rate::THROTTLED.to_owned()))
+            }
+            Err(_) => Err(ConnectorError::Unreachable(client::NO_ANSWER.to_owned())),
+        }
     }
 }
 
@@ -473,13 +507,19 @@ pub fn text(head: &str, comments: &[Comment]) -> String {
     text
 }
 
+/// A task as a document. Its heading goes along only when the answer had
+/// its description: a subtask's summary in its parent's `/task/{id}` may
+/// come without one, and then `fetch` reads the subtask itself.
 fn remote(task: &Task) -> RemoteDoc {
+    let described = task.markdown_description.is_some()
+        || task.text_content.is_some()
+        || task.description.is_some();
     RemoteDoc {
         external_id: task.id.clone(),
         title: task.name.clone(),
         url: task.url.clone(),
         version: task.version(),
-        prefetched: Some(head(task)),
+        prefetched: described.then(|| head(task)),
     }
 }
 
@@ -624,8 +664,9 @@ async fn resolve(
     })
 }
 
-/// The texts of `docs`: their heading from the resolve and up to 50 newest
-/// comments each, read side by side through the rate gate.
+/// The texts of `docs`: their heading from the resolve (else from the
+/// task's own `/task/{id}`) and up to 50 newest comments each, read side by
+/// side through the rate gate.
 async fn fetch(client: &Client, docs: &[RemoteDoc]) -> Result<Vec<DocText>, ConnectorError> {
     let mut tasks = tokio::task::JoinSet::new();
     for (index, doc) in docs.iter().enumerate() {
@@ -675,8 +716,7 @@ impl Connector for ClickUpConnector {
         session: &'a Session,
     ) -> BoxFuture<'a, Result<Account, ConnectorError>> {
         Box::pin(async move {
-            let client = self.client(session)?;
-            match verify_in(&client, session.team.as_deref()).await? {
+            match self.check(session, session.team.as_deref()).await? {
                 Verified::Account(account) => Ok(account),
                 Verified::Choose(_) if session.team.is_some() => Err(ConnectorError::Forbidden),
                 Verified::Choose(_) => Err(ConnectorError::Other(
@@ -691,7 +731,7 @@ impl Connector for ClickUpConnector {
         session: &'a Session,
         workspace: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Verified, ConnectorError>> {
-        Box::pin(async move { verify_in(&self.client(session)?, workspace).await })
+        Box::pin(async move { self.check(session, workspace).await })
     }
 }
 

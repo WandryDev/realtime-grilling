@@ -300,6 +300,11 @@ pub async fn connect_api_key<H: ConnectorHost>(
             )));
         }
     };
+    // A sync that runs read the old key (and team): it would join the
+    // resync below and, failing with the old key, break the new
+    // connection. Cancelled here, before anything is saved, none of its
+    // writes lands after the new connection's.
+    connectors.flights.cancel(kind);
     connectors
         .secrets
         .set(kind, &session.credential)
@@ -336,7 +341,8 @@ pub async fn connect_api_key<H: ConnectorHost>(
 }
 
 /// The projects' selections in the connector sync again (after a
-/// connect), in the background.
+/// connect), in the background, each in a new sync: the ones that ran were
+/// cancelled when the connection was saved.
 fn resync_selections<H: ConnectorHost>(host: &Arc<H>, kind: ConnectorKind) {
     let host = Arc::clone(host);
     let run = async move {

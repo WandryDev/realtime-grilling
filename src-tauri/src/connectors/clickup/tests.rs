@@ -445,7 +445,7 @@ async fn cancelling_the_sync_ends_its_wait_for_the_limit() {
     let fake = FakeClickUp::start();
     let clickup = Arc::new(connector(&fake));
     clickup
-        .gate()
+        .gate(TOKEN)
         .exhaust_until(Instant::now() + Duration::from_secs(55));
     let host = Host::clickup_with(Arc::clone(&clickup));
     let project = seeded(&host, &[container("list:l1")]).await;
@@ -453,7 +453,7 @@ async fn cancelling_the_sync_ends_its_wait_for_the_limit() {
         let (host, project) = (Arc::clone(&host), project.clone());
         tokio::spawn(async move { sync::sync_project(&host, &project, CLICKUP).await })
     };
-    while clickup.gate().sleeping.load(Ordering::SeqCst) == 0 {
+    while clickup.gate(TOKEN).sleeping.load(Ordering::SeqCst) == 0 {
         tokio::task::yield_now().await;
     }
     let started = Instant::now();
@@ -461,7 +461,7 @@ async fn cancelling_the_sync_ends_its_wait_for_the_limit() {
     let result = running.await.unwrap();
     assert!(result.is_err(), "{result:?}");
     assert!(Instant::now() - started < Duration::from_secs(55));
-    assert_eq!(clickup.gate().sleeping.load(Ordering::SeqCst), 0);
+    assert_eq!(clickup.gate(TOKEN).sleeping.load(Ordering::SeqCst), 0);
     assert!(!host.connectors.flights.is_running(&project, CLICKUP));
     assert!(fake.state().log.is_empty(), "no request was made");
 }
@@ -1230,7 +1230,7 @@ async fn the_limit_before_a_call_lets_the_sync_finish_in_the_background() {
         let (host, builds, project) = (Arc::clone(&host), builds.clone(), project.clone());
         tokio::spawn(async move { prepare(&host, &builds, &project).await })
     };
-    while clickup.gate().sleeping.load(Ordering::SeqCst) == 0 {
+    while clickup.gate(TOKEN).sleeping.load(Ordering::SeqCst) == 0 {
         tokio::task::yield_now().await;
     }
     assert_eq!(fake.state().log.len(), requests, "waiting, not asking");
@@ -1400,4 +1400,92 @@ fn without_rate_headers_the_client_spaces_its_requests() {
         block_on(client.teams()).unwrap();
     }
     assert!(started.elapsed() >= SPACING * 2, "{:?}", started.elapsed());
+}
+
+/* Review fixes */
+
+const NEW_TOKEN: &str = "pk_81234567_ROTATED00000000000000000000000";
+
+/// A new token starts with its own limit: the old token's spent one (a
+/// sync waiting for it) doesn't hold the check of the new one.
+#[test]
+fn a_new_token_is_checked_past_the_old_ones_limit() {
+    let fake = FakeClickUp::start();
+    let clickup = Arc::new(connector(&fake));
+    let host = Host::clickup_with(Arc::clone(&clickup));
+    assert!(matches!(
+        host.connect_clickup(TOKEN, None),
+        ConnectOutcome::Connected(_)
+    ));
+    block_on(async {
+        clickup
+            .gate(TOKEN)
+            .exhaust_until(Instant::now() + Duration::from_secs(30));
+    });
+    fake.state().token = NEW_TOKEN.to_owned();
+    let started = StdInstant::now();
+    let outcome = host.connect_clickup(NEW_TOKEN, None);
+    assert!(
+        matches!(outcome, ConnectOutcome::Connected(_)),
+        "{outcome:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// The check of a token whose limit is spent ends within the request's
+/// time with «ClickUp ограничил запросы», the token kept in the field.
+#[tokio::test(start_paused = true)]
+async fn the_check_gives_up_on_a_spent_limit_in_its_time() {
+    let fake = FakeClickUp::start();
+    let clickup = Arc::new(connector(&fake));
+    clickup
+        .gate(TOKEN)
+        .exhaust_until(Instant::now() + Duration::from_secs(55));
+    let host = Host::clickup_with(Arc::clone(&clickup));
+    let started = Instant::now();
+    let outcome = service::connect_api_key(&host, CLICKUP, "", TOKEN, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        ConnectOutcome::Rejected {
+            field: RejectedField::Key,
+            reason: THROTTLED.to_owned(),
+        }
+    );
+    assert!(Instant::now() - started <= Duration::from_secs(5));
+    assert!(fake.state().log.is_empty(), "no request was made");
+    assert!(connections_async(&host).await.is_empty(), "nothing saved");
+}
+
+async fn connections_async(host: &Host) -> Vec<stored::StoredConnection> {
+    host.storage.read(stored::connections).await.unwrap()
+}
+
+/// A picked task's subtasks whose summaries come without a description
+/// are read one by one: their sources have the description too.
+#[test]
+fn a_subtask_summary_without_its_description_is_read_by_itself() {
+    let fake = FakeClickUp::start();
+    {
+        let mut state = fake.state();
+        state.add_space("s1", "Клиенты");
+        state.add_list("s1", None, "l1", 1);
+        state.add_task("l1", "mis-a", Some("l1-1"));
+        state.bare_subtasks = true;
+    }
+    let (host, project) = connected(&fake);
+    host.select_in(CLICKUP, &project, vec![task("l1-1")])
+        .unwrap();
+    assert_eq!(host.ids_of(&project, CLICKUP), ["l1-1", "mis-a"]);
+    let text = host.text_of(&project, "mis-a");
+    assert!(text.contains("Описание задачи mis-a."), "{text}");
+    assert!(
+        host.text_of(&project, "l1-1")
+            .contains("Описание задачи l1-1.")
+    );
 }
