@@ -319,6 +319,7 @@ export function demoRecords(
     pass: "refined",
     segments,
     startedAt,
+    transcriptDeleted: false,
     transcriptState: "refined",
   };
 

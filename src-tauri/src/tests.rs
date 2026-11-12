@@ -1232,6 +1232,33 @@ mod acl {
         }
     }
 
+    /// The settings' data, microphones and agent (settings-real task 4.2):
+    /// the main window and onboarding, like the other settings commands.
+    const SETTINGS_REAL_COMMANDS: [&str; 8] = [
+        "recordings_info",
+        "data_summary",
+        "data_delete_all",
+        "agent_check_path",
+        "agent_usage",
+        "audio_inputs_get",
+        "audio_inputs_start",
+        "audio_inputs_stop",
+    ];
+
+    #[test]
+    fn settings_data_microphones_and_agent_are_for_main_and_onboarding_only() {
+        for command in SETTINGS_REAL_COMMANDS {
+            for label in ["overlay", "widget"] {
+                let result = invoke(label, command);
+                assert!(denied(&result), "{label} → {command}: {result:?}");
+            }
+            for label in ["main", "onboarding"] {
+                let result = invoke(label, command);
+                assert!(!denied(&result), "{label} → {command}: {result:?}");
+            }
+        }
+    }
+
     const SPEECH_MODEL_COMMANDS: [&str; 9] = [
         "speech_models_list",
         "speech_model_download",
@@ -1513,6 +1540,14 @@ fn capabilities_match_the_command_list() {
         "agent_login_cancel",
         "audio_level_start",
         "audio_level_stop",
+        "audio_inputs_get",
+        "audio_inputs_start",
+        "audio_inputs_stop",
+        "agent_check_path",
+        "agent_usage",
+        "recordings_info",
+        "data_summary",
+        "data_delete_all",
         "app_restart",
         "speech_models_list",
         "speech_model_download",

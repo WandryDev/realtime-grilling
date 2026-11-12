@@ -1304,6 +1304,38 @@ fn recompute(
 
 /* Agent calls */
 
+/// The last known share of the subscription limit (settings-real design.md,
+/// decision 7).
+#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsage {
+    /// 0–1, as the CLI reported it.
+    // Always finite, so a plain `number` rather than specta's `number | null`.
+    #[specta(type = u32)]
+    pub utilization: f64,
+    /// When the call that reported it was recorded, ms since the Unix epoch.
+    pub measured_at: i64,
+}
+
+/// The share of the newest agent call that reported one; `None` without
+/// any.
+pub fn latest_usage(connection: &Connection) -> CommandResult<Option<AgentUsage>> {
+    Ok(connection
+        .query_row(
+            "SELECT utilization, created_at FROM agent_calls
+              WHERE utilization IS NOT NULL
+              ORDER BY created_at DESC, started_at DESC, id DESC LIMIT 1",
+            [],
+            |row| {
+                Ok(AgentUsage {
+                    utilization: row.get(0)?,
+                    measured_at: row.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 /// Records an agent call and returns its id (UUID v7). `NotFound` for an
 /// unknown recording, `Invalid` when `rejected` is not a JSON array or the
 /// outcome is missing.
@@ -2172,6 +2204,33 @@ mod tests {
         };
         let error = insert_agent_call(&connection, &unknown).unwrap_err();
         assert!(matches!(error, CommandError::NotFound { .. }));
+    }
+
+    /// `app-settings`, «Лимит»: the newest call that reported a share.
+    #[test]
+    fn the_latest_usage_is_the_newest_call_with_a_share() {
+        let connection = open_in_memory().unwrap();
+        assert_eq!(latest_usage(&connection).unwrap(), None, "no calls");
+        let id = recording(&connection);
+        let call = |utilization: Option<f64>| AgentCallInput {
+            recording_id: id.clone(),
+            outcome: Some(AgentCallOutcome::Ok),
+            utilization,
+            ..AgentCallInput::default()
+        };
+        insert_agent_call_at(&connection, &call(None), 1_000).unwrap();
+        assert_eq!(latest_usage(&connection).unwrap(), None, "no share yet");
+        insert_agent_call_at(&connection, &call(Some(0.4)), 2_000).unwrap();
+        insert_agent_call_at(&connection, &call(Some(0.82)), 3_000).unwrap();
+        // A newer call that didn't report one keeps the last known share.
+        insert_agent_call_at(&connection, &call(None), 4_000).unwrap();
+        assert_eq!(
+            latest_usage(&connection).unwrap(),
+            Some(AgentUsage {
+                utilization: 0.82,
+                measured_at: 3_000
+            })
+        );
     }
 
     #[test]

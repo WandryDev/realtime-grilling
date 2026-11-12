@@ -189,6 +189,25 @@ export const commands = {
 	 */
 	onboardingComplete: () => typedError<null, CommandError>(__TAURI_INVOKE("onboarding_complete")),
 	/**
+	 *  «Папка записей»: where the recordings' files are (for «Показать в
+	 *  Finder»), what they take and how many calls still have audio.
+	 */
+	recordingsInfo: () => typedError<RecordingsInfo, CommandError>(__TAURI_INVOKE("recordings_info")),
+	/**
+	 *  The summary next to «Удалить всё»: projects, calls, what the recordings
+	 *  take.
+	 */
+	dataSummary: () => typedError<DataSummary, CommandError>(__TAURI_INVOKE("data_summary")),
+	/**
+	 *  «Удалить всё»: every project, person, call, transcript, summary and
+	 *  connection, the recordings' files, the connectors' secrets; the settings
+	 *  back to their defaults (no `agentPath`, onboarding not done). Then
+	 *  onboarding shows and the main window hides. `Invalid` while a call or a
+	 *  recording goes on (discard it first); `External` when a file or a secret
+	 *  could not be removed (the rest is gone all the same).
+	 */
+	dataDeleteAll: () => typedError<null, CommandError>(__TAURI_INVOKE("data_delete_all")),
+	/**
 	 *  Shows, restores and focuses a window and, with `route`, opens that route
 	 *  in it (`Navigate`). The floating windows hand over through it: the start
 	 *  widget to the overlay, both to the main window for the call window, the
@@ -251,6 +270,17 @@ export const commands = {
 	/**  "Отменить": stops the login in progress (or still starting), if any. */
 	agentLoginCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("agent_login_cancel")),
 	/**
+	 *  «Указать другой» (settings-real design.md, decision 7): the status of
+	 *  the CLI at `path`, without saving it. A path that is not a file named as
+	 *  the CLI is `notInstalled` and is never run.
+	 */
+	agentCheckPath: (path: string) => typedError<AgentState, CommandError>(__TAURI_INVOKE("agent_check_path", { path })),
+	/**
+	 *  The last known share of the subscription limit, from the newest agent
+	 *  call that reported one; `null` without any.
+	 */
+	agentUsage: () => typedError<AgentUsage | null, CommandError>(__TAURI_INVOKE("agent_usage")),
+	/**
 	 *  Subscribes the calling window to `AudioLevel` of a source, opening the
 	 *  device if no window listens to it yet. `External` with `reason`
 	 *  `noAccess` / `noDevice` / `busy` when it can't be opened.
@@ -261,6 +291,19 @@ export const commands = {
 	 *  device. Hiding or closing a window ends its subscriptions too.
 	 */
 	audioLevelStop: (source: AudioSource) => typedError<null, CommandError>(__TAURI_INVOKE("audio_level_stop", { source })),
+	/**
+	 *  The computer's input devices, the chosen microphone (`"system"`: «Как в
+	 *  системе») and since when it is missing, if it is.
+	 */
+	audioInputsGet: () => typedError<AudioInputs, CommandError>(__TAURI_INVOKE("audio_inputs_get")),
+	/**
+	 *  Subscribes the calling window to `AudioInputsChanged`: the list is
+	 *  checked once a second while any window subscribed. Hiding or closing the
+	 *  window ends its subscriptions.
+	 */
+	audioInputsStart: () => typedError<null, CommandError>(__TAURI_INVOKE("audio_inputs_start")),
+	/**  Ends one subscription of the calling window. */
+	audioInputsStop: () => typedError<null, CommandError>(__TAURI_INVOKE("audio_inputs_stop")),
 	/**
 	 *  "Перезапустить": macOS shows a system audio access granted in this
 	 *  process only after a restart.
@@ -418,10 +461,10 @@ export const commands = {
 	/**  Cancels the calling window's hardware check; nothing when none runs. */
 	speechBenchmarkCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("speech_benchmark_cancel")),
 	/**
-	 *  The mic check of onboarding (decision 15): up to 8 s from the default
-	 *  input, ended early by the end of a phrase, recognized in the call
-	 *  language with the selected model. Nothing is stored. Empty text when
-	 *  nothing was said. `Invalid` without an installed model, `External` with
+	 *  The mic check of onboarding and «Проверить звук» (decision 15): up to
+	 *  8 s from the chosen microphone (else the default input), ended early by
+	 *  the end of a phrase, recognized in the call language with the selected
+	 *  model. Nothing is stored. Empty text when nothing was said. `Invalid` without an installed model, `External` with
 	 *  `reason` when the microphone can't be used.
 	 */
 	speechMicCheck: () => typedError<string, CommandError>(__TAURI_INVOKE("speech_mic_check")),
@@ -509,6 +552,7 @@ export const commands = {
 export const events = {
 	agentInstallProgress: makeEvent<AgentInstallProgress, AgentInstallProgress>("agent-install-progress"),
 	agentStatus: makeEvent<AgentStatus, AgentStatus>("agent-status"),
+	audioInputsChanged: makeEvent<AudioInputsChanged, AudioInputsChanged>("audio-inputs-changed"),
 	audioLevel: makeEvent<AudioLevel, AudioLevel>("audio-level"),
 	audioLevelStopped: makeEvent<AudioLevelStopped, AudioLevelStopped>("audio-level-stopped"),
 	briefProgress: makeEvent<BriefProgress, BriefProgress>("brief-progress"),
@@ -590,6 +634,36 @@ export type AgentStatus = {
 };
 
 /**
+ *  The last known share of the subscription limit (settings-real design.md,
+ *  decision 7).
+ */
+export type AgentUsage = {
+	/**  0–1, as the CLI reported it. */
+	utilization: number,
+	/**  When the call that reported it was recorded, ms since the Unix epoch. */
+	measuredAt: number,
+};
+
+/**  The microphones and the choice, as `audio_inputs_get` returns them. */
+export type AudioInputs = {
+	devices: InputDevice[],
+	/**  `"system"` («Как в системе») or the chosen device's name. */
+	selected: string,
+	/**
+	 *  When the chosen device went missing (ms since the Unix epoch);
+	 *  absent while it is there or with «Как в системе». The app listens to
+	 *  the default input meanwhile.
+	 */
+	missingSince?: number | null,
+};
+
+/**
+ *  The list of microphones or the missing state changed. To every window,
+ *  only while some window subscribed (`audio_inputs_start`).
+ */
+export type AudioInputsChanged = AudioInputs;
+
+/**
  *  The level of a source, ~10 times a second, to the windows that
  *  subscribed with `audio_level_start`.
  */
@@ -619,7 +693,7 @@ export type AudioLevelStopped = {
 };
 
 export type AudioSource = 
-/**  The default input device ("Я"). */
+/**  The chosen input device, else the default one ("Я"). */
 "microphone" | 
 /**  What the other apps play ("Остальные"), without this app. */
 "system";
@@ -911,6 +985,11 @@ export type CallRecording = {
 	durationMs: number | null,
 	/**  "Удалить запись" removed its files: no player. */
 	audioDeleted: boolean,
+	/**
+	 *  The retention period deleted its transcript: `segments` is empty
+	 *  and the summary's links to phrases lead nowhere.
+	 */
+	transcriptDeleted: boolean,
 	/**  Where the second pass is. */
 	transcriptState: TranscriptState,
 	/**  The pass of `segments`: refined once the second pass stored it. */
@@ -1317,6 +1396,14 @@ export type DataChanged = {
 	change: Change,
 };
 
+/**  The summary next to «Удалить всё». */
+export type DataSummary = {
+	projects: number,
+	calls: number,
+	/**  What the recordings' files take, in bytes. */
+	bytes: number,
+};
+
 /**  What kind of record a `DataChanged` is about. */
 export type Entity = "project" | "person" | 
 /**  Also sent when the call's participants change. */
@@ -1440,6 +1527,16 @@ export type GapType =
 export type GlossaryEntry = {
 	term: string,
 	definition: string,
+};
+
+/**  An input device of the computer. */
+export type InputDevice = {
+	/**  What the setting `microphone` stores: the device name. */
+	id: string,
+	/**  The name the system shows. */
+	name: string,
+	/**  The default input of the system now. */
+	isDefault: boolean,
 };
 
 export type InstallStage = "downloading" | "installing" | 
@@ -1795,7 +1892,7 @@ export type QuestionStatus = "open" |
 export type RecordingChanged = RecordingStatus;
 
 export type RecordingChannels = {
-	/**  The default input ("Я"). */
+	/**  The chosen input, else the default one ("Я"). */
 	me: ChannelState,
 	/**  What the other apps play ("Остальные"). */
 	others: ChannelState,
@@ -1844,6 +1941,19 @@ export type RecordingStatus = {
 	segmentation: SegmentationStatus,
 	/**  Whether the phrases are recognized (`ok` and no model while idle). */
 	transcription: TranscriptionStatus,
+};
+
+/**  The recordings' folder in «Общие». */
+export type RecordingsInfo = {
+	/**  The folder of the recordings' files, for «Показать в Finder». */
+	path: string,
+	/**  What its files take, in bytes. */
+	bytes: number,
+	/**
+	 *  Calls that still have audio (not deleted by hand or by the
+	 *  retention period).
+	 */
+	calls: number,
 };
 
 /**  What a node of the picker is. */

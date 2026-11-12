@@ -27,7 +27,7 @@ use crate::{
         slow_loop::{app as slow_loop_app, scheduler::SlowLoop},
     },
     audio::{
-        AudioLevels, AudioSource,
+        AudioInputs, AudioLevels, AudioSource, Inputs,
         mic_watch::{MicActivityChanged, MicWatch},
     },
     call::{CallManager, CallStart},
@@ -56,8 +56,9 @@ use crate::{
     },
     storage::{
         Storage, call_records,
-        call_state::{self, QuestionAction},
+        call_state::{self, AgentUsage, QuestionAction},
         calls::{self, Call, CallCreate, CallStatus, CallUpdate},
+        data::{self, DataSummary, RecordingsInfo},
         people::{self, Person, PersonCreate, PersonUpdate},
         projects::{self, Project, ProjectCreate, ProjectOverview, ProjectUpdate},
         recordings::{self, RecordingLinks, TranscriptState},
@@ -682,6 +683,7 @@ pub async fn settings_update(
 ) -> CommandResult<SettingsUpdateResult> {
     settings::validate(&patch)?;
     let count_changed = patch.contains_key(settings::QUESTION_COUNT);
+    let microphone_changed = patch.contains_key(settings::MICROPHONE);
     let _one_at_a_time = lock.0.lock().await;
     // As `speech_model_select`: a ready model, not changed while recording.
     let model = patch
@@ -717,6 +719,11 @@ pub async fn settings_update(
     );
     if model.is_some() {
         models.set_selected(settings::speech_model(&settings));
+    }
+    if microphone_changed && let Some(inputs) = app.try_state::<Inputs>() {
+        // Reopens a running level meter; the recording follows on its own.
+        let (inputs, chosen) = (inputs.inner().clone(), settings::microphone(&settings));
+        let _ = permissions::blocking(move || inputs.select(chosen)).await;
     }
     if count_changed {
         // Every window shows the new number of questions at once.
@@ -754,6 +761,86 @@ pub async fn onboarding_complete(
     windows::show(&app, windows::MAIN);
     windows::hide(&app, windows::ONBOARDING);
     Ok(())
+}
+
+/* Data (settings-real design.md, decisions 4 and 8) */
+
+/// «Папка записей»: where the recordings' files are (for «Показать в
+/// Finder»), what they take and how many calls still have audio.
+#[tauri::command]
+#[specta::specta]
+pub async fn recordings_info(storage: State<'_, Storage>) -> CommandResult<RecordingsInfo> {
+    data::recordings_info(&storage).await
+}
+
+/// The summary next to «Удалить всё»: projects, calls, what the recordings
+/// take.
+#[tauri::command]
+#[specta::specta]
+pub async fn data_summary(storage: State<'_, Storage>) -> CommandResult<DataSummary> {
+    data::summary(&storage).await
+}
+
+/// «Удалить всё»: every project, person, call, transcript, summary and
+/// connection, the recordings' files, the connectors' secrets; the settings
+/// back to their defaults (no `agentPath`, onboarding not done). Then
+/// onboarding shows and the main window hides. `Invalid` while a call or a
+/// recording goes on (discard it first); `External` when a file or a secret
+/// could not be removed (the rest is gone all the same).
+#[tauri::command]
+#[specta::specta]
+pub async fn data_delete_all(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    lock: State<'_, SettingsLock>,
+    models: State<'_, ModelManager>,
+    recorder: State<'_, RecordingManager>,
+    calls: State<'_, CallManager>,
+    cache: State<'_, AudioCache>,
+) -> CommandResult<()> {
+    if recorder.is_recording() || calls.is_active() {
+        return Err(CommandError::invalid(
+            "Идёт звонок: завершите или удалите его, потом удаляйте данные",
+        ));
+    }
+    let _one_at_a_time = lock.0.lock().await;
+    let before = storage.read(settings::get).await?;
+    let secrets = Arc::clone(&app.state::<crate::connectors::Connectors>().secrets);
+    let deleted = data::delete_everything(&storage, &app, secrets.as_ref()).await;
+    // The OS follows the default settings: autostart, the overlay hidden
+    // from screen sharing, the shortcuts.
+    let defaults = settings::defaults();
+    let applied: SettingsMap = [
+        settings::LAUNCH_AT_LOGIN,
+        settings::HIDE_ON_SHARE,
+        settings::SHORTCUTS,
+    ]
+    .into_iter()
+    .filter_map(|key| Some((key.to_owned(), defaults.get(key)?.clone())))
+    .collect();
+    let handle = app.clone();
+    let effects = tauri::async_runtime::spawn_blocking(move || {
+        shell::apply_settings(&handle, &applied, &before)
+    })
+    .await
+    .map_err(|error| CommandError::storage(error.to_string()))?;
+    if !effects.corrections.is_empty() {
+        let corrections = effects.corrections;
+        storage
+            .write(&app, move |db| Ok(((), settings::put(db, &corrections)?)))
+            .await?;
+    }
+    models.set_selected(settings::speech_model(&defaults));
+    if let Some(inputs) = app.try_state::<Inputs>() {
+        let inputs = inputs.inner().clone();
+        let _ = permissions::blocking(move || inputs.select(None)).await;
+    }
+    let cache = cache.inner().clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || cache.clear()).await;
+    shell::remember_onboarding(&app, false);
+    windows::show(&app, windows::ONBOARDING);
+    windows::hide(&app, windows::MAIN);
+    deleted
 }
 
 /* Windows and storage */
@@ -823,6 +910,10 @@ pub async fn storage_reopen(
     storage.reopen().await?;
     let settings = storage.read(settings::get).await?;
     models.set_selected(settings::speech_model(&settings));
+    if let Some(inputs) = app.try_state::<Inputs>() {
+        let (inputs, chosen) = (inputs.inner().clone(), settings::microphone(&settings));
+        let _ = permissions::blocking(move || inputs.select(chosen)).await;
+    }
     refiner.queue_unrefined().await;
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || shell::storage_opened(&handle, &settings))
@@ -1017,6 +1108,23 @@ pub async fn agent_login_cancel(sessions: State<'_, AgentSessions>) -> CommandRe
     Ok(())
 }
 
+/// «Указать другой» (settings-real design.md, decision 7): the status of
+/// the CLI at `path`, without saving it. A path that is not a file named as
+/// the CLI is `notInstalled` and is never run.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_check_path(app: AppHandle, path: String) -> CommandResult<AgentState> {
+    Ok(agent::check_path(std::path::Path::new(path.trim()), &agent_workdir(&app)).await)
+}
+
+/// The last known share of the subscription limit, from the newest agent
+/// call that reported one; `null` without any.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_usage(storage: State<'_, Storage>) -> CommandResult<Option<AgentUsage>> {
+    storage.read(call_state::latest_usage).await
+}
+
 /// "Перезапустить": macOS shows a system audio access granted in this
 /// process only after a restart.
 #[tauri::command]
@@ -1054,6 +1162,35 @@ pub async fn audio_level_stop(
     let label = window.label().to_owned();
     let levels = levels.inner().clone();
     permissions::blocking(move || levels.stop(&label, source)).await
+}
+
+/* Microphones (settings-real design.md, decision 1) */
+
+/// The computer's input devices, the chosen microphone (`"system"`: «Как в
+/// системе») and since when it is missing, if it is.
+#[tauri::command]
+#[specta::specta]
+pub async fn audio_inputs_get(inputs: State<'_, Inputs>) -> CommandResult<AudioInputs> {
+    let inputs = inputs.inner().clone();
+    permissions::blocking(move || inputs.get()).await
+}
+
+/// Subscribes the calling window to `AudioInputsChanged`: the list is
+/// checked once a second while any window subscribed. Hiding or closing the
+/// window ends its subscriptions.
+#[tauri::command]
+#[specta::specta]
+pub fn audio_inputs_start(window: WebviewWindow, inputs: State<'_, Inputs>) -> CommandResult<()> {
+    inputs.start(window.label());
+    Ok(())
+}
+
+/// Ends one subscription of the calling window.
+#[tauri::command]
+#[specta::specta]
+pub fn audio_inputs_stop(window: WebviewWindow, inputs: State<'_, Inputs>) -> CommandResult<()> {
+    inputs.stop(window.label());
+    Ok(())
 }
 
 /* Microphone activity */
@@ -1522,10 +1659,10 @@ pub fn speech_benchmark_cancel(
     Ok(())
 }
 
-/// The mic check of onboarding (decision 15): up to 8 s from the default
-/// input, ended early by the end of a phrase, recognized in the call
-/// language with the selected model. Nothing is stored. Empty text when
-/// nothing was said. `Invalid` without an installed model, `External` with
+/// The mic check of onboarding and «Проверить звук» (decision 15): up to
+/// 8 s from the chosen microphone (else the default input), ended early by
+/// the end of a phrase, recognized in the call language with the selected
+/// model. Nothing is stored. Empty text when nothing was said. `Invalid` without an installed model, `External` with
 /// `reason` when the microphone can't be used.
 #[tauri::command]
 #[specta::specta]
@@ -1534,6 +1671,7 @@ pub async fn speech_mic_check(
     storage: State<'_, Storage>,
     models: State<'_, ModelManager>,
     speech: State<'_, Speech>,
+    inputs: State<'_, Inputs>,
 ) -> CommandResult<String> {
     if models.selected_path().is_none() {
         return Err(CommandError::invalid("Модель распознавания не скачана"));
@@ -1543,7 +1681,10 @@ pub async fn speech_mic_check(
         .await
         .unwrap_or_default();
     let vad_model = crate::vad::bundled_model_path(&app);
-    let audio =
-        permissions::blocking(move || mic_check::listen_to_microphone(&vad_model)).await??;
+    let inputs = inputs.inner().clone();
+    let audio = permissions::blocking(move || {
+        mic_check::listen_to_microphone(&vad_model, &inputs.target())
+    })
+    .await??;
     mic_check::recognize(&speech.recognizer(), audio, language).await
 }

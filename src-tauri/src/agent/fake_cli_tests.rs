@@ -9,7 +9,7 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 use super::{
-    AgentSessions, AgentState, NO_LOGIN, NOT_RESPONDING,
+    AgentSessions, AgentState, NO_LOGIN, NOT_RESPONDING, check_path,
     discover::{self, SearchEnv},
     finish_login, install, locate, locate_and_check, login, process, status,
 };
@@ -140,6 +140,45 @@ fn agent_path(storage: &Storage) -> serde_json::Value {
         .get(settings::AGENT_PATH)
         .cloned()
         .unwrap_or_default()
+}
+
+/// «Указать другой»: a working CLI answers its status; a path without one
+/// is `notInstalled` and is never run. Nothing is saved either way.
+#[test]
+fn check_path_tells_the_status_of_a_path_without_saving_it() {
+    let fake = Fake::new();
+    let cli = fake.claude("ok");
+    let state = block_on(check_path(&cli, fake.path()));
+    assert_eq!(
+        state,
+        AgentState::NeedsLogin {
+            version: "2.1.316".to_owned()
+        }
+    );
+
+    let missing = fake.path().join("nowhere/claude");
+    assert_eq!(
+        block_on(check_path(&missing, fake.path())),
+        AgentState::NotInstalled
+    );
+    // A program of another name is not run, even if it would answer.
+    let other = fake.script(
+        "bin/not-claude",
+        "#!/bin/sh\ntouch \"$0.ran\"\necho 2.0.0\n",
+    );
+    assert_eq!(
+        block_on(check_path(&other, fake.path())),
+        AgentState::NotInstalled
+    );
+    assert!(
+        !fake.path().join("bin/not-claude.ran").exists(),
+        "never run"
+    );
+    assert_eq!(
+        block_on(check_path(fake.path(), fake.path())),
+        AgentState::NotInstalled,
+        "a folder"
+    );
 }
 
 #[test]

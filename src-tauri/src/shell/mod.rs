@@ -19,7 +19,7 @@ use crate::{
         service::{self, Speech},
     },
     storage::{
-        Storage,
+        Storage, retention,
         settings::{self, SettingsMap},
     },
 };
@@ -98,7 +98,10 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     app.manage(QuitRequested::default());
     app.manage(shortcuts::Registered::default());
     app.manage(SettingsLock::default());
-    app.manage(crate::audio::levels_for_app(app.handle()));
+    // The microphones and the chosen one: every capture of «Я» opens it.
+    let inputs = crate::audio::inputs_for_app(app.handle(), settings::microphone(&settings));
+    app.manage(crate::audio::levels_for_app(app.handle(), &inputs));
+    app.manage(inputs.clone());
     app.manage(crate::agent::AgentSessions::default());
     // Which projects have a brief build running (`briefState: building`).
     app.manage(crate::projects::builds::BriefBuilds::default());
@@ -138,7 +141,7 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
         &fast_loop,
     ));
     app.manage(fast_loop);
-    let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer());
+    let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer(), &inputs);
     app.manage(recorder.clone());
     // The calls' summary builds; a finishing call starts one.
     app.manage(crate::summary::builds::SummaryBuilds::default());
@@ -159,12 +162,66 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
         .app_cache_dir()
         .unwrap_or_else(|_| std::env::temp_dir());
     app.manage(crate::records::audio::AudioCache::for_app(&cache_dir));
+    // The retention periods: 30 s after the start, then once a day.
+    schedule_retention(app.handle());
     // Runs for the app's whole life; needs no microphone access. No start
     // widget (and no new call) during a call or a recording.
     let watch = crate::audio::mic_watch::start_for_app(app.handle());
     watch.set_recording_probe(move || recorder.is_recording() || calls.is_active());
     app.manage(watch);
     Ok(())
+}
+
+/// Runs the retention periods (settings-real design.md, decision 5) in the
+/// background: [`retention::FIRST_AFTER`] after the start, never holding a
+/// window, then every [`retention::EVERY`].
+fn schedule_retention<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(retention::FIRST_AFTER).await;
+        loop {
+            purge_by_retention(&app).await;
+            tokio::time::sleep(retention::EVERY).await;
+        }
+    });
+}
+
+async fn purge_by_retention<R: Runtime>(app: &AppHandle<R>) {
+    let Some(storage) = app.try_state::<Storage>() else {
+        return;
+    };
+    let refiner = app
+        .try_state::<Refiner>()
+        .map(|refiner| refiner.inner().clone());
+    let cache = app
+        .try_state::<crate::records::audio::AudioCache>()
+        .map(|cache| cache.inner().clone());
+    let stop_refining = move |id: &str| {
+        if let Some(refiner) = &refiner {
+            refiner.stop(id);
+        }
+    };
+    let forget_audio = move |id: &str| {
+        if let Some(cache) = &cache {
+            cache.forget(id);
+        }
+    };
+    let host = retention::PassHost {
+        store: storage
+            .recording_store()
+            .map(|store| store as std::sync::Arc<dyn crate::recording::store::RecordingStore>),
+        stop_refining: &stop_refining,
+        forget_audio: &forget_audio,
+    };
+    match retention::run(&storage, app, &host, crate::storage::now_ms()).await {
+        Ok(purged) if !purged.is_empty() => eprintln!(
+            "grill: retention deleted the audio of {} and the transcript of {} recording(s)",
+            purged.audio.len(),
+            purged.transcripts.len()
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!("grill: retention pass failed: {error}"),
+    }
 }
 
 /// Applies stored settings to the OS: overlay protection, global shortcuts

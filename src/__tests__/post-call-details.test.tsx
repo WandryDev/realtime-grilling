@@ -87,6 +87,7 @@ const recording = (
   pass: "refined",
   segments,
   startedAt,
+  transcriptDeleted: false,
   transcriptState: "refined",
 });
 

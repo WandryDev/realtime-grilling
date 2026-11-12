@@ -159,6 +159,17 @@ pub async fn status(cli: &Path, cwd: &Path, timeout: Duration) -> AgentState {
     }
 }
 
+/// «Указать другой» (settings-real design.md, decision 7): the status of
+/// the CLI at `path`, without saving it. A path that is not a file named as
+/// the CLI (`claude`, `claude.exe`, `claude.cmd`) is `notInstalled` and is
+/// never run.
+pub async fn check_path(path: &Path, cwd: &Path) -> AgentState {
+    if !discover::has_cli_name(path) || !path.is_file() {
+        return AgentState::NotInstalled;
+    }
+    status(path, cwd, STATUS_TIMEOUT).await
+}
+
 async fn saved_path(storage: &Storage) -> Option<PathBuf> {
     let stored = storage.read(settings::get).await.ok()?;
     stored

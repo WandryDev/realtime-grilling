@@ -134,6 +134,7 @@ const RECORDINGS: CallRecording[] = [
       segment("s-20", 20, "Кассиров у нас трое на смене"),
     ],
     startedAt: STARTED_AT,
+    transcriptDeleted: false,
     transcriptState: "refined",
   },
 ];

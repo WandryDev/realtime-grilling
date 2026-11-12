@@ -275,6 +275,7 @@ function historyRecords(call: Call, audioDeleted: boolean) {
       pass: "refined",
       segments,
       startedAt,
+      transcriptDeleted: false,
       transcriptState: "refined",
     },
   };
