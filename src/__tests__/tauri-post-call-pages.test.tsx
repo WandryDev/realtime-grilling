@@ -95,6 +95,7 @@ const MINUTE = 60_000;
 
 const LOGIN = "Итоги не собраны: нужен вход в Claude Code";
 const CLICKUP_SOON = /Отправить в ClickUp\s*скоро/u;
+const TRANSCRIPT_AT = /^Открыть расшифровку на/u;
 const PROPOSALS_NAV = /^Предложения/u;
 const TASK_CARDS_NAV = /^Карточки задач/u;
 /** The summary's name of the call under «Итоги звонка». */
@@ -597,6 +598,35 @@ describe("«Итоги звонка» in Tauri", () => {
 
     expect(await screen.findByText("аудио удалено")).toBeTruthy();
     expect(screen.queryByText("на этом компьютере")).toBeNull();
+  });
+});
+
+describe("a transcript the retention period deleted", () => {
+  const deletedTranscript = () =>
+    RECORDINGS.map((item) => ({
+      ...item,
+      segments: [],
+      transcriptDeleted: true,
+    }));
+
+  it("keeps the summary and says so, without jumps to its phrases", async () => {
+    records();
+    fake.answers.set("call_transcript", deletedTranscript);
+    openSummary();
+
+    expect(await screen.findByText("Курсы и обмен без паспорта")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Расшифровка удалена по сроку хранения. Итоги и карточки остались"
+      )
+    ).toBeTruthy();
+    // The points keep their times, as text: their phrases are gone.
+    expect(
+      screen
+        .getAllByTitle("расшифровка удалена по сроку хранения")
+        .map((time) => time.textContent)
+    ).toContain("12:04");
+    expect(screen.queryByRole("link", { name: TRANSCRIPT_AT })).toBeNull();
   });
 });
 

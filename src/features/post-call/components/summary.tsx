@@ -22,7 +22,7 @@ import {
   type SummaryPointData,
   type UnaskedQuestion,
 } from "../mock";
-import { usePostCallLinks } from "./links";
+import { TRANSCRIPT_DELETED, usePostCallLinks } from "./links";
 import { StatusDot } from "./status-mark";
 
 /*
@@ -172,7 +172,10 @@ const POINT_TONE = {
   contradiction: { dot: "bg-contradiction", note: "text-contradiction" },
 } as const;
 
-/** Clickable time code: opens the transcript at that moment. */
+/**
+ * Clickable time code: opens the transcript at that moment; plain text
+ * once the retention period deleted the transcript.
+ */
 export function TimeLink({
   className,
   moment,
@@ -183,7 +186,20 @@ export function TimeLink({
   moment?: string;
   time: string;
 }) {
-  const { Link, transcript } = usePostCallLinks();
+  const { Link, transcript, transcriptDeleted } = usePostCallLinks();
+  if (transcriptDeleted) {
+    return (
+      <span
+        className={cn(
+          "text-muted-foreground w-14 shrink-0 text-right font-mono text-xs leading-6 tabular-nums",
+          className
+        )}
+        title={TRANSCRIPT_DELETED}
+      >
+        {time}
+      </span>
+    );
+  }
   return (
     <Link
       aria-label={`Открыть расшифровку на ${time}`}

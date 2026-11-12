@@ -408,6 +408,26 @@ describe("call details in Tauri", () => {
     expect(document.querySelector("audio")).toBeNull();
   });
 
+  it("says the retention period deleted the transcript, the player stays", async () => {
+    fake.answers.set("call_transcript", () =>
+      recordings.map((item) => ({
+        ...item,
+        segments: [],
+        transcriptDeleted: true,
+      }))
+    );
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    expect(
+      await screen.findByText("Расшифровка удалена по сроку хранения")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Итоги, карточки и вопросы звонка остались.")
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Слушать" })).toBeTruthy();
+  });
+
   it("says the position as time, names the parts menu, loads only metadata", async () => {
     search = new URLSearchParams({ id: ownCall() });
     render(<TranscriptPage />);

@@ -27,7 +27,7 @@ import type {
   TaskFactData,
 } from "../mock";
 import { LinkButton } from "./link-button";
-import { usePostCallLinks } from "./links";
+import { TRANSCRIPT_DELETED, usePostCallLinks } from "./links";
 import { FACT_STATUS_LABEL, StatusDot } from "./status-mark";
 
 /*
@@ -176,15 +176,21 @@ export function FactQuote({
           <PlaySmallIcon className="size-3" />
           Послушать
         </Button>
-        <LinkButton
-          className="text-foreground -mx-2 -my-[5px] gap-1.5 px-2"
-          href={links.transcript(moment ?? time)}
-          size="sm"
-          variant="ghost"
-        >
-          <ArrowRightIcon className="size-3" />
-          Открыть в расшифровке
-        </LinkButton>
+        {links.transcriptDeleted ? (
+          <span className="text-muted-foreground text-sm">
+            {TRANSCRIPT_DELETED}
+          </span>
+        ) : (
+          <LinkButton
+            className="text-foreground -mx-2 -my-[5px] gap-1.5 px-2"
+            href={links.transcript(moment ?? time)}
+            size="sm"
+            variant="ghost"
+          >
+            <ArrowRightIcon className="size-3" />
+            Открыть в расшифровке
+          </LinkButton>
+        )}
       </div>
     </div>
   );

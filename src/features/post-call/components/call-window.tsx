@@ -102,6 +102,11 @@ export function CallSidebar({
           trailing={<NavMeta>{info.duration}</NavMeta>}
         />
       </NavMenu>
+      {links.transcriptDeleted ? (
+        <p className="text-muted-foreground px-3 text-sm">
+          Расшифровка удалена по сроку хранения. Итоги и карточки остались
+        </p>
+      ) : null}
       {facts ? (
         <dl className="flex flex-col gap-3.5 px-3">
           {facts.map((fact) => (

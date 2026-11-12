@@ -165,6 +165,10 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
         value: call.participants ? `${call.participants} и вы` : "вы",
       },
       { label: "Запись", value: recordingFact(recordings, bytes) },
+      ...(recordings.length > 0 &&
+      recordings.every((item) => item.transcriptDeleted)
+        ? [{ label: "Расшифровка", value: "удалена по сроку хранения" }]
+        : []),
     ];
   }, [call, recordings]);
 

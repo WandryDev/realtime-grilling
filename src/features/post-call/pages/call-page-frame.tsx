@@ -9,6 +9,7 @@ import {
   useMemo,
 } from "react";
 
+import { useCallTranscript } from "@/data/call-records";
 import { type CallRecord, NO_PROJECT_CALL } from "@/data/calls";
 import { useProject } from "@/data/projects";
 import { inTauri } from "@/effect/runtime";
@@ -77,6 +78,9 @@ export function baseLinks(): PostCallLinks {
 }
 
 function useCallLinks(call: CallRecord, projectName: string): PostCallLinks {
+  const recordings = useCallTranscript(call.id).data;
+  const transcriptDeleted =
+    recordings.length > 0 && recordings.every((item) => item.transcriptDeleted);
   return useMemo(() => {
     // A call without a project belongs to the whole history.
     const { projectId } = call;
@@ -90,8 +94,9 @@ function useCallLinks(call: CallRecord, projectName: string): PostCallLinks {
       summary: routes.callSummary(call.id),
       tasks: routes.callTasks(call.id),
       transcript: (moment?: string) => routes.callTranscript(call.id, moment),
+      transcriptDeleted,
     };
-  }, [call, projectName]);
+  }, [call, projectName, transcriptDeleted]);
 }
 
 function CallFrame({

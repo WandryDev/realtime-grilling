@@ -144,6 +144,15 @@ function noticeOf(
       title: "Расшифровка не открылась",
     };
   }
+  if (
+    transcript.data.length > 0 &&
+    transcript.data.every((item) => item.transcriptDeleted)
+  ) {
+    return {
+      description: "Итоги, карточки и вопросы звонка остались.",
+      title: "Расшифровка удалена по сроку хранения",
+    };
+  }
   if (turns === 0) {
     return {
       description:

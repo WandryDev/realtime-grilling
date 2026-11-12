@@ -18,6 +18,9 @@ import { CALL, HREF } from "../mock";
  * <PostCallProvider> with routes of the open call and a Next.js Link.
  */
 
+/** Instead of a jump to a phrase whose transcript is gone. */
+export const TRANSCRIPT_DELETED = "расшифровка удалена по сроку хранения";
+
 export type LinkComponent = ComponentType<
   ComponentProps<"a"> & { href: string }
 >;
@@ -45,6 +48,11 @@ export interface PostCallLinks {
   tasks: string;
   /** Transcript of the open call, at a moment (question, turn or time). */
   transcript: (moment?: string) => string;
+  /**
+   * The retention period deleted the open call's transcript: links to its
+   * phrases lead nowhere, the screens say so instead.
+   */
+  transcriptDeleted?: boolean;
 }
 
 /** What the title bar, the breadcrumbs and the meta line say. */
