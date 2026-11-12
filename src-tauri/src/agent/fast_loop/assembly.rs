@@ -324,7 +324,7 @@ pub fn brief_gaps(brief: &Value) -> Vec<(CardLens, String)> {
 }
 
 /// Whitespace and line breaks collapsed: one segment, one line.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

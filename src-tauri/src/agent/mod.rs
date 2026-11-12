@@ -6,6 +6,7 @@
 pub mod claude_cli;
 pub mod discover;
 pub mod fast_loop;
+pub mod halt;
 pub mod install;
 pub mod login;
 pub mod process;

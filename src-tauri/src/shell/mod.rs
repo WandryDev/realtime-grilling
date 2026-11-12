@@ -130,8 +130,14 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     if !std::env::args().any(|arg| arg == AUTOSTART_ARG) {
         show_entry(app.handle());
     }
-    // Before the recorder: its live pass starts the agent's schedulers.
-    app.manage(crate::agent::fast_loop::app::for_app(app.handle()));
+    // Before the recorder: its live pass starts the agent's schedulers. The
+    // slow loop shares the fast loop's halt and hears its topic changes.
+    let fast_loop = crate::agent::fast_loop::app::for_app(app.handle());
+    app.manage(crate::agent::slow_loop::app::for_app(
+        app.handle(),
+        &fast_loop,
+    ));
+    app.manage(fast_loop);
     let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer());
     app.manage(recorder.clone());
     // The calls' summary builds; a finishing call starts one.
@@ -245,6 +251,10 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
             if let Some(fast_loop) = app.try_state::<crate::agent::fast_loop::scheduler::FastLoop>()
             {
                 fast_loop.shutdown();
+            }
+            if let Some(slow_loop) = app.try_state::<crate::agent::slow_loop::scheduler::SlowLoop>()
+            {
+                slow_loop.shutdown();
             }
             if let Some(builds) = app.try_state::<crate::projects::builds::BriefBuilds>() {
                 builds.shutdown();

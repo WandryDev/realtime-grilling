@@ -24,8 +24,8 @@ pub fn work_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
         .join("agent")
 }
 
-struct AppLoopHost<R: Runtime> {
-    app: AppHandle<R>,
+pub(crate) struct AppLoopHost<R: Runtime> {
+    pub(crate) app: AppHandle<R>,
 }
 
 impl<R: Runtime> LoopHost for AppLoopHost<R> {
@@ -53,8 +53,8 @@ impl<R: Runtime> LoopHost for AppLoopHost<R> {
 }
 
 /// Claude Code once `agent_status` would say `ready`.
-struct CliProvider<R: Runtime> {
-    app: AppHandle<R>,
+pub(crate) struct CliProvider<R: Runtime> {
+    pub(crate) app: AppHandle<R>,
 }
 
 /// What the windows show for a CLI that isn't ready.

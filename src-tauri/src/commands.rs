@@ -24,6 +24,7 @@ use crate::{
         },
         install::{self, AgentInstallProgress},
         login,
+        slow_loop::{app as slow_loop_app, scheduler::SlowLoop},
     },
     audio::{
         AudioLevels, AudioSource,
@@ -584,11 +585,13 @@ pub async fn transcript_state(
 pub async fn call_state_get(
     storage: State<'_, Storage>,
     fast_loop: State<'_, FastLoop>,
+    slow_loop: State<'_, SlowLoop>,
     recording_id: String,
 ) -> CommandResult<CallStateView> {
     let fast_loop = fast_loop.inner().clone();
+    let slow_loop = slow_loop.inner().clone();
     storage
-        .read(move |db| fast_loop_app::view(db, &fast_loop, &recording_id))
+        .read(move |db| slow_loop_app::view(db, &fast_loop, &slow_loop, &recording_id))
         .await
 }
 
@@ -884,17 +887,20 @@ pub async fn agent_status(
     app: AppHandle,
     storage: State<'_, Storage>,
     fast_loop: State<'_, FastLoop>,
+    slow_loop: State<'_, SlowLoop>,
 ) -> CommandResult<AgentState> {
     let cwd = agent_workdir(&app);
     let state = agent::locate_and_check(&storage, &app, &SearchEnv::from_process(), &cwd).await;
-    resume_calls(&fast_loop, &state);
+    resume_calls(&fast_loop, &slow_loop, &state);
     Ok(state)
 }
 
-/// A ready agent resumes the calls of a recording that waited for it.
-fn resume_calls(fast_loop: &FastLoop, state: &AgentState) {
+/// A ready agent resumes the calls of a recording that waited for it, in
+/// both loops.
+fn resume_calls(fast_loop: &FastLoop, slow_loop: &SlowLoop, state: &AgentState) {
     if matches!(state, AgentState::Ready { .. }) {
         fast_loop.agent_ready();
+        slow_loop.agent_ready();
     }
 }
 
@@ -989,6 +995,7 @@ pub async fn agent_login_submit(
     storage: State<'_, Storage>,
     sessions: State<'_, AgentSessions>,
     fast_loop: State<'_, FastLoop>,
+    slow_loop: State<'_, SlowLoop>,
     code: String,
 ) -> CommandResult<AgentState> {
     let code = code.trim();
@@ -998,7 +1005,7 @@ pub async fn agent_login_submit(
     let session = sessions.take_login().await?;
     let cli = agent_cli(&app, &storage).await?;
     let state = agent::finish_login(session, code, &cli, &agent_workdir(&app)).await?;
-    resume_calls(&fast_loop, &state);
+    resume_calls(&fast_loop, &slow_loop, &state);
     Ok(state)
 }
 

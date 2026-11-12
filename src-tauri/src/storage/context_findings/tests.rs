@@ -310,7 +310,7 @@ fn hidden_findings_are_not_visible_and_a_new_question_links_one() {
         .into_iter()
         .map(|f| f.id)
         .collect();
-    assert_eq!(shown, [second.clone()]);
+    assert_eq!(shown, std::slice::from_ref(&second));
     assert!(matches!(
         hide(&db, &id, "missing", 50),
         Err(CommandError::NotFound { .. })

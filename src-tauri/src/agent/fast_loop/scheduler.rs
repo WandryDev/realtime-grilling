@@ -58,11 +58,14 @@ use crate::{
         claude_cli::{
             self, Agent, AgentError, AgentReply, AgentRequest, CallOptions, OutputKind, Usage,
         },
+        halt::{AgentHalt, Halted},
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
     storage::{
-        call_state::{self, AgentCallInput, AgentCallKind, AgentCallOutcome, ValidatedPatch},
+        call_state::{
+            self, AgentCallInput, AgentCallKind, AgentCallOutcome, ValidatedOp, ValidatedPatch,
+        },
         now_ms, recordings, settings,
         transcript::{self, TranscriptChannel, TranscriptPass},
     },
@@ -215,7 +218,16 @@ struct Inner {
     in_flight: Mutex<HashMap<String, InFlight>>,
     /// After [`FastLoop::shutdown`]: nothing starts.
     closed: AtomicBool,
+    /// «Нужен вход» and the subscription limit, shared with the slow loop
+    /// (agent-slow-loop design.md, decision 1).
+    halt: AgentHalt,
+    /// Told the recording whose current topic a call changed (the slow
+    /// loop searches for the new topic).
+    topic_listener: Mutex<Option<TopicListener>>,
 }
+
+/// Told the recording whose current topic changed.
+pub type TopicListener = Arc<dyn Fn(&str) + Send + Sync>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -246,7 +258,27 @@ impl FastLoop {
             gate: Arc::new(Semaphore::new(1)),
             in_flight: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
+            halt: AgentHalt::default(),
+            topic_listener: Mutex::new(None),
         }))
+    }
+
+    /// The halt the slow loop shares with this loop.
+    pub fn halt(&self) -> AgentHalt {
+        self.0.halt.clone()
+    }
+
+    /// `listener` hears of every change of a recording's current topic
+    /// that a call or a topic check applied.
+    pub fn on_topic_changed(&self, listener: TopicListener) {
+        *lock(&self.0.topic_listener) = Some(listener);
+    }
+
+    fn topic_changed(&self, recording_id: &str) {
+        let listener = lock(&self.0.topic_listener).clone();
+        if let Some(listener) = listener {
+            listener(recording_id);
+        }
     }
 
     /// The live pass of `recording_id` started: its scheduler starts once
@@ -348,6 +380,7 @@ impl FastLoop {
     /// A status check found the agent ready: the recordings waiting for it
     /// start, the schedulers stopped by `NotLoggedIn` go on.
     pub fn agent_ready(&self) {
+        self.0.halt.clear_login();
         let waiting: Vec<String> = {
             let sessions = lock(&self.0.sessions);
             for session in sessions.values() {
@@ -665,6 +698,9 @@ impl Scheduler {
                     Some(Message::Phrase(channel)) => self.phrase(channel).await,
                     Some(Message::Retry) => {
                         if call.is_none() {
+                            // The user asks for a call: whatever stopped
+                            // them is tried again.
+                            self.call.fast_loop.0.halt.clear();
                             call = Some(self.start_call());
                         }
                     }
@@ -689,8 +725,16 @@ impl Scheduler {
                         self.finish(end);
                     }
                 }
-                () = sleep_until(retry_at) => call = Some(self.start_call()),
-                () = sleep_until(due_at) => call = Some(self.start_call()),
+                () = sleep_until(retry_at) => {
+                    if !self.adopt_halt() {
+                        call = Some(self.start_call());
+                    }
+                }
+                () = sleep_until(due_at) => {
+                    if !self.adopt_halt() {
+                        call = Some(self.start_call());
+                    }
+                }
                 () = sleep_until(resets_at) => {
                     self.halt = None;
                     self.client_since_last = false;
@@ -708,6 +752,29 @@ impl Scheduler {
             );
         }
         self.call.fast_loop.forget(&self.call.recording_id);
+    }
+
+    /// A call of the slow loop stopped the calls (agent-slow-loop design.md,
+    /// decision 1): this loop stops too, and says so, instead of starting
+    /// one. `true` when it did.
+    fn adopt_halt(&mut self) -> bool {
+        if self.halt.is_some() {
+            return false;
+        }
+        let Some(halted) = self.call.fast_loop.0.halt.active() else {
+            return false;
+        };
+        match halted {
+            Halted::NeedsLogin => {
+                self.halt = Some(Halt::NeedsLogin);
+                self.report(AgentLoopState::NeedsLogin);
+            }
+            Halted::RateLimited { until, resets_at } => {
+                self.halt = Some(Halt::RateLimited { until });
+                self.report(AgentLoopState::RateLimited { resets_at });
+            }
+        }
+        true
     }
 
     /// A phrase came: one of «Остальные» makes a call due (and reads the
@@ -773,8 +840,12 @@ impl Scheduler {
 
     fn finish(&mut self, end: CallEnd) {
         let retry_after = self.call.fast_loop.0.config.retry_after;
+        let shared = &self.call.fast_loop.0.halt;
         match end {
-            CallEnd::Done => self.report(AgentLoopState::Idle),
+            CallEnd::Done => {
+                shared.clear();
+                self.report(AgentLoopState::Idle);
+            }
             CallEnd::Failed(message) => {
                 self.retry_at = Some(Instant::now() + retry_after);
                 let retry_ms = i64::try_from(retry_after.as_millis()).unwrap_or(i64::MAX);
@@ -786,6 +857,7 @@ impl Scheduler {
             }
             CallEnd::NotLoggedIn => {
                 self.halt = Some(Halt::NeedsLogin);
+                shared.set(Halted::NeedsLogin);
                 self.report(AgentLoopState::NeedsLogin);
             }
             CallEnd::RateLimited { resets_at } => {
@@ -796,6 +868,7 @@ impl Scheduler {
                     Instant::now() + Duration::from_millis(wait)
                 });
                 self.halt = Some(Halt::RateLimited { until });
+                shared.set(Halted::RateLimited { until, resets_at });
                 self.report(AgentLoopState::RateLimited { resets_at });
             }
             // Only the end of the session cancels; it reports itself.
@@ -904,8 +977,10 @@ async fn run_call(
     let now = host.now_ms();
     let applied = database(host, move |connection| {
         let mut changed = false;
+        let mut topic_changed = false;
         in_savepoint(connection, || {
-            let fresh = given.with_state(&call_state::get(connection, &id)?);
+            let before = call_state::get(connection, &id)?;
+            let fresh = given.with_state(&before);
             let validation = validate::recheck(&parsed, checked, &fresh, similarity.as_ref());
             for rejection in &validation.rejected {
                 eprintln!("grill: the agent's operation was rejected ({id}): {rejection}");
@@ -918,6 +993,16 @@ async fn run_call(
                 AgentCallOutcome::Empty
             });
             call_state::apply_patch_at(connection, &id, &validation.patch, now)?;
+            let moves_topic = validation.patch.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    ValidatedOp::CreateTopic { .. } | ValidatedOp::SwitchTopic { .. }
+                )
+            });
+            if moves_topic {
+                let after = call_state::get(connection, &id)?.current_topic_id;
+                topic_changed = after != before.current_topic_id;
+            }
             // An empty patch writes nothing, but time passed: a question
             // visible too long may give its place (question-volume design.md,
             // decision 3).
@@ -933,13 +1018,16 @@ async fn run_call(
             call_state::insert_agent_call_at(connection, &record, now)?;
             Err(error)
         })?;
-        Ok(changed)
+        Ok((changed, topic_changed))
     })
     .await;
     match applied {
-        Ok(changed) => {
+        Ok((changed, topic_changed)) => {
             if changed {
                 host.call_state_changed(&call.recording_id);
+            }
+            if topic_changed {
+                fast_loop.topic_changed(&call.recording_id);
             }
             CallEnd::Done
         }
@@ -1002,7 +1090,7 @@ fn failure(error: &AgentError) -> (AgentCallOutcome, CallEnd) {
 }
 
 /// The reply's tokens, cost and time into its record.
-fn with_usage(record: &mut AgentCallInput, usage: &Usage) {
+pub(crate) fn with_usage(record: &mut AgentCallInput, usage: &Usage) {
     let tokens = |count: u64| Some(i64::try_from(count).unwrap_or(i64::MAX));
     record.duration_ms = i64::try_from(usage.duration_ms).unwrap_or(i64::MAX);
     record.input_tokens = tokens(usage.input_tokens);
@@ -1182,6 +1270,7 @@ async fn run_topic_check(
         Ok(Some(topic_id)) => {
             lock(&call.topic_clock).observe(Some(&topic_id), now);
             host.call_state_changed(&call.recording_id);
+            fast_loop.topic_changed(&call.recording_id);
         }
         Ok(None) => {}
         Err(error) => {
@@ -1195,7 +1284,7 @@ async fn run_topic_check(
 }
 
 /// Records a call that brought no patch.
-async fn save(host: &Arc<dyn LoopHost>, record: AgentCallInput) {
+pub(crate) async fn save(host: &Arc<dyn LoopHost>, record: AgentCallInput) {
     let recording_id = record.recording_id.clone();
     let now = host.now_ms();
     let saved = database(host, move |connection| {
@@ -1208,7 +1297,7 @@ async fn save(host: &Arc<dyn LoopHost>, record: AgentCallInput) {
 }
 
 /// Runs `work` in a savepoint: the patch and its call record go together.
-fn in_savepoint(
+pub(crate) fn in_savepoint(
     connection: &Connection,
     work: impl FnOnce() -> CommandResult<()>,
 ) -> CommandResult<()> {

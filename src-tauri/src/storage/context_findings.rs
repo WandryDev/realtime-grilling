@@ -284,6 +284,19 @@ pub fn hide(
     }
 }
 
+/// The call that found it, once the call is recorded.
+pub fn attach_call(
+    connection: &Connection,
+    finding_id: &str,
+    agent_call_id: &str,
+) -> CommandResult<()> {
+    connection.execute(
+        "UPDATE context_findings SET agent_call_id = ?2 WHERE id = ?1",
+        params![finding_id, agent_call_id],
+    )?;
+    Ok(())
+}
+
 /// A new question cited the finding: it is now about that question, unless
 /// it already was about one.
 pub fn link_question(

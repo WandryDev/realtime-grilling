@@ -377,6 +377,7 @@ impl Index {
         self.chunks.is_empty()
     }
 
+    #[cfg(test)]
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
     }

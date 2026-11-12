@@ -23,7 +23,7 @@ use super::{
     status::TranscriptionStatus,
 };
 use crate::{
-    agent::fast_loop::scheduler::FastLoop,
+    agent::{fast_loop::scheduler::FastLoop, slow_loop::scheduler::SlowLoop},
     error::{CommandError, CommandResult},
     events::{DataChanged, EventSink},
     recording::RecordingManager,
@@ -223,12 +223,17 @@ pub struct AppSpeechHost<R: Runtime> {
 impl<R: Runtime> SpeechHost for AppSpeechHost<R> {
     fn emit(&self, event: TranscriptEvent) {
         event.emit(&self.app);
-        // The fast loop hears the live phrases (agent-fast-loop decision 2).
+        // The fast loop hears the live phrases (agent-fast-loop decision 2),
+        // the slow one counts the client's words (agent-slow-loop decision 1).
         if let TranscriptEvent::Phrase(phrase) = &event
             && phrase.pass == TranscriptPass::Live
-            && let Some(fast_loop) = self.app.try_state::<FastLoop>()
         {
-            fast_loop.phrase(&phrase.recording_id, phrase.channel);
+            if let Some(fast_loop) = self.app.try_state::<FastLoop>() {
+                fast_loop.phrase(&phrase.recording_id, phrase.channel);
+            }
+            if let Some(slow_loop) = self.app.try_state::<SlowLoop>() {
+                slow_loop.phrase(&phrase.recording_id, phrase.channel, &phrase.text);
+            }
         }
     }
 
@@ -274,11 +279,17 @@ impl<R: Runtime> SpeechHost for AppSpeechHost<R> {
         if let Some(fast_loop) = self.app.try_state::<FastLoop>() {
             fast_loop.live_started(recording_id);
         }
+        if let Some(slow_loop) = self.app.try_state::<SlowLoop>() {
+            slow_loop.live_started(recording_id);
+        }
     }
 
     fn live_finished(&self, recording_id: &str) {
         if let Some(fast_loop) = self.app.try_state::<FastLoop>() {
             fast_loop.live_finished(recording_id);
+        }
+        if let Some(slow_loop) = self.app.try_state::<SlowLoop>() {
+            slow_loop.live_finished(recording_id);
         }
         if let Some(refiner) = self.app.try_state::<Refiner>() {
             refiner.enqueue(recording_id);
