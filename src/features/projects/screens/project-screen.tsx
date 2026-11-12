@@ -155,7 +155,7 @@ export function ProjectScreen({
         ) : null}
         <ProjectAnchors
           anchors={page.anchors}
-          className="bg-background sticky top-0 z-10"
+          className="bg-background sticky top-0 z-10 -my-3 py-3"
           onValueChange={onAnchorChange}
           value={anchor}
         />

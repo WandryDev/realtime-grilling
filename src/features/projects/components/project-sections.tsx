@@ -44,7 +44,7 @@ export function ProjectAnchors({
 }) {
   return (
     <Tabs
-      className={cn("border-border border-b pb-4", className)}
+      className={className}
       defaultValue={onValueChange ? undefined : value}
       onValueChange={onValueChange}
       value={onValueChange ? value : undefined}

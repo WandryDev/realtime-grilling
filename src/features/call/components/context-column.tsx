@@ -58,7 +58,7 @@ export function ContextColumn({
     <section
       aria-label="Контекст"
       className={cn(
-        "flex w-80 shrink-0 flex-col gap-2.5 overflow-y-auto px-2 py-3",
+        "flex w-80 shrink-0 [scrollbar-width:thin] [scrollbar-color:var(--color-border-strong)_transparent] flex-col gap-2.5 overflow-y-auto px-2 py-3",
         className
       )}
     >
@@ -122,14 +122,18 @@ export function FindingCard({
       <ContextCardHeader>
         <ContextCardSource source={finding.source} />
         <ContextCardHeading>
-          <ContextCardTitle>{finding.title}</ContextCardTitle>
-          <ContextCardMeta mono={finding.metaMono}>
-            {finding.meta}
-          </ContextCardMeta>
+          <ContextCardTitle className="line-clamp-2 wrap-anywhere">
+            {finding.title}
+          </ContextCardTitle>
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            <ContextCardMeta className="min-w-0" mono={finding.metaMono}>
+              {finding.meta}
+            </ContextCardMeta>
+            {finding.time ? (
+              <ContextCardTime>{finding.time}</ContextCardTime>
+            ) : null}
+          </div>
         </ContextCardHeading>
-        {finding.time ? (
-          <ContextCardTime>{finding.time}</ContextCardTime>
-        ) : null}
         {finding.status ? (
           <Badge className="h-[22px] px-2" variant="waiting">
             {finding.status}
@@ -145,13 +149,15 @@ export function FindingCard({
         ) : null}
       </ContextCardHeader>
       {finding.body ? (
-        <ContextCardBody className={cn(finding.bodyStrong && "font-medium")}>
+        <ContextCardBody
+          className={cn("wrap-break-word", finding.bodyStrong && "font-medium")}
+        >
           {finding.body}
         </ContextCardBody>
       ) : null}
       {finding.code ? <ContextCardCode>{finding.code}</ContextCardCode> : null}
       {finding.quote ? (
-        <ContextCardQuote>
+        <ContextCardQuote className="wrap-break-word">
           {finding.quoteMeta ? (
             <ContextCardQuoteMeta>{finding.quoteMeta}</ContextCardQuoteMeta>
           ) : null}
