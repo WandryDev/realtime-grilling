@@ -304,7 +304,14 @@ fn live_fact(
     let from_project = field
         .evidence
         .iter()
-        .any(|quote| quote.source == EvidenceSource::Project);
+        // A finding in the project's sources is the project's fact
+        // (agent-slow-loop design.md, decision 6).
+        .any(|quote| {
+            matches!(
+                quote.source,
+                EvidenceSource::Project | EvidenceSource::Document
+            )
+        });
     let source = if !evidence.is_empty() {
         FactSource::Client
     } else if from_project {

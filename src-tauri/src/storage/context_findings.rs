@@ -44,6 +44,15 @@ impl FindingSourceKind {
             .into_iter()
             .find(|kind| kind.as_str() == text)
     }
+
+    /// The name people know, for the agent's messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => "Файл",
+            Self::Outline => "Outline",
+            Self::ClickUp => "ClickUp",
+        }
+    }
 }
 
 /// A visible finding, as the windows show it.

@@ -26,6 +26,7 @@ use crate::storage::{
         CallState, CardLens, Evidence, EvidenceSource, GapType, NewQuestion, QuestionStatus,
         ValidatedOp, ValidatedPatch,
     },
+    context_findings::ContextFinding,
     transcript::TranscriptChannel,
 };
 
@@ -33,8 +34,9 @@ use crate::storage::{
 pub const MAX_NEW_QUESTIONS: usize = 2;
 
 /// A source the call was given: a transcript segment (`id`: its id, with
-/// its channel), a project item (`P1`, `B1…Bn`) or a gap of the brief
-/// (`G1…Gn`, «Неясно до звонка»).
+/// its channel), a project item (`P1`, `B1…Bn`), a gap of the brief
+/// (`G1…Gn`, «Неясно до звонка») or a finding of the slow loop (`D1…Dn`,
+/// its quote).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceText {
     pub id: String,
@@ -52,6 +54,10 @@ pub enum SourceKind {
     /// What the materials lack (`source: project`): grounds a question, never
     /// a fact, like a phrase of «Я».
     Gap,
+    /// A finding in the project's sources (`source: document`): a fact of
+    /// the project for a card field and a contradiction, but no answer: only
+    /// the client answers (agent-slow-loop design.md, decision 6).
+    Document,
 }
 
 impl SourceText {
@@ -72,6 +78,14 @@ impl SourceText {
         }
     }
 
+    /// A finding numbered `D…` for the call.
+    pub fn document(id: impl Into<String>, quote: impl Into<String>) -> Self {
+        Self {
+            kind: SourceKind::Document,
+            ..Self::new(id, quote)
+        }
+    }
+
     /// A transcript segment of `channel`.
     pub fn said(
         id: impl Into<String>,
@@ -88,17 +102,38 @@ impl SourceText {
     pub fn channel(&self) -> Option<TranscriptChannel> {
         match self.kind {
             SourceKind::Said(channel) => Some(channel),
-            SourceKind::Project | SourceKind::Gap => None,
+            SourceKind::Project | SourceKind::Gap | SourceKind::Document => None,
         }
     }
 
-    /// Whether it states a fact about the task: the client or the project.
+    /// Whether it states a fact about the task: the client, the project or
+    /// a finding in its sources.
     fn states_a_fact(&self) -> bool {
         matches!(
             self.kind,
-            SourceKind::Said(TranscriptChannel::Others) | SourceKind::Project
+            SourceKind::Said(TranscriptChannel::Others)
+                | SourceKind::Project
+                | SourceKind::Document
         )
     }
+
+    /// Whether it can answer a question: the client or the project; a
+    /// finding alone can't.
+    fn answers(&self) -> bool {
+        self.states_a_fact() && self.kind != SourceKind::Document
+    }
+}
+
+/// The visible findings of `state` numbered `D1…Dn` by when they were found:
+/// what the call's message shows and its evidence may cite.
+pub fn document_numbers(state: &CallState) -> Vec<(String, &ContextFinding)> {
+    let mut findings: Vec<&ContextFinding> = state.findings.iter().collect();
+    findings.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+    findings
+        .into_iter()
+        .enumerate()
+        .map(|(index, finding)| (format!("D{}", index + 1), finding))
+        .collect()
 }
 
 /// A question of the recording the agent knew about.
@@ -123,6 +158,10 @@ pub struct CallContext {
     pub final_check: bool,
     /// Every question of the recording, in any state.
     pub questions: Vec<KnownQuestion>,
+    /// The findings the call was given as `D1…Dn` with their quotes…
+    pub documents: Vec<SourceText>,
+    /// … and the id of each: `D3` → the finding, what the storage keeps.
+    pub document_ids: HashMap<String, String>,
 }
 
 impl CallContext {
@@ -132,7 +171,18 @@ impl CallContext {
         segments: Vec<SourceText>,
         project_items: Vec<SourceText>,
     ) -> Self {
+        let numbered = document_numbers(state);
         Self {
+            documents: numbered
+                .iter()
+                .map(|(number, finding)| {
+                    SourceText::document(number.clone(), finding.quote.clone())
+                })
+                .collect(),
+            document_ids: numbered
+                .iter()
+                .map(|(number, finding)| (number.clone(), finding.id.clone()))
+                .collect(),
             segments,
             project_items,
             topic_ids: state.topics.iter().map(|topic| topic.id.clone()).collect(),
@@ -158,18 +208,51 @@ impl CallContext {
         }
     }
 
-    /// The same sources with `state`, as it is now.
+    /// The same sources with `state`, as it is now: the findings keep the
+    /// numbers of the call, and those no longer visible (hidden by the
+    /// manager meanwhile) are gone.
     pub fn with_state(&self, state: &CallState) -> Self {
-        Self::new(state, self.segments.clone(), self.project_items.clone())
+        let mut fresh = Self::new(state, self.segments.clone(), self.project_items.clone());
+        let visible: Vec<&str> = state.findings.iter().map(|f| f.id.as_str()).collect();
+        fresh.document_ids = self
+            .document_ids
+            .iter()
+            .filter(|(_, id)| visible.contains(&id.as_str()))
+            .map(|(number, id)| (number.clone(), id.clone()))
+            .collect();
+        fresh.documents = self
+            .documents
+            .iter()
+            .filter(|document| fresh.document_ids.contains_key(&document.id))
+            .cloned()
+            .collect();
+        fresh
     }
 
     fn source(&self, source: EvidenceSource, id: &str) -> Option<&SourceText> {
         let sources = match source {
             EvidenceSource::Segment => &self.segments,
             EvidenceSource::Project => &self.project_items,
-            EvidenceSource::Document => return None,
+            EvidenceSource::Document => &self.documents,
         };
         sources.iter().find(|item| item.id == id)
+    }
+
+    /// The evidence as the storage keeps it: a finding by its id, not by
+    /// its number in the call.
+    fn stored(&self, evidence: &[Evidence]) -> Vec<Evidence> {
+        evidence
+            .iter()
+            .map(
+                |item| match (item.source, self.document_ids.get(&item.id)) {
+                    (EvidenceSource::Document, Some(id)) => Evidence {
+                        id: id.clone(),
+                        ..item.clone()
+                    },
+                    _ => item.clone(),
+                },
+            )
+            .collect()
     }
 }
 
@@ -198,14 +281,15 @@ pub enum RejectReason {
     },
     NoEvidence,
     /// A card field or an answer cites only the manager («Я») or gaps of
-    /// the brief, or a contradiction cites the manager: facts come from
-    /// «Остальные» or the project.
+    /// the brief, an answer only findings, or a contradiction cites the
+    /// manager: facts come from «Остальные» or the project.
     NotFromClient,
     /// A question cites a gap of the brief (`G…`) but no phrase of
     /// «Остальные»: a gap is raised only once the client spoke of its lens,
     /// not as a checklist.
     GapWithoutClient,
-    /// A contradiction cites two different segments.
+    /// A contradiction cites two different segments, or a segment and a
+    /// finding.
     ContradictionNeedsTwoSegments,
     /// A required text is blank.
     Blank {
@@ -372,7 +456,7 @@ pub fn validate(
                 let subject = Some(field.as_str());
                 if let Err(reason) = topic_ready(&current) {
                     rejected.push(reject(subject, reason));
-                } else if let Err(reason) = check_fact(context, evidence) {
+                } else if let Err(reason) = check_fact(context, evidence, Fact::CardField) {
                     rejected.push(reject(subject, reason));
                 } else {
                     if !fields.contains(field) {
@@ -383,7 +467,7 @@ pub fn validate(
                         ValidatedOp::SetCardField {
                             field: *field,
                             value: value.trim().to_owned(),
-                            evidence: evidence.clone(),
+                            evidence: context.stored(evidence),
                         },
                     ));
                 }
@@ -427,7 +511,7 @@ pub fn validate(
                             card_field: *card_field,
                             gap_type: *gap_type,
                             priority: i32::from(priority.get()),
-                            evidence: evidence.clone(),
+                            evidence: context.stored(evidence),
                         },
                     });
                 }
@@ -462,7 +546,7 @@ pub fn validate(
                         rejected.push(reject(subject, reason));
                     }
                     Some(QuestionStatus::Open | QuestionStatus::Asked) => {
-                        match check_fact(context, evidence) {
+                        match check_fact(context, evidence, Fact::Answer) {
                             Err(reason) => rejected.push(reject(subject, reason)),
                             Ok(()) => {
                                 answered.push(question_id.as_str());
@@ -470,7 +554,7 @@ pub fn validate(
                                     index,
                                     ValidatedOp::MarkAnswered {
                                         question_id: question_id.clone(),
-                                        evidence: evidence.clone(),
+                                        evidence: context.stored(evidence),
                                     },
                                 ));
                             }
@@ -623,15 +707,30 @@ fn channel_of(context: &CallContext, item: &Evidence) -> Option<TranscriptChanne
         .and_then(SourceText::channel)
 }
 
+/// What a fact is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fact {
+    CardField,
+    Answer,
+}
+
 /// A fact (a card field, an answer): the evidence holds, and at least one
 /// item is the client («Остальные») or the project, not only the manager or
-/// a gap of the brief.
-fn check_fact(context: &CallContext, evidence: &[Evidence]) -> Result<(), RejectReason> {
+/// a gap of the brief. A finding is a fact of the project for a card field;
+/// an answer needs the client or the project.
+fn check_fact(
+    context: &CallContext,
+    evidence: &[Evidence],
+    fact: Fact,
+) -> Result<(), RejectReason> {
     check_evidence(context, evidence)?;
     let from_client = evidence.iter().any(|item| {
         context
             .source(item.source, &item.id)
-            .is_some_and(SourceText::states_a_fact)
+            .is_some_and(|source| match fact {
+                Fact::CardField => source.states_a_fact(),
+                Fact::Answer => source.answers(),
+            })
     });
     if from_client {
         Ok(())
@@ -658,8 +757,9 @@ fn check_gap(context: &CallContext, evidence: &[Evidence]) -> Result<(), RejectR
     }
 }
 
-/// Two different segments, both of «Остальные»: the client contradicts
-/// themselves, not the manager.
+/// Two different segments, or a segment and a finding the segment
+/// contradicts; every segment of «Остальные»: the client contradicts
+/// themselves or the project's sources, not the manager.
 fn check_contradiction(context: &CallContext, evidence: &[Evidence]) -> Result<(), RejectReason> {
     let segments: Vec<&Evidence> = evidence
         .iter()
@@ -668,7 +768,11 @@ fn check_contradiction(context: &CallContext, evidence: &[Evidence]) -> Result<(
     let mut ids: Vec<&str> = segments.iter().map(|item| item.id.as_str()).collect();
     ids.sort_unstable();
     ids.dedup();
-    if ids.len() < 2 {
+    let cites_document = evidence
+        .iter()
+        .any(|item| item.source == EvidenceSource::Document);
+    let enough = ids.len() >= 2 || (ids.len() == 1 && cites_document);
+    if !enough {
         return Err(RejectReason::ContradictionNeedsTwoSegments);
     }
     let by_client = segments
@@ -787,6 +891,8 @@ mod tests {
                     status: QuestionStatus::Asked,
                 },
             ],
+            documents: Vec::new(),
+            document_ids: HashMap::new(),
         }
     }
 
@@ -1544,5 +1650,192 @@ mod tests {
         assert_eq!(context.card_fields["T1"], vec![CardLens::Users]);
         assert!(!context.final_check);
         assert_eq!(context.segments.len(), 1);
+    }
+
+    /// A finding of the slow loop, `D1` in the call.
+    const D1: &str = "В смене три оператора, старший смены распределяет звонки.";
+
+    /// [`context`] with the finding `f-1` given as `D1`.
+    fn with_finding() -> CallContext {
+        let mut context = context();
+        context.documents.push(SourceText::document("D1", D1));
+        context
+            .document_ids
+            .insert("D1".to_owned(), "f-1".to_owned());
+        context
+    }
+
+    fn check_with_finding(ops: serde_json::Value) -> Validation {
+        let patch = Patch::from_value(json!({ "ops": ops })).unwrap();
+        validate(&patch, &with_finding(), &TrigramSimilarity::default())
+    }
+
+    fn document(quote: &str) -> serde_json::Value {
+        json!({ "source": "document", "id": "D1", "quote": quote })
+    }
+
+    fn contradiction(evidence: serde_json::Value) -> serde_json::Value {
+        json!({
+            "op": "question", "title": "Так пять операторов в смене или три?",
+            "description": "Клиент и регламент расходятся", "cardField": "users",
+            "gapType": "contradiction", "priority": 3, "evidence": evidence
+        })
+    }
+
+    /// Spec «Противоречие с находкой»: the client's phrase and the finding
+    /// it contradicts; the stored evidence names the finding by its id.
+    #[test]
+    fn a_contradiction_of_the_client_and_a_finding_passes() {
+        let validation = check_with_finding(json!([contradiction(json!([
+            segment("S1", "пять операторов в смену"),
+            document("в смене три оператора")
+        ]))]));
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        let ValidatedOp::AddQuestion(question) = &validation.patch.ops[0] else {
+            panic!("{:?}", validation.patch.ops);
+        };
+        assert_eq!(question.evidence[1].source, EvidenceSource::Document);
+        assert_eq!(question.evidence[1].id, "f-1");
+
+        // The manager's phrase and a finding: not the client.
+        let validation = check_with_finding(json!([contradiction(json!([
+            segment("S4", "у вас пять операторов в смену"),
+            document("в смене три оператора")
+        ]))]));
+        assert_eq!(reasons(&validation), vec![&RejectReason::NotFromClient]);
+    }
+
+    /// Spec «Противоречие только из находки».
+    #[test]
+    fn a_contradiction_of_a_finding_alone_is_rejected() {
+        let validation = check_with_finding(json!([contradiction(json!([document(
+            "в смене три оператора"
+        )]))]));
+        assert!(validation.patch.ops.is_empty());
+        assert_eq!(
+            reasons(&validation),
+            vec![&RejectReason::ContradictionNeedsTwoSegments]
+        );
+    }
+
+    /// Spec «Находка как ответ»: only the client answers; a finding is a
+    /// fact of the project for a card field.
+    #[test]
+    fn a_finding_answers_nothing_but_fills_a_card_field() {
+        let validation = check_with_finding(json!([
+            { "op": "answered", "questionId": "Q1", "evidence": [document("старший смены распределяет звонки")] },
+            { "op": "card", "field": "users", "value": "Три оператора и старший смены",
+              "evidence": [document("в смене три оператора")] }
+        ]));
+        assert_eq!(reasons(&validation), vec![&RejectReason::NotFromClient]);
+        assert_eq!(validation.indices, vec![1]);
+        let ValidatedOp::SetCardField { evidence, .. } = &validation.patch.ops[0] else {
+            panic!("{:?}", validation.patch.ops);
+        };
+        assert_eq!(evidence[0].id, "f-1");
+
+        // With the client's phrase next to it, the answer holds.
+        let validation = check_with_finding(json!([
+            { "op": "answered", "questionId": "Q1",
+              "evidence": [document("старший смены распределяет звонки"), segment("S3", "ночью у нас дежурит один оператор")] }
+        ]));
+        assert!(validation.rejected.is_empty(), "{:?}", validation.rejected);
+        // A quote that is not the finding's, or a finding the call didn't
+        // have, are rejected like any other.
+        let validation = check_with_finding(json!([
+            { "op": "card", "field": "users", "value": "?", "evidence": [document("в смене двадцать операторов")] },
+            { "op": "card", "field": "users", "value": "?",
+              "evidence": [{ "source": "document", "id": "D2", "quote": "в смене три оператора" }] }
+        ]));
+        assert!(matches!(
+            reasons(&validation)[..],
+            [
+                RejectReason::QuoteNotFound { .. },
+                RejectReason::UnknownSource {
+                    source: EvidenceSource::Document,
+                    ..
+                }
+            ]
+        ));
+    }
+
+    /// Spec «Убрать»: a finding hidden during the call makes the operations
+    /// that cite it stale; the other findings keep their numbers.
+    #[test]
+    fn a_finding_hidden_during_the_call_makes_its_ops_stale() {
+        use crate::storage::context_findings::{ContextFinding, FindingSourceKind};
+
+        let finding = |id: &str, at: i64, quote: &str| ContextFinding {
+            id: id.to_owned(),
+            source_kind: FindingSourceKind::Outline,
+            source_name: "Регламент смены".to_owned(),
+            source_url: None,
+            quote: quote.to_owned(),
+            note: "Противоречит".to_owned(),
+            question_id: None,
+            created_at: at,
+        };
+        let mut state = CallState {
+            recording_id: "R".to_owned(),
+            topics: Vec::new(),
+            current_topic_id: None,
+            cards: Vec::new(),
+            questions: Vec::new(),
+            final_check: None,
+            findings: vec![
+                finding("f-2", 20, "ночью звонки уходят на автоответчик"),
+                finding("f-1", 10, D1),
+            ],
+            context_search: None,
+            context_sources: Default::default(),
+        };
+        let given = CallContext::new(&state, Vec::new(), Vec::new());
+        assert_eq!(
+            given.documents,
+            vec![
+                SourceText::document("D1", D1),
+                SourceText::document("D2", "ночью звонки уходят на автоответчик")
+            ],
+            "numbered by when they were found"
+        );
+        let given = CallContext {
+            current_topic_id: Some("T1".to_owned()),
+            card_fields: HashMap::from([("T1".to_owned(), vec![CardLens::Users])]),
+            ..given
+        };
+        let patch = Patch::from_value(json!({ "ops": [
+            { "op": "card", "field": "users", "value": "Три оператора", "evidence": [document("в смене три оператора")] },
+            { "op": "card", "field": "goal", "value": "Ночью автоответчик",
+              "evidence": [{ "source": "document", "id": "D2", "quote": "звонки уходят на автоответчик" }] }
+        ] }))
+        .unwrap();
+        let similarity = TrigramSimilarity::default();
+        let checked = validate(&patch, &given, &similarity);
+        assert_eq!(checked.indices, vec![0, 1]);
+
+        // The manager hid `f-1`: `D2` stays `D2`.
+        state.findings.pop();
+        let fresh = CallContext {
+            current_topic_id: Some("T1".to_owned()),
+            card_fields: HashMap::from([("T1".to_owned(), vec![CardLens::Users])]),
+            ..given.with_state(&state)
+        };
+        assert_eq!(fresh.document_ids.len(), 1);
+        assert_eq!(fresh.document_ids["D2"], "f-2");
+        let rechecked = recheck(&patch, checked, &fresh, &similarity);
+        assert_eq!(rechecked.indices, vec![1]);
+        assert_eq!(
+            rechecked.rejected[0].reason,
+            RejectReason::Stale {
+                cause: Box::new(RejectReason::UnknownSource {
+                    source: EvidenceSource::Document,
+                    id: "D1".to_owned()
+                })
+            }
+        );
+        let ValidatedOp::SetCardField { evidence, .. } = &rechecked.patch.ops[0] else {
+            panic!("{:?}", rechecked.patch.ops);
+        };
+        assert_eq!(evidence[0].id, "f-2");
     }
 }

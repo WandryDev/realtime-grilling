@@ -67,6 +67,11 @@ fn the_rules_cover_the_protocol_the_quality_rules_and_the_asr_caveat() {
         "ошибки",
         "Факты о задаче бери ТОЛЬКО из канала «Остальные»",
         "Скрытые менеджер отклонил",
+        // Findings of the slow loop (agent-slow-loop design.md, decision 6).
+        "`source: \"document\"`, `id` — `D1…Dn`",
+        "ответить может только клиент, одной находки мало",
+        "или на фразу клиента и находку `D…`, которой она противоречит",
+        "Находка — материал проекта, а не слова клиента.",
     ] {
         assert!(RULES.contains(rule), "no «{rule}» in the rules");
     }

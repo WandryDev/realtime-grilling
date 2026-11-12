@@ -634,3 +634,28 @@ fn the_overview_counts_what_the_history_shows() {
     assert!(overview(&fx.connection, None).unwrap()[0].audio_deleted);
     assert!(overview(&fx.connection, Some("nope")).unwrap().is_empty());
 }
+
+/// A card field that rests on a finding of the slow loop is the project's
+/// fact after the call (agent-slow-loop design.md, decision 6).
+#[test]
+fn a_fact_from_a_finding_is_the_projects() {
+    let fx = two_recordings(open_in_memory().unwrap());
+    topic(
+        &fx.connection,
+        &fx.first,
+        "Смена",
+        "Три оператора в смене",
+        vec![Evidence {
+            source: EvidenceSource::Document,
+            id: "finding".to_owned(),
+            quote: "в смене три оператора".to_owned(),
+        }],
+        CardLens::Goal,
+        GapType::Empty,
+    );
+    let read = cards(&fx.connection, &fx.call).unwrap();
+    let fact = &read.cards[0].fields[0].facts[0];
+    assert_eq!(fact.text, "Три оператора в смене");
+    assert_eq!(fact.source, FactSource::Project);
+    assert!(fact.evidence.is_empty());
+}

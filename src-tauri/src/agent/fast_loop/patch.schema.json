@@ -44,7 +44,7 @@
       }
     },
     "question": {
-      "description": "A new question about a field of the current topic's card. A contradiction cites both segments.",
+      "description": "A new question about a field of the current topic's card. A contradiction cites both segments, or a segment and a finding.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -111,7 +111,7 @@
         "additionalProperties": false,
         "required": ["source", "id", "quote"],
         "properties": {
-          "source": { "type": "string", "enum": ["segment", "project"] },
+          "source": { "type": "string", "enum": ["segment", "project", "document"] },
           "id": { "type": "string" },
           "quote": { "type": "string" }
         }

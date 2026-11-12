@@ -227,6 +227,15 @@ mod tests {
                 ]
             }] }),
             json!({ "ops": [{ "op": "answered", "questionId": "Q1", "evidence": evidence() }] }),
+            // A finding of the slow loop (agent-slow-loop design.md, decision 6).
+            json!({ "ops": [{
+                "op": "question", "title": "Пять или три?", "description": "",
+                "cardField": "users", "gapType": "contradiction", "priority": 3,
+                "evidence": [
+                    { "source": "segment", "id": "S3", "quote": "пять операторов" },
+                    { "source": "document", "id": "D1", "quote": "три оператора" }
+                ]
+            }] }),
             json!({ "ops": [{ "op": "finalCheck" }] }),
             json!({ "ops": [
                 { "op": "card", "field": "edgeCases", "value": "Все заняты", "evidence": evidence() },

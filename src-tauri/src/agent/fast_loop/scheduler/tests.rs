@@ -686,6 +686,140 @@ async fn the_prefix_is_byte_identical_across_calls() {
     assert_eq!(first.request.schema, patch::schema_argument());
 }
 
+/// A finding of the slow loop in the recording, found at `at` (ms).
+fn found(rig: &Rig, quote: &str, at: i64) -> String {
+    use crate::storage::context_findings::{self, FindingSourceKind, Inserted, NewFinding};
+    let inserted = rig.host.db(|db| {
+        context_findings::insert_at(
+            db,
+            &rig.recording,
+            &NewFinding {
+                source_id: None,
+                source_kind: FindingSourceKind::Outline,
+                source_name: "Регламент смены".to_owned(),
+                source_url: Some("https://outline.example/doc/reg".to_owned()),
+                chunk_key: format!("reg#{at}"),
+                quote: quote.to_owned(),
+                note: "Противоречит: в регламенте три оператора".to_owned(),
+                question_id: None,
+                agent_call_id: None,
+            },
+            at,
+        )
+        .unwrap()
+    });
+    let Inserted::Added { id, .. } = inserted else {
+        panic!("no room");
+    };
+    id
+}
+
+/// Spec «Стабильная часть не меняется» with a finding between the calls:
+/// the prefixes are the same bytes, the finding is only in the second
+/// call's state, as `D1`.
+#[tokio::test(start_paused = true)]
+async fn a_finding_between_two_calls_leaves_the_prefix_alone() {
+    let rig = Rig::new([]).await;
+    rig.say(OTHERS, "Первая").await;
+    found(&rig, "В смене три оператора", 1_000);
+    rig.until(25).await;
+    rig.say(OTHERS, "Вторая").await;
+    let (first, second) = (rig.agent.received(0), rig.agent.received(1));
+    assert!(!first.prompt.is_empty());
+    assert_eq!(first.prompt, second.prompt);
+    assert!(
+        !String::from_utf8(first.prompt)
+            .unwrap()
+            .contains("В смене три оператора")
+    );
+    assert!(!first.request.user_message.contains("Найдено в материалах"));
+    let message = second.request.user_message;
+    assert!(
+        message.contains(
+            "# Найдено в материалах\n\nНаходки медленного контура в источниках проекта — \
+             материал проекта, а не слова клиента:\n\
+             - [D1] Outline «Регламент смены»: «В смене три оператора» — \
+             Противоречит: в регламенте три оператора\n"
+        ),
+        "{message}"
+    );
+}
+
+/// Spec «Убрать» in the fast loop: a finding hidden during the call makes
+/// the operation that cites it stale; the next call doesn't get it. A new
+/// question that cites a finding links it.
+#[tokio::test(start_paused = true)]
+async fn a_hidden_finding_is_stale_and_gone_from_the_next_call() {
+    let rig = Rig::new([]).await;
+    let segment = rig.host.db(|db| {
+        say(
+            db,
+            &rig.recording,
+            OTHERS,
+            0,
+            "У нас пять операторов в смену, иногда шесть",
+        )
+    });
+    let kept = found(&rig, "Старший смены распределяет звонки по линиям", 500);
+    let hidden = found(&rig, "В смене три оператора", 1_000);
+    let said = json!({ "source": "segment", "id": segment.id, "quote": "пять операторов в смену" });
+    rig.agent.push(Step::patch(json!({ "ops": [
+        { "op": "topic", "action": "create", "title": "Смены" },
+        { "op": "card", "field": "users", "value": "Пять операторов",
+          "evidence": [said.clone()] },
+        {
+            "op": "question", "title": "Так пять операторов в смене или три?",
+            "description": "Клиент и регламент расходятся", "cardField": "users",
+            "gapType": "contradiction", "priority": 3,
+            "evidence": [said.clone(), { "source": "document", "id": "D2", "quote": "в смене три оператора" }]
+        },
+        {
+            "op": "question", "title": "Кто распределяет звонки между линиями?",
+            "description": "В регламенте — старший смены", "cardField": "scenarios",
+            "gapType": "empty", "priority": 2,
+            "evidence": [said, { "source": "document", "id": "[D1]", "quote": "старший смены распределяет звонки" }]
+        }
+    ] })));
+    rig.fast_loop.phrase(&rig.recording, OTHERS);
+    rig.until(2).await;
+    assert_eq!(rig.state(), AgentLoopState::Thinking);
+    let message = rig.agent.received(0).request.user_message;
+    assert!(message.contains("- [D1] Outline"), "{message}");
+    assert!(message.contains("- [D2] Outline «Регламент смены»: «В смене три оператора»"));
+    rig.host.db(|db| {
+        crate::storage::context_findings::hide(db, &rig.recording, &hidden, 2_000).unwrap();
+    });
+    rig.until(6).await;
+
+    let call = &rig.calls()[0];
+    assert_eq!(call.outcome, AgentCallOutcome::Ok);
+    assert_eq!(call.rejected[0]["index"], 2);
+    assert_eq!(call.rejected[0]["reason"], "stale", "{}", call.rejected);
+    assert_eq!(call.rejected[0]["cause"]["reason"], "unknownSource");
+    let state = rig
+        .host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap();
+    let texts: Vec<&str> = state.questions.iter().map(|q| q.text.as_str()).collect();
+    assert_eq!(texts, ["Кто распределяет звонки между линиями?"]);
+    assert_eq!(
+        state.questions[0].evidence[1].id, kept,
+        "the finding's id is stored"
+    );
+    assert_eq!(state.findings.len(), 1);
+    assert_eq!(
+        state.findings[0].question_id.as_deref(),
+        Some(state.questions[0].id.as_str()),
+        "the question links its finding"
+    );
+
+    rig.until(25).await;
+    rig.say(OTHERS, "Ещё фраза").await;
+    let message = rig.agent.received(1).request.user_message;
+    assert!(!message.contains("В смене три оператора"), "{message}");
+    assert!(message.contains("- [D1] Outline «Регламент смены»: «Старший смены"));
+}
+
 fn applied_patch(segment: &TranscriptSegment, quote: &str) -> Value {
     let evidence =
         json!([{ "source": "segment", "id": format!("S:{}", segment.id), "quote": quote }]);

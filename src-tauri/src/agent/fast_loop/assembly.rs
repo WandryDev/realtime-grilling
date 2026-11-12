@@ -25,7 +25,7 @@ use std::{
 use rusqlite::Connection;
 use serde_json::Value;
 
-use super::validate::{CallContext, SourceText};
+use super::validate::{CallContext, SourceText, document_numbers};
 use crate::{
     error::CommandResult,
     speech::context,
@@ -33,6 +33,7 @@ use crate::{
         call_state::{
             self, CallState, CardLens, Evidence, EvidenceSource, Question, QuestionStatus,
         },
+        context_findings::ContextFinding,
         people::{self, Person},
         projects, recordings,
         transcript::{self, TranscriptChannel, TranscriptPass, TranscriptSegment},
@@ -63,7 +64,7 @@ pub const RULES: &str = r#"# Правила
 ## Что приходит
 
 1. Этот промпт, затем проект (`P1` — описание, `B1…Bn` — пункты брифа), «Неясно до звонка» (`G1…Gn` — чего нет в материалах проекта, с линзой карточки), люди клиента с профилями и глоссарий.
-2. В сообщении: режим, темы с ID, карточка текущей темы, вопросы звонка с ID и состоянием. Там же могут быть строка «Пустые линзы» (поля карточки текущей темы без значения) и строка «N мин без новых вопросов»: их считает код, это подсказки, а не слова собеседников и не расшифровка.
+2. В сообщении: режим, темы с ID, карточка текущей темы, вопросы звонка с ID и состоянием, «Найдено в материалах» (`D1…Dn` — находки звонка в документах, задачах и файлах проекта: источник, цитата, к чему относится). Там же могут быть строка «Пустые линзы» (поля карточки текущей темы без значения) и строка «N мин без новых вопросов»: их считает код, это подсказки, а не слова собеседников и не расшифровка.
 3. Расшифровка последних 10 минут: строки `[S:<id>] мм:сс Остальные|Я: текст`.
 
 ## Протокол патча
@@ -78,9 +79,10 @@ pub const RULES: &str = r#"# Правила
 
 `evidence` — список из 1–3 оснований `{"source", "id", "quote"}`:
 - `source: "segment"`, `id` — ID сегмента из `[S:<id>]` без `S:`;
-- `source: "project"`, `id` — `P1`, `B1…Bn` или `G1…Gn`.
+- `source: "project"`, `id` — `P1`, `B1…Bn` или `G1…Gn`;
+- `source: "document"`, `id` — `D1…Dn` из «Найдено в материалах», цитата — из цитаты находки.
 
-`quote` — короткая ДОСЛОВНАЯ цитата (3–15 слов) из этого источника: не пересказывай, копируй. Код проверяет, что ID был в этом сообщении, цитата не короче трёх слов (если в источнике их не меньше) и совпадает с текстом; иначе операция отбрасывается. У `card` и `answered` хотя бы одно основание — фраза «Остальные» или пункт проекта `P1`, `B…`; фраза «Я» или пункт `G…` без них не годятся: это вопрос или пробел, а не факт. Противоречие ссылается на обе фразы клиента: два основания из разных сегментов «Остальные». ID тем и вопросов передавай без префиксов `T:` и `Q:`.
+`quote` — короткая ДОСЛОВНАЯ цитата (3–15 слов) из этого источника: не пересказывай, копируй. Код проверяет, что ID был в этом сообщении, цитата не короче трёх слов (если в источнике их не меньше) и совпадает с текстом; иначе операция отбрасывается. У `card` хотя бы одно основание — фраза «Остальные», пункт проекта `P1`, `B…` или находка `D…`; у `answered` — фраза «Остальные» или пункт проекта: ответить может только клиент, одной находки мало. Фраза «Я» или пункт `G…` без них не годятся: это вопрос или пробел, а не факт. Противоречие ссылается на обе фразы клиента: два основания из разных сегментов «Остальные» — или на фразу клиента и находку `D…`, которой она противоречит. ID тем и вопросов передавай без префиксов `T:` и `Q:`.
 
 ## Качество вопросов
 
@@ -97,7 +99,7 @@ pub const RULES: &str = r#"# Правила
 ## Расшифровка
 
 - Текст получен автоматическим распознаванием речи: в нём есть ошибки, искажённые имена и термины, пропущенные слова. Одно странное слово — не повод для вопроса. Но числа и отрицания важны: если клиент сам себе противоречит в числах или в «нужно / не нужно» — это противоречие.
-- Факты о задаче бери ТОЛЬКО из канала «Остальные» и из проекта. Слова менеджера («Я») — вопросы и гипотезы, а не факты: если менеджер предположил, а клиент не подтвердил, это допущение.
+- Факты о задаче бери ТОЛЬКО из канала «Остальные», из проекта и из находок `D…`. Находка — материал проекта, а не слова клиента. Слова менеджера («Я») — вопросы и гипотезы, а не факты: если менеджер предположил, а клиент не подтвердил, это допущение.
 
 ## Финальная проверка
 
@@ -417,16 +419,32 @@ pub fn segment_line(segment: &TranscriptSegment) -> String {
     )
 }
 
-fn sources(evidence: &[Evidence]) -> String {
+/// The ids of `evidence` as the message shows them; a finding by its `D…`
+/// number in `documents` (the visible ones), else as «находка убрана».
+fn sources(evidence: &[Evidence], documents: &[(String, &ContextFinding)]) -> String {
     let ids: Vec<String> = evidence
         .iter()
         .map(|item| match item.source {
             EvidenceSource::Segment => format!("S:{}", one_line(&item.id)),
             EvidenceSource::Project => one_line(&item.id),
-            EvidenceSource::Document => "находка".to_owned(),
+            EvidenceSource::Document => documents
+                .iter()
+                .find(|(_, finding)| finding.id == item.id)
+                .map_or_else(|| "находка убрана".to_owned(), |(number, _)| number.clone()),
         })
         .collect();
     ids.join(", ")
+}
+
+/// `- [D3] Outline «Регламент смены»: «цитата» — note`.
+fn finding_line(number: &str, finding: &ContextFinding) -> String {
+    format!(
+        "- [{number}] {} «{}»: «{}» — {}\n",
+        finding.source_kind.label(),
+        one_line(&finding.source_name),
+        one_line(&finding.quote),
+        one_line(&finding.note)
+    )
 }
 
 fn question_line(question: &Question, state: &CallState) -> String {
@@ -550,6 +568,7 @@ pub fn user_message(
         ));
     }
 
+    let documents = document_numbers(state);
     text.push_str("\n# Карточка текущей темы\n\n");
     match state.current_card() {
         Some(card) if !card.fields.is_empty() => {
@@ -558,7 +577,7 @@ pub fn user_message(
                     "- {}: {} (основания: {})\n",
                     field.field.as_str(),
                     one_line(&field.value),
-                    sources(&field.evidence)
+                    sources(&field.evidence, &documents)
                 ));
             }
         }
@@ -598,6 +617,15 @@ pub fn user_message(
         }
         for question in questions {
             text.push_str(&question_line(question, state));
+        }
+    }
+    if !documents.is_empty() {
+        text.push_str(
+            "\n# Найдено в материалах\n\nНаходки медленного контура в источниках проекта — \
+             материал проекта, а не слова клиента:\n",
+        );
+        for (number, finding) in &documents {
+            text.push_str(&finding_line(number, finding));
         }
     }
     if let Some(minutes) = hints.and_then(|hints| hints.quiet_minutes) {
