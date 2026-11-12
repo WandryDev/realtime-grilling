@@ -19,7 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * - the window's session: a window opened mid-call, «Отменить завершение»;
  * - the start widget offers the last call's project and people;
  * - the call window and the overlay: «Звонок без проекта», «Звонка нет»;
- * - the summary closes the call; «Удалить все данные» ends it first.
+ * - the summary closes the call; «Удалить все данные» is refused during it.
  */
 
 const fake = await vi.hoisted(async () => {
@@ -113,12 +113,6 @@ function invokedWith(command: string) {
   return fake.invoked
     .filter((call) => call.command === command)
     .map((call) => call.args);
-}
-
-function commandsInOrder(...names: string[]) {
-  return fake.invoked
-    .map((call) => call.command)
-    .filter((command) => names.includes(command));
 }
 
 function SessionProbe() {
@@ -820,14 +814,18 @@ describe("summary and data", () => {
     expect(document.body.textContent).not.toMatch(DEMO_PROJECT);
   });
 
-  it("«Удалить все данные» during a call discards it first, without a summary", async () => {
+  it("«Удалить все данные» during a call: Rust refuses, the call goes on", async () => {
     await act(() =>
       fake.invoke("call_start", {
         input: { participantIds: [OLGA], projectId: TELEMEDIA },
       })
     );
-    const callId = fake.session.callId ?? "";
     fake.invoked.length = 0;
+    fake.failures.set("data_delete_all", {
+      kind: "Invalid",
+      message: "Идёт звонок: завершите его, потом удаляйте данные",
+    });
+    const add = vi.spyOn(toast, "add");
     const user = userEvent.setup();
     render(
       <>
@@ -847,19 +845,22 @@ describe("summary and data", () => {
     );
 
     await waitFor(
-      () => expect(invokedWith("projects_delete")).toHaveLength(2),
+      () =>
+        expect(add).toHaveBeenCalledWith(
+          expect.objectContaining({
+            description: "Идёт звонок: завершите его, потом удаляйте данные",
+            title: "Сначала завершите звонок",
+          })
+        ),
       DELETE_TIMEOUT
     );
+    expect(invokedWith("data_delete_all")).toHaveLength(1);
+    expect(invokedWith("call_discard")).toEqual([]);
+    expect(invokedWith("projects_delete")).toEqual([]);
+    // The dialog stays open over the page.
     expect(
-      commandsInOrder(
-        "call_discard",
-        "call_finish",
-        "call_close",
-        "projects_delete"
-      )
-    ).toEqual(["call_discard", "projects_delete", "projects_delete"]);
-    expect(invokedWith("call_discard")).toEqual([{ callId }]);
-    await waitFor(() => expect(sessionText()).toBe("idle:—"));
-    expect(nav.push.mock.calls).toEqual([["/onboarding"]]);
+      screen.getByRole("status", { hidden: true, name: "Сессия" }).textContent
+    ).toMatch("live:");
+    expect(nav.push).not.toHaveBeenCalled();
   });
 });

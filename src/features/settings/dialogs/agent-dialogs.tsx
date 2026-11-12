@@ -1,17 +1,14 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent, useCallback, useState } from "react";
-
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+  type ChangeEvent,
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import type { AgentState } from "@/bindings";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -26,22 +23,44 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
+import {
+  cancelAgentLogin,
+  getAgentSetup,
+  loginAgent,
+  submitAgentLoginCode,
+  useAgentSetup,
+} from "@/data/onboarding-setup";
 import { updateSetting } from "@/data/settings";
+import { openLoginPage } from "@/features/onboarding/api";
+import { AgentLoginForm } from "@/features/onboarding/components/agent-login-form";
 
 import { checkAgent, isAbortError } from "../api";
 import { useAbortSignal } from "../use-abort-signal";
 
 /*
- * Dialogs of Settings → Агент: another path to the CLI (checked before it
- * is saved) and the sign-out confirmation.
+ * Another path to the CLI in Settings → Агент: Rust checks it
+ * (`agent_check_path`, nothing saved), and only a CLI that answers is
+ * saved as `agentPath`.
  */
+
+/** Why a checked path can't be saved, or `null` when it can. */
+function pathProblem(path: string, agent: AgentState) {
+  if (agent.status === "notInstalled") {
+    return `По пути ${path} нет Claude Code`;
+  }
+  if (agent.status === "error") {
+    return `Claude Code по этому пути не отвечает: ${agent.message.split("\n")[0]}`;
+  }
+  return null;
+}
 
 function AgentPathForm({
   current,
   onDone,
 }: {
   current: string;
-  onDone: () => void;
+  /** The path was saved; what the CLI there is. */
+  onDone: (agent: AgentState) => void;
 }) {
   const nextSignal = useAbortSignal();
   const [path, setPath] = useState(current);
@@ -63,14 +82,20 @@ function AgentPathForm({
       }
       setChecking(true);
       try {
-        await checkAgent(next, nextSignal());
+        const agent = await checkAgent(next, nextSignal());
+        const problem = pathProblem(next, agent);
+        if (problem) {
+          setChecking(false);
+          setError(problem);
+          return;
+        }
         updateSetting("agentPath", next);
         toast.add({
           description: next,
           title: "Claude Code найден",
           type: "success",
         });
-        onDone();
+        onDone(agent);
       } catch (checkError) {
         if (isAbortError(checkError)) {
           return;
@@ -115,21 +140,30 @@ function AgentPathForm({
 export function AgentPathDialog({
   current,
   onOpenChange,
+  onSaved,
   open,
 }: {
   current: string;
   onOpenChange: (open: boolean) => void;
+  /** The path was saved; what the CLI there is. */
+  onSaved: (agent: AgentState) => void;
   open: boolean;
 }) {
-  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+  const close = useCallback(
+    (agent: AgentState) => {
+      onSaved(agent);
+      onOpenChange(false);
+    },
+    [onOpenChange, onSaved]
+  );
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Где лежит Claude Code</DialogTitle>
           <DialogDescription>
-            Grill проверит, что CLI отвечает и вход выполнен, и только потом
-            сохранит путь
+            Grill проверит, что по этому пути отвечает Claude Code, и только
+            потом сохранит путь
           </DialogDescription>
         </DialogHeader>
         <AgentPathForm current={current} onDone={close} />
@@ -138,32 +172,132 @@ export function AgentPathDialog({
   );
 }
 
-export function AgentSignOutDialog({
-  onConfirm,
+/** «Открыть страницу ещё раз»: the login page of the running login. */
+function reopenLoginPage() {
+  const { loginUrl } = getAgentSetup();
+  if (loginUrl) {
+    openLoginPage(loginUrl);
+  }
+}
+
+/*
+ * The login flow of onboarding (`loginAgent`, `submitAgentLoginCode`,
+ * `cancelAgentLogin` over `agent_login_*`): the browser opens, the code
+ * from its page goes into the form. Done once the CLI says it is ready.
+ */
+function AgentLoginFlow({
+  onCancel,
+  onSignedIn,
+}: {
+  onCancel: () => void;
+  onSignedIn: () => void;
+}) {
+  const agent = useAgentSetup();
+  const started = useRef<boolean>(false);
+  const awaitingCode = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!started.current) {
+      started.current = true;
+      loginAgent();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (agent.status === "awaiting-code") {
+      awaitingCode.current = true;
+    } else if (agent.status === "ready" && awaitingCode.current) {
+      awaitingCode.current = false;
+      onSignedIn();
+    }
+  }, [agent.status, onSignedIn]);
+
+  if (agent.status === "awaiting-code") {
+    return (
+      <AgentLoginForm
+        error={agent.loginError ?? undefined}
+        onCancel={onCancel}
+        onRelogin={loginAgent}
+        onReopen={reopenLoginPage}
+        onSubmit={submitAgentLoginCode}
+        relogging={agent.loginPending}
+        submitting={agent.loginSubmitting}
+      />
+    );
+  }
+
+  const failure =
+    agent.status === "error"
+      ? (agent.error?.message.split("\n\n")[0] ?? "Вход не начался")
+      : agent.loginError;
+  if (failure && !agent.loginPending) {
+    return (
+      <div className="flex flex-col gap-4">
+        <p className="text-contradiction text-sm">{failure}</p>
+        <DialogFooter>
+          <Button onClick={onCancel} variant="secondary">
+            Отмена
+          </Button>
+          <Button onClick={loginAgent}>Войти ещё раз</Button>
+        </DialogFooter>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2.5 text-sm">
+      <Spinner aria-hidden="true" className="size-4" />
+      Открываем страницу входа в браузере…
+    </div>
+  );
+}
+
+/**
+ * «Войти» in Settings → Агент: the onboarding login in a dialog. Closing
+ * it before the CLI is signed in cancels the login.
+ */
+export function AgentLoginDialog({
   onOpenChange,
+  onSignedIn,
   open,
 }: {
-  onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
+  /** The CLI is signed in. */
+  onSignedIn: () => void;
   open: boolean;
 }) {
+  const cancel = useCallback(() => {
+    cancelAgentLogin();
+    onOpenChange(false);
+  }, [onOpenChange]);
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (next) {
+        onOpenChange(true);
+      } else {
+        cancel();
+      }
+    },
+    [cancel, onOpenChange]
+  );
+  const signedIn = useCallback(() => {
+    onOpenChange(false);
+    onSignedIn();
+  }, [onOpenChange, onSignedIn]);
+
   return (
-    <AlertDialog onOpenChange={onOpenChange} open={open}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Выйти из Claude Code?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Без входа агент не сможет предлагать вопросы на звонках. Войти снова
-            можно в любой момент
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Отмена</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm} variant="destructive">
-            Выйти
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <Dialog onOpenChange={handleOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Вход в Claude Code</DialogTitle>
+          <DialogDescription>
+            Войдите в Claude в браузере и вставьте сюда код со страницы входа
+          </DialogDescription>
+        </DialogHeader>
+        {open ? (
+          <AgentLoginFlow onCancel={cancel} onSignedIn={signedIn} />
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }

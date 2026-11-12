@@ -27,8 +27,16 @@ describe("settings screens", () => {
     ).toBe("page");
     expect(screen.getByRole("switch")).toBeTruthy();
     expect(
-      screen.getByText("~/Library/Application Support/Grill/calls")
+      screen.getByText("~/Library/Application Support/Grill/recordings")
     ).toBeTruthy();
+    expect(
+      screen.getByText("Аудио звонков. Занято 1,2 ГБ, 38 звонков")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Показать в Finder" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Изменить" })).toBeNull();
+    expect(screen.queryByText("Язык интерфейса")).toBeNull();
   });
 
   it("renders the audio section with the speech models", () => {
@@ -59,8 +67,13 @@ describe("settings screens", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "Агент" })
     ).toBeTruthy();
-    expect(screen.getByText("/opt/homebrew/bin/claude")).toBeTruthy();
+    expect(screen.getByText("найден автоматически")).toBeTruthy();
+    expect(screen.getByText("2.1.14")).toBeTruthy();
+    expect(screen.getByText("Выполнен, подписка Max")).toBeTruthy();
     expect(screen.getByRole("progressbar")).toBeTruthy();
+    expect(screen.getByText("Использовано 38 %")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Выйти" })).toBeNull();
+    expect(screen.queryByText("Финальная проверка")).toBeNull();
     expect(
       screen.getByText(
         "Обычно агент смотрит разговор, как только клиент договорил. Реже — не чаще раза в полминуты, лимит подписки расходуется медленнее"

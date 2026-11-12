@@ -5,7 +5,7 @@ import { Effect } from "effect";
 import type { BenchmarkResult } from "@/bindings";
 import { toast } from "@/components/ui/toast";
 import { appRuntime, inTauri } from "@/effect/runtime";
-import { AGENT, RECORDINGS, SHORTCUTS } from "@/features/settings/mock";
+import { SHORTCUTS } from "@/features/settings/mock";
 
 import {
   ONBOARDING_COMPLETED,
@@ -24,21 +24,20 @@ import { createSyncedStore } from "./synced-store";
  */
 
 export interface SettingsValues {
-  agentPath: string;
-  agentSignedIn: boolean;
+  /** The agent CLI; `null`: Rust finds it by itself. */
+  agentPath: string | null;
+  /** Days, "7" | "30" | "90", or "never". */
   audioRetention: string;
   autoEnd: string;
   callLanguage: string;
   compactOverlay: boolean;
-  finalCheck: string;
   hideOnShare: boolean;
-  interfaceLanguage: string;
   launchAtLogin: boolean;
   micBusyBehavior: string;
+  /** "system" («Как в системе») or the chosen device's name. */
   microphone: string;
   questionCount: string;
   questionFrequency: string;
-  recordingsFolder: string;
   /** Global shortcuts by action id; an empty list means "not set". */
   shortcuts: Record<string, string[]>;
   /**
@@ -46,8 +45,8 @@ export interface SettingsValues {
    * Rust writes it (`speech_benchmark`).
    */
   speechBenchmark: Partial<Record<string, StoredBenchmark>>;
-  systemAudio: string;
   theme: string;
+  /** Days, "90" | "180" | "365", or "never". */
   transcriptRetention: string;
 }
 
@@ -71,27 +70,23 @@ export const DEFAULT_SHORTCUTS: Record<string, string[]> = Object.fromEntries(
   SHORTCUTS.map((shortcut) => [shortcut.id, shortcut.keys])
 );
 
+/** The defaults of `settings::defaults` in Rust. */
 export const DEFAULT_SETTINGS: SettingsValues = {
-  agentPath: AGENT.path,
-  agentSignedIn: true,
-  audioRetention: "30d",
+  agentPath: null,
+  audioRetention: "never",
   autoEnd: "10",
   callLanguage: "ru",
   compactOverlay: true,
-  finalCheck: "10",
   hideOnShare: true,
-  interfaceLanguage: "ru",
   launchAtLogin: true,
   micBusyBehavior: "widget",
-  microphone: "airpods",
+  microphone: "system",
   questionCount: "3",
   questionFrequency: "normal",
-  recordingsFolder: RECORDINGS.folder,
   shortcuts: DEFAULT_SHORTCUTS,
   speechBenchmark: {},
-  systemAudio: "system",
   theme: "light",
-  transcriptRetention: "6m",
+  transcriptRetention: "180",
 };
 
 /* ------------------------------------------------------------- Adapter */
@@ -104,15 +99,35 @@ export interface StoredSettings {
 
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof SettingsValues)[];
 
+/*
+ * Values the screens wrote before the settings were checked (settings-real,
+ * decision 6), as the present ones: retention periods in days, the demo
+ * microphones as «Как в системе». The browser demo may still keep them in
+ * localStorage; Rust's migration 0011 moved its own.
+ */
+const LEGACY_VALUES: Partial<
+  Record<keyof SettingsValues, Record<string, string>>
+> = {
+  audioRetention: { "7d": "7", "30d": "30", "90d": "90" },
+  microphone: { airpods: "system", macbook: "system" },
+  transcriptRetention: { "1y": "365", "3m": "90", "6m": "180" },
+};
+
+function presentValue(key: keyof SettingsValues, value: unknown): unknown {
+  const legacy =
+    typeof value === "string" ? LEGACY_VALUES[key]?.[value] : undefined;
+  return legacy ?? value;
+}
+
 /**
  * The stored preferences over the frontend defaults. Values are taken as
- * stored: every key is written by these screens, so its type matches.
+ * stored (Rust checks every write), old ones moved to the present values.
  */
 export function toStoredSettings(stored: SettingsMap): StoredSettings {
   const values: Record<string, unknown> = { ...DEFAULT_SETTINGS };
   for (const key of SETTING_KEYS) {
     if (stored[key] !== undefined && stored[key] !== null) {
-      values[key] = stored[key];
+      values[key] = presentValue(key, stored[key]);
     }
   }
   return {
@@ -274,7 +289,10 @@ export function setOnboardingCompleted(completed: boolean) {
   );
 }
 
-/** Every preference back to its default (tests, "delete everything"). */
+/**
+ * Every preference back to its default (tests). «Удалить всё» resets them
+ * in Rust (`data_delete_all`).
+ */
 export function resetSettings() {
   shortcutErrorsStore.set({});
   updateSettings(DEFAULT_SETTINGS);

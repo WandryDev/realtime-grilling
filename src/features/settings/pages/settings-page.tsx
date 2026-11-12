@@ -3,12 +3,17 @@
 import { type ReactNode, useEffect, useRef } from "react";
 
 import { useIntegrations } from "@/data/integrations";
-import { setMicrophoneMissing, useMicrophoneMissing } from "@/data/settings";
+import { updateSetting, useMicrophoneMissing } from "@/data/settings";
 import type { SettingsSection } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
+import { mockMicrophones } from "../backend";
 import { SettingsScreen } from "../components/settings-screen";
-import type { SettingsSectionId } from "../mock";
+import {
+  DISCONNECTED_AGO_MS,
+  DISCONNECTED_MICROPHONE,
+  type SettingsSectionId,
+} from "../mock";
 import { NoMicrophoneStatus } from "../screens/audio-settings";
 import { screenSection } from "../sections";
 import { AgentSection } from "./agent-section";
@@ -48,7 +53,12 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
   const appliedDemo = useRef<string>(undefined);
   useEffect(() => {
     if (demo === "mic-disabled" && appliedDemo.current !== demo) {
-      setMicrophoneMissing(true);
+      // MOCK: the chosen headphones were unplugged two minutes ago.
+      updateSetting("microphone", DISCONNECTED_MICROPHONE);
+      mockMicrophones.disconnect(
+        DISCONNECTED_MICROPHONE,
+        Date.now() - DISCONNECTED_AGO_MS
+      );
     }
     appliedDemo.current = demo;
   }, [demo]);

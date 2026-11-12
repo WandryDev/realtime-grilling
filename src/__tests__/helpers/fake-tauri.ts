@@ -1,4 +1,5 @@
 import type {
+  AudioInputs,
   BrowseNode,
   Call,
   CallOverview,
@@ -18,6 +19,7 @@ import type {
   Value,
   Workspace,
 } from "@/bindings";
+import { settingProblem } from "@/data/services/setting-checks";
 import { mergePatch } from "@/lib/merge-patch";
 
 /*
@@ -60,6 +62,11 @@ export interface FakeTauri {
    * a command running.
    */
   readonly answers: Map<string, (args: Record<string, unknown>) => unknown>;
+  /**
+   * What `audio_inputs_get` answers: the built-in microphone, «Как в
+   * системе». `audio-inputs-changed` is played with `emit`.
+   */
+  audioInputs: AudioInputs;
   /**
    * The ClickUp the picker browses: spaces, what each container holds, the
    * workspaces a token opens.
@@ -898,13 +905,44 @@ export function createFakeTauri(): FakeTauri {
           );
       case "settings_get":
         return db.settings;
-      case "settings_update":
-        Object.assign(db.settings, args.patch);
+      case "settings_update": {
+        // Rust's `settings::validate`: an unknown key or value writes nothing.
+        const patch = args.patch as { [key: string]: Value };
+        for (const [key, value] of Object.entries(patch)) {
+          const problem = settingProblem(key, value);
+          if (problem) {
+            throw commandError("Invalid", problem);
+          }
+        }
+        Object.assign(db.settings, patch);
         return {
           launchAtLoginError: null,
           settings: db.settings,
           shortcutErrors: [],
         };
+      }
+      // The settings' system side: one microphone, every access given,
+      // Claude Code found and signed in. A test answers otherwise.
+      case "audio_inputs_get":
+        return fake.audioInputs;
+      case "audio_inputs_start":
+      case "audio_inputs_stop":
+      case "audio_level_start":
+      case "audio_level_stop":
+        return null;
+      case "permissions_get":
+        return {
+          microphone: { message: null, state: "granted" },
+          systemAudio: { message: null, state: "granted" },
+        };
+      case "recordings_info":
+        return { bytes: 0, calls: 0, path: "/tmp/grill/recordings" };
+      case "data_summary":
+        return { bytes: 0, calls: 0, projects: db.projects.length };
+      case "agent_status":
+        return { status: "ready", subscriptionType: "max", version: "2.1.14" };
+      case "agent_usage":
+        return null;
       case "calls_delete": {
         const index = db.calls.findIndex((item) => item.id === args.id);
         const [removed] = db.calls.splice(index, 1);
@@ -945,6 +983,17 @@ export function createFakeTauri(): FakeTauri {
 
   const fake: FakeTauri = {
     answers,
+    audioInputs: {
+      devices: [
+        {
+          id: "Микрофон MacBook Pro",
+          isDefault: true,
+          name: "Микрофон MacBook Pro",
+        },
+      ],
+      missingSince: null,
+      selected: "system",
+    },
     clickup: {
       containers: [],
       trees: {},

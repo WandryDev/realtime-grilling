@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 
-import type { ModelId, SpeechModel } from "@/bindings";
+import type { InputDevice, ModelId, SpeechModel } from "@/bindings";
 import {
   Alert,
   AlertAction,
@@ -14,12 +14,14 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
+import type { ScreenAudioAccess } from "@/data/onboarding-setup";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,
   type SettingsValues,
   type StoredBenchmark,
 } from "@/data/settings";
+import type { CaptureProblem } from "@/features/onboarding/api";
 import { SidebarStatus, SidebarStatusItem } from "@/features/shell/app-sidebar";
 import { MicIcon } from "@/features/shell/icons";
 
@@ -31,6 +33,7 @@ import {
   SettingsSelect,
 } from "../components/settings-rows";
 import { SettingsScreen } from "../components/settings-screen";
+import { momentLabel } from "../format";
 import { DownloadIcon, MicOffIcon, PlayIcon } from "../icons";
 import {
   DISCONNECTED_MICROPHONE,
@@ -38,40 +41,94 @@ import {
   SPEECH_BENCHMARK,
   SPEECH_MODEL_NOTES,
   SPEECH_MODELS,
-  SYSTEM_AUDIO_SOURCES,
 } from "../mock";
 
-type MicrophoneState = "ok" | "disabled";
+/** The chosen microphone is not among the devices. */
+export interface MissingMicrophone {
+  name: string;
+  /** When it went missing (ms since the epoch), if known. */
+  since: number | null;
+}
 
 export type SoundCheckState =
   | { status: "idle" }
   | { status: "running" }
-  | { client: string; status: "done"; you: string };
+  /** `text` is empty when nothing was recognized. */
+  | { status: "done"; text: string }
+  /** Why it can't check: no model, no access. */
+  | { message: string; status: "failed" };
+
+/** A level meter's source: its level, 0–100, or why it can't be opened. */
+export interface InputLevel {
+  level: number;
+  problem: CaptureProblem | null;
+}
+
+/** The value of «Как в системе» in the `microphone` setting. */
+export const SYSTEM_MICROPHONE = "system";
+
+const PROBLEM_CAPTIONS: Record<CaptureProblem, string> = {
+  busy: "занято",
+  failed: "не открылся",
+  noAccess: "нет доступа",
+  noDevice: "нет устройства",
+};
+
+const SYSTEM_ACCESS: Record<ScreenAudioAccess, string> = {
+  asking: "Доступ к системному звуку ещё не выдан",
+  denied: "Нет доступа к системному звуку: включите его в Системных настройках",
+  granted: "Доступ к системному звуку есть",
+  idle: "Доступ к системному звуку ещё не выдан",
+  unknown: "macOS не говорит, есть ли доступ: смотрите на индикатор",
+};
 
 /** Red banner on top of the page while the chosen microphone is gone. */
 function MicrophoneDisconnectedBanner({
-  name,
-  onUseBuiltIn,
+  missing,
+  onUseDefault,
 }: {
-  name: string;
-  onUseBuiltIn?: () => void;
+  missing: MissingMicrophone;
+  onUseDefault?: () => void;
 }) {
+  const since =
+    missing.since === null ? "" : `Отключён с ${momentLabel(missing.since)}. `;
   return (
     <Alert
       className="gap-x-3.5 py-4 pr-4 pl-5 *:[svg]:size-[18px]"
       variant="destructive"
     >
       <MicOffIcon />
-      <AlertTitle>Микрофон «{name}» отключён</AlertTitle>
+      <AlertTitle>Микрофон «{missing.name}» отключён</AlertTitle>
       <AlertDescription className="text-foreground">
-        Пока его нет, ваш голос не попадёт в расшифровку. Подключите наушники
-        или выберите встроенный микрофон
+        {since}Пока его нет, Grill слушает микрофон по умолчанию. Подключите его
+        снова или возьмите микрофон по умолчанию
       </AlertDescription>
       <AlertAction className="*:data-[slot=button]:bg-primary *:data-[slot=button]:text-primary-foreground *:data-[slot=button]:hover:bg-ink-hover *:data-[slot=button]:active:bg-ink-active">
-        <Button onClick={onUseBuiltIn}>Взять микрофон MacBook</Button>
+        <Button onClick={onUseDefault}>Взять микрофон по умолчанию</Button>
       </AlertAction>
     </Alert>
   );
+}
+
+/** «Как в системе», then the devices; the missing chosen one stays listed. */
+function microphoneOptions(
+  devices: readonly InputDevice[],
+  missing: MissingMicrophone | null
+) {
+  return [
+    { label: "Как в системе", value: SYSTEM_MICROPHONE },
+    ...devices.map((device) => ({ label: device.name, value: device.id })),
+    ...(missing
+      ? [{ label: `${missing.name}, нет связи`, value: missing.name }]
+      : []),
+  ];
+}
+
+function levelCaption({ level, problem }: InputLevel, sound: string) {
+  if (problem) {
+    return PROBLEM_CAPTIONS[problem];
+  }
+  return level > SILENCE_LEVEL ? sound : "тишина";
 }
 
 /** Download in progress: a 120 wide bar with the percent. */
@@ -264,8 +321,14 @@ export interface BenchmarkState {
   running: boolean;
 }
 
-/** What the sound check heard, under its row. */
-function SoundCheckResult({ client, you }: { client: string; you: string }) {
+/** What the sound check heard, or why it couldn't, under its row. */
+function SoundCheckResult({ state }: { state: SoundCheckState }) {
+  if (state.status === "failed") {
+    return <p className="text-contradiction text-sm">{state.message}</p>;
+  }
+  if (state.status !== "done") {
+    return null;
+  }
   return (
     <dl
       aria-label="Результат проверки звука"
@@ -273,11 +336,11 @@ function SoundCheckResult({ client, you }: { client: string; you: string }) {
     >
       <div className="flex gap-2">
         <dt className="text-muted-foreground w-16 shrink-0">Вы</dt>
-        <dd>{you}</dd>
-      </div>
-      <div className="flex gap-2">
-        <dt className="text-muted-foreground w-16 shrink-0">Клиент</dt>
-        <dd>{client}</dd>
+        <dd>
+          {state.text.trim()
+            ? `«${state.text.trim()}»`
+            : "Ничего не расслышал: скажите погромче"}
+        </dd>
       </div>
     </dl>
   );
@@ -287,49 +350,63 @@ const SILENCE_LEVEL = 5;
 
 const NO_MODEL_ACTIONS: SpeechModelActions = {};
 
+/** A moment of the demo's disconnected headphones, 12 November 12:41. */
+const DEMO_MISSING_SINCE = new Date(2026, 10, 12, 12, 41).getTime();
+
+const PREVIEW_LEVELS = {
+  microphone: { level: 58, problem: null },
+  system: { level: 4, problem: null },
+} satisfies Record<"microphone" | "system", InputLevel>;
+
 /**
  * "Звук и распознавание": both audio channels, sound check, speech model.
- * During a call (`inCall`) devices and the model can't change.
+ * The microphones are the computer's (`microphones`); `missing` is the
+ * chosen one when it is gone. During a call (`inCall`) devices and the
+ * model can't change.
  */
 export function AudioSettings({
   benchmark = { result: SPEECH_BENCHMARK, running: false },
   inCall = false,
-  levels = { microphone: 58, system: 4 },
-  microphone = "ok",
+  levels = PREVIEW_LEVELS,
+  microphones = MICROPHONES,
+  missing = null,
   modelActions = NO_MODEL_ACTIONS,
   models = SPEECH_MODELS,
   onChange,
-  onPickMicrophone,
   onRecheck,
   onSelectModel,
   onSoundCheck,
-  onUseBuiltInMic,
+  onUseDefaultMic,
   soundCheck = { status: "idle" },
+  systemAccess = "granted",
   values = DEFAULT_SETTINGS,
 }: {
   /** The hardware check of the selected model. */
   benchmark?: BenchmarkState;
   inCall?: boolean;
-  /** Live input levels, 0–100. */
-  levels?: { microphone: number; system: number };
-  microphone?: MicrophoneState;
+  /** Live input levels, 0–100, or why a source can't be opened. */
+  levels?: { microphone: InputLevel; system: InputLevel };
+  /** The input devices of the computer. */
+  microphones?: readonly InputDevice[];
+  /** The chosen microphone is gone: the banner and «нет связи». */
+  missing?: MissingMicrophone | null;
   /** "Скачать", "Продолжить", "Удалить" of a model. */
   modelActions?: SpeechModelActions;
   /** Both speech models, as the backend reports them. */
   models?: readonly SpeechModel[];
   onChange?: SettingChange;
-  /** A device picked while the chosen microphone is missing. */
-  onPickMicrophone?: (value: string) => void;
   /** "Проверить снова": the hardware check of the selected model. */
   onRecheck?: () => void;
   /** A ready model picked to recognize with. */
   onSelectModel?: (id: ModelId) => void;
   onSoundCheck?: () => void;
-  onUseBuiltInMic?: () => void;
+  /** «Взять микрофон по умолчанию»: «Как в системе». */
+  onUseDefaultMic?: () => void;
   soundCheck?: SoundCheckState;
+  /** The access to the system audio, from the permissions check. */
+  systemAccess?: ScreenAudioAccess;
   values?: SettingsValues;
 }) {
-  const micDisabled = microphone === "disabled";
   const checking = soundCheck.status === "running";
   const selected = models.find((model) => model.selected);
   const canRecheck =
@@ -346,10 +423,10 @@ export function AudioSettings({
 
   return (
     <>
-      {micDisabled ? (
+      {missing ? (
         <MicrophoneDisconnectedBanner
-          name={DISCONNECTED_MICROPHONE.name}
-          onUseBuiltIn={onUseBuiltInMic}
+          missing={missing}
+          onUseDefault={onUseDefaultMic}
         />
       ) : null}
       <SettingsSection className="pt-4" title="Источники звука">
@@ -357,51 +434,27 @@ export function AudioSettings({
           align="start"
           control={
             <div className="flex w-70 flex-col gap-2.5">
-              {micDisabled ? (
-                <>
-                  <SettingsSelect
-                    className="w-full"
-                    defaultValue="missing"
-                    disabled={inCall}
-                    id="settings-microphone"
-                    invalid
-                    // A different control than the bound one below: remount.
-                    key="missing"
-                    onValueChange={onPickMicrophone}
-                    options={[
-                      {
-                        label: DISCONNECTED_MICROPHONE.label,
-                        value: "missing",
-                      },
-                      ...MICROPHONES,
-                    ]}
-                    valueClassName="text-muted-foreground"
-                  />
-                  <p className="text-contradiction px-0.5 text-xs">
-                    {DISCONNECTED_MICROPHONE.hint}
-                  </p>
-                </>
-              ) : (
-                <>
-                  <SettingsSelect
-                    className="w-full"
-                    defaultValue={values.microphone}
-                    disabled={inCall}
-                    id="settings-microphone"
-                    key="chosen"
-                    onSettingChange={onChange}
-                    options={MICROPHONES}
-                    setting="microphone"
-                  />
-                  <LevelMeter
-                    caption={
-                      levels.microphone > SILENCE_LEVEL ? "слышу вас" : "тишина"
-                    }
-                    label="Уровень микрофона"
-                    value={levels.microphone}
-                  />
-                </>
-              )}
+              <SettingsSelect
+                className="w-full"
+                defaultValue={values.microphone}
+                disabled={inCall}
+                id="settings-microphone"
+                invalid={Boolean(missing)}
+                onSettingChange={onChange}
+                options={microphoneOptions(microphones, missing)}
+                setting="microphone"
+              />
+              {missing?.since ? (
+                <p className="text-contradiction px-0.5 text-xs">
+                  Нет связи с {momentLabel(missing.since)}, слушаю микрофон по
+                  умолчанию
+                </p>
+              ) : null}
+              <LevelMeter
+                caption={levelCaption(levels.microphone, "слышу вас")}
+                label="Уровень микрофона"
+                value={levels.microphone.level}
+              />
             </div>
           }
           description="Ваш голос в расшифровке"
@@ -412,32 +465,23 @@ export function AudioSettings({
           align="start"
           control={
             <div className="flex w-70 flex-col gap-2.5">
-              <SettingsSelect
-                className="w-full"
-                defaultValue={values.systemAudio}
-                disabled={inCall}
-                id="settings-system-audio"
-                onSettingChange={onChange}
-                options={SYSTEM_AUDIO_SOURCES}
-                setting="systemAudio"
-              />
               <LevelMeter
-                caption={
-                  levels.system > SILENCE_LEVEL ? "слышу звук" : "тишина"
-                }
+                caption={levelCaption(levels.system, "слышу звук")}
                 label="Уровень системного звука"
-                value={levels.system}
+                value={levels.system.level}
               />
+              <p className="text-muted-foreground px-0.5 text-xs">
+                {SYSTEM_ACCESS[systemAccess]}
+              </p>
             </div>
           }
-          description="Всё, что слышно в наушниках: Zoom, Meet, Telegram"
-          htmlFor="settings-system-audio"
+          description="Звук других приложений, без звука Grill: Zoom, Meet, Telegram"
           title="Системный звук, канал «Клиент»"
         />
         <SettingsRow
           control={
             <Button
-              disabled={checking || micDisabled}
+              disabled={checking}
               onClick={onSoundCheck}
               variant="secondary"
             >
@@ -449,12 +493,10 @@ export function AudioSettings({
               {checking ? "Слушаю…" : "Проверить звук"}
             </Button>
           }
-          description="Скажите пару фраз и включите любое видео, Grill покажет, что расслышал"
+          description="Скажите пару фраз в выбранный микрофон, Grill покажет, что расслышал"
           title="Проверка звука"
         >
-          {soundCheck.status === "done" ? (
-            <SoundCheckResult client={soundCheck.client} you={soundCheck.you} />
-          ) : null}
+          <SoundCheckResult state={soundCheck} />
         </SettingsRow>
       </SettingsSection>
       <SettingsSection className="pt-8" title="Модель распознавания">
@@ -509,7 +551,7 @@ export function NoMicrophoneStatus() {
         tone="ready"
       />
       <SidebarStatusItem
-        description="звонок не запишется"
+        description="пишу с микрофона по умолчанию"
         icon={<MicIcon />}
         title="Нет микрофона"
         tone="error"
@@ -523,7 +565,7 @@ export function AudioSettingsScreen({
   microphone = "ok",
 }: {
   className?: string;
-  microphone?: MicrophoneState;
+  microphone?: "ok" | "disabled";
 }) {
   const micDisabled = microphone === "disabled";
   return (
@@ -533,7 +575,21 @@ export function AudioSettingsScreen({
       section="audio"
       status={micDisabled ? <NoMicrophoneStatus /> : undefined}
     >
-      <AudioSettings microphone={microphone} />
+      <AudioSettings
+        microphones={MICROPHONES.filter(
+          (device) => !micDisabled || device.name !== DISCONNECTED_MICROPHONE
+        )}
+        missing={
+          micDisabled
+            ? { name: DISCONNECTED_MICROPHONE, since: DEMO_MISSING_SINCE }
+            : null
+        }
+        values={
+          micDisabled
+            ? { ...DEFAULT_SETTINGS, microphone: DISCONNECTED_MICROPHONE }
+            : DEFAULT_SETTINGS
+        }
+      />
     </SettingsScreen>
   );
 }

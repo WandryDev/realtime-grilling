@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import {
   commands,
@@ -10,6 +10,7 @@ import { type BackendError, call } from "@/effect/tauri";
 import { SHORTCUTS } from "@/features/settings/mock";
 
 import { invalid, MOCK_SETTINGS_KEY, MockDatabase } from "./mock-database";
+import { NEVER, settingProblem } from "./setting-checks";
 
 /*
  * App preferences, key → JSON value. Rust acts on `onboardingCompleted`,
@@ -112,16 +113,22 @@ export class SettingsData extends Context.Service<
 
 export const ONBOARDING_COMPLETED = "onboardingCompleted";
 
-const BOOLEAN_KEYS = [ONBOARDING_COMPLETED, "launchAtLogin", "hideOnShare"];
-
 /** Defaults of the keys Rust acts on, as `settings_get` returns them. */
 const MOCK_DEFAULTS: SettingsMap = {
   [ONBOARDING_COMPLETED]: false,
+  audioRetention: NEVER,
+  autoEnd: "10",
+  compactOverlay: true,
   hideOnShare: true,
   launchAtLogin: true,
+  micBusyBehavior: "widget",
+  microphone: "system",
   shortcuts: Object.fromEntries(
     SHORTCUTS.map((shortcut) => [shortcut.id, shortcut.keys])
   ),
+  speechModel: "turbo",
+  theme: "light",
+  transcriptRetention: "180",
 };
 
 const TAKEN_BY_SYSTEM = "⌘ Space";
@@ -141,19 +148,12 @@ const decodeShortcuts = (value: unknown): Option.Option<ShortcutKeys> =>
     )
   );
 
-/** The type checks of `settings::validate` in Rust. */
+/** The checks of `settings::validate` in Rust. */
 const validate = Effect.fnUntraced(function* (patch: SettingsMap) {
   for (const [key, value] of Object.entries(patch)) {
-    if (!key.trim()) {
-      return yield* invalid("Пустой ключ настройки");
-    }
-    const valid = BOOLEAN_KEYS.includes(key)
-      ? Predicate.isBoolean(value)
-      : key !== "shortcuts" || Option.isSome(decodeShortcuts(value));
-    if (!valid) {
-      return yield* invalid(
-        `Неверное значение настройки ${key}: ${JSON.stringify(value)}`
-      );
+    const problem = settingProblem(key, value);
+    if (problem) {
+      return yield* invalid(problem);
     }
   }
 });

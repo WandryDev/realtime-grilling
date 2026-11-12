@@ -1,42 +1,52 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { toast } from "@/components/ui/toast";
+import type { RecordingsInfo } from "@/bindings";
 import { updateSetting, useSettings } from "@/data/settings";
+import { useRunsOnWindows } from "@/features/onboarding/platform";
 
-import { revealInFinder } from "../api";
-import { RecordingsFolderDialog } from "../dialogs/recordings-folder-dialog";
+import { isAbortError, readRecordingsInfo, revealInFinder } from "../api";
 import { GeneralSettings } from "../screens/general-settings";
+import { showErrorToast } from "../toasts";
+import { useAbortSignal } from "../use-abort-signal";
 
-/** Settings → Общие in the app: bound controls and the folder dialog. */
+/**
+ * Settings → Общие in the app: bound controls and the recordings' folder
+ * as Rust reports it (`recordings_info`), «Показать в Finder».
+ */
 export function GeneralSection() {
   const values = useSettings();
-  const [folderOpen, setFolderOpen] = useState(false);
-  const openFolderDialog = useCallback(() => setFolderOpen(true), []);
+  const onWindows = useRunsOnWindows();
+  const nextSignal = useAbortSignal();
+  const [recordings, setRecordings] = useState<RecordingsInfo | null>(null);
+
+  useEffect(() => {
+    readRecordingsInfo(nextSignal()).then(setRecordings, (error: unknown) => {
+      if (!isAbortError(error)) {
+        showErrorToast("Не получилось прочитать папку записей", error);
+      }
+    });
+  }, [nextSignal]);
 
   const showInFinder = useCallback(async () => {
-    await revealInFinder(values.recordingsFolder);
-    toast.add({
-      description: values.recordingsFolder,
-      title: "Папка открыта в Finder",
-      type: "info",
-    });
-  }, [values.recordingsFolder]);
+    if (!recordings) {
+      return;
+    }
+    try {
+      await revealInFinder(recordings.path);
+    } catch (error) {
+      showErrorToast("Не получилось открыть папку", error);
+    }
+  }, [recordings]);
 
   return (
-    <>
-      <GeneralSettings
-        onChange={updateSetting}
-        onChangeFolder={openFolderDialog}
-        onShowInFinder={showInFinder}
-        values={values}
-      />
-      <RecordingsFolderDialog
-        current={values.recordingsFolder}
-        onOpenChange={setFolderOpen}
-        open={folderOpen}
-      />
-    </>
+    <GeneralSettings
+      onChange={updateSetting}
+      onShowInFinder={showInFinder}
+      recordings={recordings}
+      revealLabel={onWindows ? "Показать в проводнике" : "Показать в Finder"}
+      values={values}
+    />
   );
 }

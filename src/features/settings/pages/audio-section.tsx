@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { toast } from "@/components/ui/toast";
+import type { AudioInputs } from "@/bindings";
 import { useCallSession } from "@/data/call-session";
+import { loadPermissions, usePermissionsSetup } from "@/data/onboarding-setup";
 import {
   type StoredBenchmark,
   setMicrophoneMissing,
   updateSetting,
-  useMicrophoneMissing,
   useSettings,
 } from "@/data/settings";
+import { listenToWindowFocus } from "@/features/onboarding/api";
 import {
   downloadModel,
   type ModelId,
@@ -21,16 +22,22 @@ import {
   useSpeechModels,
 } from "@/features/speech/api";
 
-import { isAbortError, runSoundCheck, subscribeInputLevel } from "../api";
+import {
+  isAbortError,
+  runSoundCheck,
+  subscribeAudioInputs,
+  subscribeInputLevel,
+} from "../api";
+import type { AudioChannel } from "../backend";
 import {
   AudioSettings,
+  type InputLevel,
+  type MissingMicrophone,
   type SoundCheckState,
   type SpeechModelActions,
+  SYSTEM_MICROPHONE,
 } from "../screens/audio-settings";
-import { showErrorToast } from "../toasts";
 import { useAbortSignal } from "../use-abort-signal";
-
-const BUILT_IN_MICROPHONE = "macbook";
 
 const MODEL_ACTIONS: SpeechModelActions = {
   onDownload: downloadModel,
@@ -38,24 +45,87 @@ const MODEL_ACTIONS: SpeechModelActions = {
   onRemove: removeModel,
 };
 
-/** Live levels of both channels while the section is open. */
-function useInputLevels() {
-  const [levels, setLevels] = useState({ microphone: 0, system: 0 });
+const SILENT: InputLevel = { level: 0, problem: null };
+
+/**
+ * The live level of a channel while the section is open. The capture stops
+ * when the source can't be opened or broke (the chosen microphone was
+ * unplugged) and when the window was hidden; `retry` subscribes again
+ * after such a stop (the devices changed), and so does the window getting
+ * the focus back.
+ */
+function useInputLevel(channel: AudioChannel) {
+  const [state, setState] = useState<InputLevel>(SILENT);
+  const restart = useRef<() => void>(() => undefined);
 
   useEffect(() => {
-    const stopMicrophone = subscribeInputLevel("microphone", (level) =>
-      setLevels((current) => ({ ...current, microphone: level }))
-    );
-    const stopSystem = subscribeInputLevel("system", (level) =>
-      setLevels((current) => ({ ...current, system: level }))
-    );
-    return () => {
-      stopMicrophone();
-      stopSystem();
+    let stopped = false;
+    let unsubscribe: () => void = () => undefined;
+    const start = () => {
+      stopped = false;
+      unsubscribe = subscribeInputLevel(channel, {
+        onEnd: () => {
+          stopped = true;
+          setState(SILENT);
+        },
+        onLevel: (level) => setState({ level, problem: null }),
+        onProblem: (problem) => {
+          stopped = true;
+          setState({ level: 0, problem });
+        },
+      });
     };
-  }, []);
+    start();
+    restart.current = () => {
+      if (stopped) {
+        unsubscribe();
+        start();
+      }
+    };
+    const stopFocus = listenToWindowFocus(() => restart.current());
+    return () => {
+      restart.current = () => undefined;
+      stopFocus();
+      unsubscribe();
+    };
+  }, [channel]);
 
-  return levels;
+  const retry = useCallback(() => restart.current(), []);
+  return { retry, state };
+}
+
+/**
+ * The computer's microphones while the section is open (Rust polls them
+ * only while some window subscribed). `onChange` runs on every report.
+ */
+function useAudioInputs(onChange: () => void) {
+  const [inputs, setInputs] = useState<AudioInputs | null>(null);
+  const changed = useRef(onChange);
+  changed.current = onChange;
+
+  useEffect(
+    () =>
+      subscribeAudioInputs((next) => {
+        setInputs(next);
+        changed.current();
+      }),
+    []
+  );
+  return inputs;
+}
+
+/** The chosen microphone when it is not among the devices. */
+function missingMicrophone(
+  inputs: AudioInputs | null,
+  chosen: string
+): MissingMicrophone | null {
+  if (!inputs || chosen === SYSTEM_MICROPHONE) {
+    return null;
+  }
+  if (inputs.devices.some((device) => device.id === chosen)) {
+    return null;
+  }
+  return { name: chosen, since: inputs.missingSince ?? null };
 }
 
 /**
@@ -66,40 +136,49 @@ function useInputLevels() {
  */
 export function AudioSection({ inCall: forceInCall }: { inCall?: boolean }) {
   const values = useSettings();
-  const micMissing = useMicrophoneMissing();
   const session = useCallSession();
   const inCall = forceInCall || session.status === "live";
-  const levels = useInputLevels();
+  const microphone = useInputLevel("microphone");
+  const system = useInputLevel("system");
+  const inputs = useAudioInputs(microphone.retry);
+  const { screenAudio } = usePermissionsSetup();
   const nextSignal = useAbortSignal();
   const [soundCheck, setSoundCheck] = useState<SoundCheckState>({
     status: "idle",
   });
 
-  const switchToBuiltInMic = useCallback(() => {
-    updateSetting("microphone", BUILT_IN_MICROPHONE);
-    setMicrophoneMissing(false);
-    toast.add({ title: "Микрофон MacBook подключён", type: "success" });
+  const missing = useMemo(
+    () => missingMicrophone(inputs, values.microphone),
+    [inputs, values.microphone]
+  );
+  const isMissing = missing !== null;
+
+  useEffect(() => {
+    setMicrophoneMissing(isMissing);
+  }, [isMissing]);
+
+  useEffect(() => {
+    loadPermissions();
   }, []);
 
-  const pickMicrophone = useCallback((value: string) => {
-    if (value === "missing") {
-      return;
-    }
-    updateSetting("microphone", value);
-    setMicrophoneMissing(false);
+  const takeDefaultMic = useCallback(() => {
+    updateSetting("microphone", SYSTEM_MICROPHONE);
   }, []);
 
   const startSoundCheck = useCallback(async () => {
     setSoundCheck({ status: "running" });
     try {
-      const result = await runSoundCheck(nextSignal());
-      setSoundCheck({ status: "done", ...result });
+      const text = await runSoundCheck(nextSignal());
+      setSoundCheck({ status: "done", text });
     } catch (error) {
       if (isAbortError(error)) {
         return;
       }
-      setSoundCheck({ status: "idle" });
-      showErrorToast("Проверка звука не удалась", error);
+      setSoundCheck({
+        message:
+          error instanceof Error ? error.message : "Проверка звука не удалась",
+        status: "failed",
+      });
     }
   }, [nextSignal]);
 
@@ -132,17 +211,18 @@ export function AudioSection({ inCall: forceInCall }: { inCall?: boolean }) {
     <AudioSettings
       benchmark={benchmark}
       inCall={inCall}
-      levels={levels}
-      microphone={micMissing ? "disabled" : "ok"}
+      levels={{ microphone: microphone.state, system: system.state }}
+      microphones={inputs?.devices ?? []}
+      missing={missing}
       modelActions={MODEL_ACTIONS}
       models={models ?? []}
       onChange={updateSetting}
-      onPickMicrophone={pickMicrophone}
       onRecheck={recheck}
       onSelectModel={selectModel}
       onSoundCheck={startSoundCheck}
-      onUseBuiltInMic={switchToBuiltInMic}
+      onUseDefaultMic={takeDefaultMic}
       soundCheck={soundCheck}
+      systemAccess={screenAudio}
       values={values}
     />
   );

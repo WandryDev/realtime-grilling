@@ -1,5 +1,6 @@
 "use client";
 
+import type { DataSummary } from "@/bindings";
 import { ClaudeIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +16,8 @@ import {
   SettingsSelect,
 } from "../components/settings-rows";
 import { SettingsScreen } from "../components/settings-screen";
-import { CheckIcon, UploadIcon } from "../icons";
+import { dataSummaryText } from "../format";
+import { CheckIcon } from "../icons";
 import {
   AUDIO_RETENTION,
   DATA_POLICY,
@@ -63,18 +65,21 @@ export function DataPolicyCard({
   );
 }
 
-/** "Приватность и хранение": what leaves the computer, retention, your data. */
+/**
+ * "Приватность и хранение": what leaves the computer, how long Rust keeps
+ * the audio and the transcripts, «Удалить всё».
+ */
 export function PrivacySettings({
   onChange,
   onDeleteAll,
-  onExport,
+  summary = DATA_SUMMARY,
   values = DEFAULT_SETTINGS,
 }: {
   onChange?: SettingChange;
   /** "Очистить всё": the confirmation dialog. */
   onDeleteAll?: () => void;
-  /** "Экспортировать": the export dialog. */
-  onExport?: () => void;
+  /** What «Удалить всё» deletes; `null` until the backend answered. */
+  summary?: DataSummary | null;
   values?: SettingsValues;
 }) {
   return (
@@ -113,16 +118,6 @@ export function PrivacySettings({
       <SettingsSection className="pt-8" title="Ваши данные">
         <SettingsRow
           control={
-            <Button onClick={onExport} variant="secondary">
-              <UploadIcon className="size-3.5" />
-              Экспортировать
-            </Button>
-          }
-          description="Все проекты, итоги и расшифровки в Markdown, аудио по желанию"
-          title="Экспорт данных"
-        />
-        <SettingsRow
-          control={
             <Button
               className="text-contradiction hover:text-contradiction focus-visible:text-contradiction active:text-contradiction px-3.5"
               onClick={onDeleteAll}
@@ -131,7 +126,7 @@ export function PrivacySettings({
               Очистить всё
             </Button>
           }
-          description={DATA_SUMMARY}
+          description={summary ? dataSummaryText(summary) : "Считаем…"}
           title="Удалить всё из Grill"
         />
       </SettingsSection>

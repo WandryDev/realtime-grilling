@@ -1,4 +1,11 @@
-import type { ModelId, SpeechModel } from "@/bindings";
+import type {
+  AgentState,
+  DataSummary,
+  InputDevice,
+  ModelId,
+  RecordingsInfo,
+  SpeechModel,
+} from "@/bindings";
 import type { StoredBenchmark } from "@/data/settings";
 
 /*
@@ -23,7 +30,8 @@ export interface SettingsSectionInfo {
 /** Sections in the order of the settings sidebar. */
 export const SETTINGS_SECTIONS: SettingsSectionInfo[] = [
   {
-    description: "Язык, запуск и где Grill хранит записи на этом компьютере",
+    description:
+      "Язык звонков, запуск и где Grill хранит записи на этом компьютере",
     id: "general",
     label: "Общие",
     title: "Общие",
@@ -82,12 +90,6 @@ export interface SelectOption {
 
 /* ---------------------------------------------------------------- Общие */
 
-export const INTERFACE_LANGUAGES: SelectOption[] = [
-  { label: "Русский", value: "ru" },
-  { label: "Українська", value: "uk" },
-  { label: "English", value: "en" },
-];
-
 export const CALL_LANGUAGES: SelectOption[] = [
   { label: "Русский", value: "ru" },
   { label: "Украинский", value: "uk" },
@@ -100,28 +102,26 @@ export const THEMES: (SelectOption & { disabled?: boolean })[] = [
   { disabled: true, label: "Как в системе", value: "system" },
 ];
 
-export const RECORDINGS = {
-  folder: "~/Library/Application Support/Grill/calls",
-  usage: "Аудио, расшифровки и итоги. Занято 1,2 ГБ, 38 звонков",
+/** The recordings' folder of the demo. */
+export const RECORDINGS: RecordingsInfo = {
+  bytes: 1_200_000_000,
+  calls: 38,
+  path: "~/Library/Application Support/Grill/recordings",
 };
 
 /* ------------------------------------------------- Звук и распознавание */
 
-export const MICROPHONES: SelectOption[] = [
-  { label: "AirPods Pro Димы", value: "airpods" },
-  { label: "Микрофон MacBook Pro", value: "macbook" },
+/** The demo's microphones: the MacBook's own one is the default. */
+export const MICROPHONES: InputDevice[] = [
+  { id: "Микрофон MacBook Pro", isDefault: true, name: "Микрофон MacBook Pro" },
+  { id: "AirPods Pro Димы", isDefault: false, name: "AirPods Pro Димы" },
 ];
 
-export const DISCONNECTED_MICROPHONE = {
-  hint: "Наушники отключились 2 минуты назад",
-  label: "AirPods Pro Димы, нет связи",
-  name: "AirPods Pro Димы",
-};
+/** The headphones of the «микрофон отключён» demo. */
+export const DISCONNECTED_MICROPHONE = "AirPods Pro Димы";
 
-export const SYSTEM_AUDIO_SOURCES: SelectOption[] = [
-  { label: "Весь системный звук", value: "system" },
-  { label: "Только Zoom", value: "zoom" },
-];
+/** How long ago the headphones of the demo went missing, ms. */
+export const DISCONNECTED_AGO_MS = 2 * 60_000;
 
 /** The speech models of the preview: turbo ready and selected. */
 export const SPEECH_MODELS: SpeechModel[] = [
@@ -157,19 +157,21 @@ export const SPEECH_BENCHMARK: StoredBenchmark = {
 
 /* ---------------------------------------------------------------- Агент */
 
-export const AGENT = {
-  account: "Подписка Max, аккаунт агентства",
-  limitCaption:
-    "Часовой звонок обычно занимает 10–12%. Хватит ещё на три звонка",
-  limitLabel: "Использовано 38% окна на 5 часов",
-  limitReset: "сброс в 15:00",
-  limitUsed: 38,
-  name: "Claude Code",
-  path: "/opt/homebrew/bin/claude",
-  status: "Найден, вход выполнен, готов к звонку",
+/** Claude Code of the demo: found, signed in. */
+export const AGENT: AgentState = {
+  status: "ready",
+  subscriptionType: "max",
   version: "2.1.14",
-  versionNote: "последняя",
 };
+
+/** The share of the subscription limit of the demo, 0–1. */
+export const AGENT_UTILIZATION = 0.38;
+
+/** From this share up the limit turns red: less than one call left. */
+export const AGENT_LIMIT_LOW = 0.9;
+
+/** The demo's limit in ?demo=limit-low. */
+export const AGENT_UTILIZATION_LOW = 0.94;
 
 export const QUESTION_FREQUENCY: SelectOption[] = [
   { label: "Реже", value: "rare" },
@@ -181,12 +183,6 @@ export const QUESTION_COUNT: SelectOption[] = [
   { label: "1", value: "1" },
   { label: "3", value: "3" },
   { label: "5", value: "5" },
-];
-
-export const FINAL_CHECK: SelectOption[] = [
-  { label: "5 мин", value: "5" },
-  { label: "10 мин", value: "10" },
-  { label: "15 мин", value: "15" },
 ];
 
 /* ----------------------------------------------------- Виджет и клавиши */
@@ -264,27 +260,32 @@ export const DATA_POLICY = [
   },
 ] as const;
 
+/** Days of `audioRetention`, as Rust stores them. */
 export const AUDIO_RETENTION: SelectOption[] = [
-  { label: "7 дней", value: "7d" },
-  { label: "30 дней", value: "30d" },
-  { label: "90 дней", value: "90d" },
+  { label: "7 дней", value: "7" },
+  { label: "30 дней", value: "30" },
+  { label: "90 дней", value: "90" },
   { label: "Не удалять", value: "never" },
 ];
 
+/** Days of `transcriptRetention`, as Rust stores them. */
 export const TRANSCRIPT_RETENTION: SelectOption[] = [
-  { label: "Через 3 месяца", value: "3m" },
-  { label: "Через 6 месяцев", value: "6m" },
-  { label: "Через год", value: "1y" },
+  { label: "Через 3 месяца", value: "90" },
+  { label: "Через 6 месяцев", value: "180" },
+  { label: "Через год", value: "365" },
   { label: "Не удалять", value: "never" },
 ];
 
-export const DATA_SUMMARY =
-  "4 проекта, 38 звонков, аудио и профили людей. Подключения сервисов тоже сбросятся";
+/** What «Удалить всё» deletes in the demo. */
+export const DATA_SUMMARY: DataSummary = {
+  bytes: 1_200_000_000,
+  calls: 38,
+  projects: 4,
+};
 
 /* ----------------------------------------------------------- Интеграции */
 
 export const GITHUB = {
-  accessUrl: "https://github.com/settings/installations",
   account: "Аккаунт dima-kapish, доступ к 12 репозиториям, только чтение",
   hiddenRepos: 9,
   pitch: "Код репозиториев для технических вопросов на звонке",
@@ -421,17 +422,6 @@ export function disconnectClickUpContent(
 }
 
 /* ------------------------------------------------- Состояния для ?demo */
-
-/** Less than one call left in the subscription window. */
-export const AGENT_LIMIT_LOW: typeof AGENT = {
-  ...AGENT,
-  limitCaption:
-    "Меньше чем на один звонок: вопросы могут перестать приходить посреди разговора",
-  limitLabel: "Использовано 94% окна на 5 часов",
-  limitUsed: 94,
-};
-
-export const EXPORT_FOLDER = "~/Downloads/Grill";
 
 /** The word to type before "Очистить всё" deletes everything. */
 export const DELETE_CONFIRM_WORD = "удалить";

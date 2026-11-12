@@ -4,43 +4,28 @@ import { TestClock } from "effect/testing";
 import { expect } from "vitest";
 
 import { checkAgent, isAbortError } from "@/features/settings/api";
-import { SettingsBackend } from "@/features/settings/backend";
+import { mockMicrophones, SettingsBackend } from "@/features/settings/backend";
+import { DISCONNECTED_MICROPHONE } from "@/features/settings/mock";
 
 describe("SettingsBackend.layerMock", () => {
-  it.effect("reports progress up to 100 while moving the recordings", () =>
-    Effect.gen(function* () {
-      const backend = yield* SettingsBackend;
-      const fiber = yield* Effect.forkChild(
-        Stream.runCollect(backend.moveRecordings("~/Grill"))
-      );
-      yield* TestClock.adjust("2 seconds");
-      const progress = Array.from(yield* Fiber.join(fiber));
-      assert.strictEqual(progress.length, 20);
-      assert.strictEqual(progress[0], 5);
-      assert.strictEqual(progress.at(-1), 100);
-    }).pipe(Effect.provide(SettingsBackend.layerMock))
-  );
-
   it.effect("finds the agent CLI only at a claude path", () =>
     Effect.gen(function* () {
       const backend = yield* SettingsBackend;
       const fiber = yield* Effect.forkChild(
         Effect.all(
           [
-            Effect.exit(backend.checkAgent("/usr/local/bin/claude")),
-            Effect.flip(backend.checkAgent("/usr/local/bin/node")),
+            backend.checkAgent("/usr/local/bin/claude"),
+            backend.checkAgent("/usr/local/bin/node"),
+            backend.checkAgent(),
           ],
           { concurrency: "unbounded" }
         )
       );
-      yield* TestClock.adjust("2 seconds");
-      const [found, missing] = yield* Fiber.join(fiber);
-      assert.strictEqual(found._tag, "Success");
-      assert.strictEqual(missing._tag, "AgentCheckError");
-      assert.strictEqual(
-        missing.message,
-        "По пути /usr/local/bin/node нет Claude Code"
-      );
+      yield* TestClock.adjust("1 second");
+      const [found, missing, saved] = yield* Fiber.join(fiber);
+      assert.strictEqual(found.status, "ready");
+      assert.strictEqual(missing.status, "notInstalled");
+      assert.strictEqual(saved.status, "ready");
     }).pipe(Effect.provide(SettingsBackend.layerMock))
   );
 
@@ -49,8 +34,43 @@ describe("SettingsBackend.layerMock", () => {
       const backend = yield* SettingsBackend;
       const fiber = yield* Effect.forkChild(backend.soundCheck);
       yield* TestClock.adjust("2500 millis");
-      const result = yield* Fiber.join(fiber);
-      assert.include(result.you, "Меня хорошо слышно");
+      assert.include(yield* Fiber.join(fiber), "Меня хорошо слышно");
+    }).pipe(Effect.provide(SettingsBackend.layerMock))
+  );
+
+  it.effect("reports the microphones and an unplugged one", () =>
+    Effect.gen(function* () {
+      mockMicrophones.reset();
+      const backend = yield* SettingsBackend;
+      const fiber = yield* Effect.forkChild(
+        Stream.runCollect(Stream.take(backend.audioInputs, 2))
+      );
+      yield* Effect.yieldNow;
+      mockMicrophones.disconnect(DISCONNECTED_MICROPHONE, 1000);
+      const [before, after] = Array.from(yield* Fiber.join(fiber));
+      assert.strictEqual(before?.devices.length, 2);
+      assert.deepStrictEqual(
+        after?.devices.map((device) => device.name),
+        ["Микрофон MacBook Pro"]
+      );
+      assert.strictEqual(after?.missingSince, 1000);
+      mockMicrophones.reset();
+    }).pipe(Effect.provide(SettingsBackend.layerMock))
+  );
+
+  it.effect("says what to delete and where the recordings are", () =>
+    Effect.gen(function* () {
+      const backend = yield* SettingsBackend;
+      const summary = yield* backend.dataSummary;
+      const recordings = yield* backend.recordingsInfo;
+      assert.strictEqual(summary.projects, 4);
+      assert.strictEqual(recordings.calls, 38);
+      assert.strictEqual(
+        yield* backend.agentUsage.pipe(
+          Effect.map((usage) => usage?.utilization)
+        ),
+        0.38
+      );
     }).pipe(Effect.provide(SettingsBackend.layerMock))
   );
 });
@@ -64,9 +84,9 @@ describe("settings api", () => {
     expect(isAbortError(error)).toBe(true);
   });
 
-  it("rejects with the backend message when the check fails", async () => {
-    await expect(checkAgent("/usr/bin/node")).rejects.toThrow(
-      "По пути /usr/bin/node нет Claude Code"
-    );
+  it("resolves to what the CLI at the path is", async () => {
+    await expect(checkAgent("/usr/bin/node")).resolves.toEqual({
+      status: "notInstalled",
+    });
   });
 });

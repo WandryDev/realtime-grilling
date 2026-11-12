@@ -178,8 +178,6 @@ function brokenImpact(
 }
 
 export interface IntegrationHandlers {
-  /** "Изменить доступ" (GitHub): the access page in the browser. */
-  onChangeAccess?: (service: IntegrationService) => void;
   /** "Подключить" on a service that is not connected. */
   onConnect?: (service: IntegrationService) => void;
   onDisconnect?: (service: IntegrationService) => void;
@@ -298,22 +296,11 @@ function IntegrationServiceRow({
   service: IntegrationService;
   state: IntegrationState;
 }) {
-  const {
-    onChangeAccess,
-    onConnect,
-    onDisconnect,
-    onReconnect,
-    onRetry,
-    projects,
-    retrying,
-  } = handlers;
+  const { onConnect, onDisconnect, onReconnect, onRetry, projects, retrying } =
+    handlers;
   const name = SERVICE_NAMES[service];
   const icon = SERVICE_ICONS[service];
 
-  const changeAccess = useCallback(
-    () => onChangeAccess?.(service),
-    [onChangeAccess, service]
-  );
   const connect = useCallback(() => onConnect?.(service), [onConnect, service]);
   const disconnect = useCallback(
     () => onDisconnect?.(service),
@@ -373,11 +360,6 @@ function IntegrationServiceRow({
     <ServiceRow
       actions={
         <>
-          {service === "github" ? (
-            <ServiceTextAction emphasis onClick={changeAccess}>
-              Изменить доступ
-            </ServiceTextAction>
-          ) : null}
           {isKeyService(service) && state.errorKind === "unreachable" ? (
             <ServiceTextAction disabled={retrying} emphasis onClick={retry}>
               {retrying ? "Проверяем…" : "Повторить"}
@@ -460,10 +442,13 @@ function BrokenServiceRow({
 
 /** "Интеграции": services available in every project, and the agent. */
 export function IntegrationsSettings({
+  agentVersion = AGENT_MCP.version,
   githubConnected = true,
   services = previewServices(githubConnected),
   ...handlers
 }: IntegrationHandlers & {
+  /** The version Claude Code reports, «не найден» without one. */
+  agentVersion?: string;
   /** Preview only: GitHub connected or not, when `services` is not set. */
   githubConnected?: boolean;
   services?: IntegrationsState;
@@ -484,7 +469,7 @@ export function IntegrationsSettings({
         <ServiceRow
           description={AGENT_MCP.description}
           icon={<ClaudeIcon />}
-          meta={AGENT_MCP.version}
+          meta={agentVersion}
           name="Claude Code"
           status={
             <Link

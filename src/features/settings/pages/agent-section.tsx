@@ -1,100 +1,104 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import type { AgentState, AgentUsage } from "@/bindings";
 import { toast } from "@/components/ui/toast";
-import { getSettings, updateSetting, useSettings } from "@/data/settings";
+import { updateSetting, useSettings } from "@/data/settings";
 
-import { checkAgent, isAbortError, signInAgent } from "../api";
-import { AgentPathDialog, AgentSignOutDialog } from "../dialogs/agent-dialogs";
-import { AGENT, AGENT_LIMIT_LOW } from "../mock";
+import { checkAgent, isAbortError, readAgentUsage } from "../api";
+import { AgentLoginDialog, AgentPathDialog } from "../dialogs/agent-dialogs";
+import { AGENT_UTILIZATION_LOW } from "../mock";
 import { AgentSettings } from "../screens/agent-settings";
 import { showErrorToast } from "../toasts";
 import { useAbortSignal } from "../use-abort-signal";
 
 /**
- * Settings → Агент in the app: re-check, another CLI path, sign out and in.
- * `limitLow` (?demo=limit-low): less than one call left in the window.
+ * Settings → Агент in the app: what Claude Code answers (`agent_status`)
+ * on open and on «Проверить снова», another CLI path checked before it is
+ * saved, «Войти» through the onboarding login, and the last known share
+ * of the limit (`agent_usage`). `limitLow` (?demo=limit-low): less than
+ * one call left in the window.
  */
 export function AgentSection({ limitLow = false }: { limitLow?: boolean }) {
   const values = useSettings();
   const nextSignal = useAbortSignal();
+  const [agent, setAgent] = useState<AgentState | null>(null);
+  const [usage, setUsage] = useState<AgentUsage | null>(null);
   const [checking, setChecking] = useState(false);
-  const [signingIn, setSigningIn] = useState(false);
   const [pathOpen, setPathOpen] = useState(false);
-  const [signOutOpen, setSignOutOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
 
   const openPathDialog = useCallback(() => setPathOpen(true), []);
-  const openSignOutDialog = useCallback(() => setSignOutOpen(true), []);
+  const openLoginDialog = useCallback(() => setLoginOpen(true), []);
 
-  const check = useCallback(async () => {
+  const readAgent = useCallback(async () => {
     setChecking(true);
     try {
-      await checkAgent(getSettings().agentPath, nextSignal());
+      setAgent(await checkAgent(undefined, nextSignal()));
       setChecking(false);
-      if (getSettings().agentSignedIn) {
-        toast.add({ title: "Claude Code готов к звонку", type: "success" });
-      } else {
-        toast.add({
-          description: "Войдите, чтобы агент предлагал вопросы",
-          title: "Claude Code найден, вход не выполнен",
-          type: "warning",
-        });
-      }
     } catch (error) {
       if (isAbortError(error)) {
         return;
       }
       setChecking(false);
-      showErrorToast("Claude Code не отвечает", error);
+      setAgent({
+        message:
+          error instanceof Error ? error.message : "Claude Code не отвечает",
+        status: "error",
+      });
     }
   }, [nextSignal]);
 
-  const signOut = useCallback(() => {
-    updateSetting("agentSignedIn", false);
-    setSignOutOpen(false);
-    toast.add({ title: "Вы вышли из Claude Code", type: "info" });
-  }, []);
-
-  const signIn = useCallback(async () => {
-    setSigningIn(true);
-    try {
-      await signInAgent(nextSignal());
-      updateSetting("agentSignedIn", true);
-      setSigningIn(false);
-      toast.add({ title: "Вход выполнен", type: "success" });
-    } catch (error) {
-      if (isAbortError(error)) {
-        return;
+  useEffect(() => {
+    readAgent();
+    readAgentUsage(nextSignal()).then(
+      (read) =>
+        setUsage(
+          limitLow && read
+            ? { ...read, utilization: AGENT_UTILIZATION_LOW }
+            : read
+        ),
+      (error: unknown) => {
+        if (!isAbortError(error)) {
+          showErrorToast("Не получилось прочитать лимит подписки", error);
+        }
       }
-      setSigningIn(false);
-      showErrorToast("Не получилось войти", error);
-    }
-  }, [nextSignal]);
+    );
+  }, [limitLow, nextSignal, readAgent]);
+
+  const recheck = useCallback(() => {
+    readAgent();
+  }, [readAgent]);
+
+  const signedIn = useCallback(async () => {
+    toast.add({ title: "Вход выполнен", type: "success" });
+    await readAgent();
+  }, [readAgent]);
 
   return (
     <>
       <AgentSettings
-        agent={limitLow ? AGENT_LIMIT_LOW : AGENT}
+        agent={agent}
         checking={checking}
-        limitLow={limitLow}
         onChange={updateSetting}
         onChangePath={openPathDialog}
-        onCheck={check}
-        onSignIn={signIn}
-        onSignOut={openSignOutDialog}
-        signingIn={signingIn}
+        onCheck={recheck}
+        onSignIn={openLoginDialog}
+        signingIn={loginOpen}
+        usage={usage}
         values={values}
       />
       <AgentPathDialog
-        current={values.agentPath}
+        current={values.agentPath ?? ""}
         onOpenChange={setPathOpen}
+        onSaved={setAgent}
         open={pathOpen}
       />
-      <AgentSignOutDialog
-        onConfirm={signOut}
-        onOpenChange={setSignOutOpen}
-        open={signOutOpen}
+      <AgentLoginDialog
+        onOpenChange={setLoginOpen}
+        onSignedIn={signedIn}
+        open={loginOpen}
       />
     </>
   );

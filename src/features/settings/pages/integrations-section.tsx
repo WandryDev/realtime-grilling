@@ -14,7 +14,7 @@ import {
 import { useProjects } from "@/data/projects";
 import type { IntegrationService } from "@/lib/routes";
 
-import { openExternal } from "../api";
+import { checkAgent, isAbortError } from "../api";
 import { DisconnectServiceAlertDialog } from "../components/integration-overlays";
 import {
   ConnectServiceDialog,
@@ -23,7 +23,6 @@ import {
 import {
   disconnectClickUpContent,
   disconnectOutlineContent,
-  GITHUB,
   OUTLINE,
   SERVICE_NAMES,
 } from "../mock";
@@ -86,6 +85,29 @@ function useConnectorProjects() {
     };
     return { clickup: namesOf("clickup"), outline: namesOf("outline") };
   }, [projects, selections]);
+}
+
+/** The version of Claude Code from `agent_status`, «…» meanwhile. */
+function useAgentVersion() {
+  const [version, setVersion] = useState("…");
+  useEffect(() => {
+    const controller = new AbortController();
+    checkAgent(undefined, controller.signal).then(
+      (agent) =>
+        setVersion(
+          agent.status === "ready" || agent.status === "needsLogin"
+            ? agent.version
+            : "не найден"
+        ),
+      (error: unknown) => {
+        if (!isAbortError(error)) {
+          setVersion("не отвечает");
+        }
+      }
+    );
+    return () => controller.abort();
+  }, []);
+  return version;
 }
 
 /**
@@ -173,22 +195,12 @@ export function IntegrationsSection({ demo }: { demo?: IntegrationsDemo }) {
     setRetrying(false);
   }, []);
 
-  const changeAccess = useCallback(async (service: IntegrationService) => {
-    if (service !== "github") {
-      return;
-    }
-    await openExternal(GITHUB.accessUrl);
-    toast.add({
-      description: "Выберите репозитории, Grill подхватит их сам",
-      title: "Открыли github.com в браузере",
-      type: "info",
-    });
-  }, []);
+  const agentVersion = useAgentVersion();
 
   return (
     <>
       <IntegrationsSettings
-        onChangeAccess={changeAccess}
+        agentVersion={agentVersion}
         onConnect={connect}
         onDisconnect={setDisconnecting}
         onReconnect={reconnect}

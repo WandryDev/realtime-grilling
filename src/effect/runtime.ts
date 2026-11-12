@@ -57,7 +57,7 @@ export const TauriLayer = Layer.mergeAll(
   OnboardingBackend.layerTauri,
   ProjectsBackend.layerTauri,
   RecordingBackend.layerTauri,
-  SettingsBackend.layerMock,
+  SettingsBackend.layerTauri,
   ShellBackend.layerTauri,
   SpeechBackend.layerTauri
 );

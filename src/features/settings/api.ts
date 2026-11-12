@@ -2,25 +2,27 @@
 
 import { Cause, Effect, Exit, Stream } from "effect";
 
+import type {
+  AgentState,
+  AgentUsage,
+  AudioInputs,
+  DataSummary,
+  RecordingsInfo,
+} from "@/bindings";
 import { type AppServices, appRuntime, runCancelable } from "@/effect/runtime";
+import { BackendError, type BackendErrorKind } from "@/effect/tauri";
+import type { CaptureProblem } from "@/features/onboarding/api";
 
-import {
-  type AudioChannel,
-  type ExportOptions,
-  SettingsBackend,
-  type SoundCheckResult,
-} from "./backend";
+import { type AudioChannel, SettingsBackend } from "./backend";
 
 /*
  * React-facing side of the Settings backend (`./backend.ts`). Each function
- * runs a SettingsBackend operation through the app runtime and keeps the
- * promise signature the screens use.
+ * runs a SettingsBackend operation through the app runtime and gives the
+ * screens a promise or an unsubscribe function.
  *
- * Long operations take an AbortSignal (the screen aborts them when it
- * unmounts) and report progress from 0 to 100.
+ * Operations that can outlive a screen take an AbortSignal (the screen
+ * aborts them when it unmounts).
  */
-
-type Progress = (percent: number) => void;
 
 function abortError() {
   return new DOMException("Отменено", "AbortError");
@@ -28,6 +30,11 @@ function abortError() {
 
 export function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** The `kind` of a backend failure (`Invalid`, `External`…), if it is one. */
+export function backendErrorKind(error: unknown): BackendErrorKind | undefined {
+  return error instanceof BackendError ? error.kind : undefined;
 }
 
 /**
@@ -52,63 +59,75 @@ async function run<A, E>(
   throw Cause.squash(exit.cause);
 }
 
-/** Reports every progress value of `stream`, resolves when it ends. */
-function runWithProgress(
-  stream: (backend: SettingsBackend["Service"]) => Stream.Stream<number>,
-  onProgress?: Progress,
-  signal?: AbortSignal
-) {
-  return run(
-    SettingsBackend.use((backend) =>
-      Stream.runForEach(stream(backend), (percent) =>
-        Effect.sync(() => onProgress?.(percent))
-      )
-    ),
-    signal
-  );
-}
-
 /* ---------------------------------------------------------------- Общие */
 
-/** Opens the folder in Finder. */
-export function revealInFinder(path: string) {
-  return run(SettingsBackend.use((backend) => backend.revealInFinder(path)));
-}
-
-/** Moves the saved calls to `path`, with progress. */
-export function moveRecordings(
-  path: string,
-  onProgress?: Progress,
+/** The recordings' folder, its size and the calls with audio. */
+export function readRecordingsInfo(
   signal?: AbortSignal
-) {
-  return runWithProgress(
-    (backend) => backend.moveRecordings(path),
-    onProgress,
+): Promise<RecordingsInfo> {
+  return run(
+    SettingsBackend.use((backend) => backend.recordingsInfo),
     signal
   );
+}
+
+/** Opens the folder in Finder (Explorer on Windows). */
+export function revealInFinder(path: string) {
+  return run(SettingsBackend.use((backend) => backend.revealInFinder(path)));
 }
 
 /* ------------------------------------------------- Звук и распознавание */
 
 /**
- * Live input level of a channel, 0–100, while subscribed. Returns the
+ * The microphones now and on every change, while subscribed. Returns the
  * unsubscribe function.
+ */
+export function subscribeAudioInputs(
+  onInputs: (inputs: AudioInputs) => void
+): () => void {
+  return runCancelable(
+    SettingsBackend.use((backend) =>
+      Stream.runForEach(backend.audioInputs, (inputs) =>
+        Effect.sync(() => onInputs(inputs))
+      )
+    ).pipe(Effect.ignore)
+  );
+}
+
+/**
+ * Live input level of a channel, 0–100, while subscribed. It stops when
+ * the source can't be opened or broke (`onProblem` says why) and when the
+ * app stopped listening on its own, e.g. the window was hidden (`onEnd`).
+ * Returns the unsubscribe function.
  */
 export function subscribeInputLevel(
   channel: AudioChannel,
-  onLevel: (level: number) => void
-) {
+  {
+    onEnd,
+    onLevel,
+    onProblem,
+  }: {
+    onEnd?: () => void;
+    onLevel: (level: number) => void;
+    onProblem?: (problem: CaptureProblem) => void;
+  }
+): () => void {
   return runCancelable(
     SettingsBackend.use((backend) =>
       Stream.runForEach(backend.inputLevel(channel), (level) =>
         Effect.sync(() => onLevel(level))
       )
+    ).pipe(
+      Effect.flatMap(() => Effect.sync(() => onEnd?.())),
+      Effect.catch((error) =>
+        Effect.sync(() => onProblem?.(error.reason ?? "failed"))
+      )
     )
   );
 }
 
-/** Records both channels for a moment and returns what was recognized. */
-export function runSoundCheck(signal?: AbortSignal): Promise<SoundCheckResult> {
+/** Records the chosen microphone for a moment; what was recognized. */
+export function runSoundCheck(signal?: AbortSignal): Promise<string> {
   return run(
     SettingsBackend.use((backend) => backend.soundCheck),
     signal
@@ -117,48 +136,47 @@ export function runSoundCheck(signal?: AbortSignal): Promise<SoundCheckResult> {
 
 /* ---------------------------------------------------------------- Агент */
 
-/** Looks for the CLI at `path` and checks that it is signed in. */
-export function checkAgent(path: string, signal?: AbortSignal) {
+/**
+ * What Claude Code is: at the saved path without `path`, at `path`
+ * otherwise (nothing is saved).
+ */
+export function checkAgent(
+  path?: string,
+  signal?: AbortSignal
+): Promise<AgentState> {
   return run(
     SettingsBackend.use((backend) => backend.checkAgent(path)),
     signal
   );
 }
 
-/** Signs the CLI in (in the real app the browser opens). */
-export function signInAgent(signal?: AbortSignal) {
+/** The last known share of the subscription limit, `null` without one. */
+export function readAgentUsage(
+  signal?: AbortSignal
+): Promise<AgentUsage | null> {
   return run(
-    SettingsBackend.use((backend) => backend.signInAgent),
+    SettingsBackend.use((backend) => backend.agentUsage),
     signal
   );
 }
 
 /* ------------------------------------------------- Приватность и хранение */
 
-/** Writes all projects to Markdown in `folder`, audio when asked. */
-export function exportData(
-  options: ExportOptions,
-  onProgress?: Progress,
-  signal?: AbortSignal
-) {
-  return runWithProgress(
-    (backend) => backend.exportData(options),
-    onProgress,
+/** What «Удалить всё» deletes. */
+export function readDataSummary(signal?: AbortSignal): Promise<DataSummary> {
+  return run(
+    SettingsBackend.use((backend) => backend.dataSummary),
     signal
   );
 }
 
-/** Deletes calls, audio, projects and people from the computer. */
+/**
+ * Deletes the data, the recordings and the secrets, resets the settings
+ * and starts onboarding again.
+ */
 export function deleteAllData(signal?: AbortSignal) {
   return run(
     SettingsBackend.use((backend) => backend.deleteAllData),
     signal
   );
-}
-
-/* ----------------------------------------------------------- Интеграции */
-
-/** Opens a page in the browser. */
-export function openExternal(url: string) {
-  return run(SettingsBackend.use((backend) => backend.openExternal(url)));
 }

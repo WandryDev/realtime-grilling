@@ -351,7 +351,7 @@ function listenEvent<T>(
  * hidden (the stream ends, the page subscribes again on focus) or the
  * capture failed (the stream fails with the reason).
  */
-function tauriAudioLevel(source: AudioSource) {
+export function tauriAudioLevel(source: AudioSource) {
   return Stream.callback<AudioLevelFrame, BackendError>((queue) =>
     Effect.gen(function* () {
       yield* listenEvent(events.audioLevel, (frame) => {

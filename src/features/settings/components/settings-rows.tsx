@@ -305,7 +305,7 @@ export function LevelMeter({
         tone={tone}
         value={value}
       />
-      <span className="text-muted-foreground w-16 shrink-0 text-right text-xs">
+      <span className="text-muted-foreground min-w-16 shrink-0 text-right text-xs whitespace-nowrap">
         {caption}
       </span>
     </div>

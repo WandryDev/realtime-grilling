@@ -15,6 +15,7 @@ import {
   resetSettings,
   setMicrophoneMissing,
 } from "@/data/settings";
+import { mockMicrophones } from "@/features/settings/backend";
 import { SettingsPage } from "@/features/settings/pages/settings-page";
 
 const push = vi.fn();
@@ -54,6 +55,7 @@ beforeEach(() => {
   window.localStorage.clear();
   resetSettings();
   setMicrophoneMissing(false);
+  mockMicrophones.reset();
   connectAll();
 });
 
@@ -185,26 +187,24 @@ describe("settings app", () => {
       within(banner).getByText("Микрофон «AirPods Pro Димы» отключён")
     ).toBeTruthy();
     await user.click(
-      within(banner).getByRole("button", { name: "Взять микрофон MacBook" })
+      within(banner).getByRole("button", {
+        name: "Взять микрофон по умолчанию",
+      })
     );
 
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(getSettings().microphone).toBe("macbook");
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(getSettings().microphone).toBe("system");
   });
 
-  it("signs the agent out after the confirmation", async () => {
-    const user = userEvent.setup();
+  it("shows the agent and the limit of the demo", async () => {
     render(<SettingsPage section="agent" />);
 
-    await user.click(screen.getByRole("button", { name: "Выйти" }));
-    const dialog = await screen.findByRole("alertdialog", {
-      name: "Выйти из Claude Code?",
-    });
-    await user.click(within(dialog).getByRole("button", { name: "Выйти" }));
-
-    expect(getSettings().agentSignedIn).toBe(false);
-    expect(screen.getByText("Не выполнен")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Войти" })).toBeTruthy();
+    expect(
+      await screen.findByText("Выполнен, подписка Max", {}, ASYNC_TIMEOUT)
+    ).toBeTruthy();
+    expect(screen.getByText("2.1.14")).toBeTruthy();
+    expect(screen.getByText("Использовано 38 %")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Выйти" })).toBeNull();
   });
 
   it("deletes everything only after typing the word", async () => {
