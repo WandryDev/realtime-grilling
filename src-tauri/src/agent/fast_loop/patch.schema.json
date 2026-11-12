@@ -111,7 +111,10 @@
         "additionalProperties": false,
         "required": ["source", "id", "quote"],
         "properties": {
-          "source": { "type": "string", "enum": ["segment", "project", "document"] },
+          "source": {
+            "type": "string",
+            "enum": ["segment", "project", "document"]
+          },
           "id": { "type": "string" },
           "quote": { "type": "string" }
         }
