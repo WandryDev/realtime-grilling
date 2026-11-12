@@ -38,9 +38,7 @@ export function DesktopStage(
   if (chrome !== "browser") {
     return (
       <div
-        // Room for the float shadow (blur 40, 12 down): the transparent
-        // window clips whatever is drawn past its edge.
-        className="w-fit px-8 pt-6 pb-10"
+        className="w-fit"
         data-tauri-drag-region="deep"
         data-window="floating"
       >
