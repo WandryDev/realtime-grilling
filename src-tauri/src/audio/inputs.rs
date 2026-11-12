@@ -11,7 +11,9 @@
 //! - [`Inputs`] polls the list once a second while a window subscribed
 //!   (`audio_inputs_start` / `audio_inputs_stop`, counted per window like
 //!   the level meters) and sends [`AudioInputsChanged`] when the list or
-//!   the missing state changed.
+//!   the missing state changed. A hidden or closed window loses its
+//!   subscriptions and gets [`AudioInputsStopped`], as with the level
+//!   meters: it subscribes again when it gets the focus back.
 
 use std::{
     collections::BTreeMap,
@@ -74,6 +76,13 @@ pub struct AudioInputs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, Event)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioInputsChanged(pub AudioInputs);
+
+/// Rust ended the calling window's subscriptions to the microphones: the
+/// window was hidden. To that window only; it subscribes again
+/// (`audio_inputs_start`, after reading `audio_inputs_get`) when it is
+/// shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type, Event)]
+pub struct AudioInputsStopped;
 
 /// Lists the input devices of the computer.
 pub trait InputEnumerator: Send + Sync + 'static {
@@ -212,6 +221,9 @@ pub trait InputsSink: Send + Sync + 'static {
     /// The device the microphone opens changed (the chosen one went missing
     /// or came back, the default changed): a running level meter reopens.
     fn target_changed(&self);
+    /// Rust dropped the subscriptions of the window `label` (it was
+    /// hidden or closed).
+    fn stopped(&self, label: &str);
 }
 
 struct Watch {
@@ -290,9 +302,18 @@ impl Inputs {
         if !self.0.choice.select(selected) {
             return;
         }
-        self.0.sink.target_changed();
-        if !self.watch().windows.is_empty() {
-            self.poll();
+        let polling = {
+            let mut watch = self.watch();
+            if watch.windows.is_empty() {
+                watch.last_target = None;
+            }
+            !watch.windows.is_empty()
+        };
+        if polling {
+            // One reopen at most: the poll compares the device to open.
+            self.poll_and_retarget(true);
+        } else {
+            self.0.sink.target_changed();
         }
     }
 
@@ -305,6 +326,7 @@ impl Inputs {
             *watch.windows.entry(label.to_owned()).or_default() += 1;
             if first {
                 watch.last = None;
+                watch.last_target = None;
             }
             first
         };
@@ -330,12 +352,19 @@ impl Inputs {
         }
     }
 
-    /// Every subscription of a hidden or closed window.
+    /// Every subscription of a hidden or closed window; a window that had
+    /// some hears of it (`stopped`).
     pub fn remove_window(&self, label: &str) {
-        let mut watch = self.watch();
-        watch.windows.remove(label);
-        if watch.windows.is_empty() {
-            self.0.generation.fetch_add(1, Ordering::SeqCst);
+        let removed = {
+            let mut watch = self.watch();
+            let removed = watch.windows.remove(label).is_some();
+            if removed && watch.windows.is_empty() {
+                self.0.generation.fetch_add(1, Ordering::SeqCst);
+            }
+            removed
+        };
+        if removed {
+            self.0.sink.stopped(label);
         }
     }
 
@@ -349,6 +378,12 @@ impl Inputs {
     /// device to open changed. The first poll of a subscription period only
     /// remembers (the window read `audio_inputs_get`).
     pub fn poll(&self) {
+        self.poll_and_retarget(false);
+    }
+
+    /// [`Self::poll`]; `unknown_is_new`: a device to open no poll saw yet
+    /// counts as a change (a new choice).
+    fn poll_and_retarget(&self, unknown_is_new: bool) {
         let devices = self.0.enumerator.list();
         let now = self.now();
         let target = self.0.choice.resolve(&devices, now);
@@ -359,7 +394,7 @@ impl Inputs {
             let target_changed = watch
                 .last_target
                 .as_ref()
-                .is_some_and(|last| *last != target);
+                .map_or(unknown_is_new, |last| *last != target);
             watch.last = Some(inputs.clone());
             watch.last_target = Some(target);
             (changed, target_changed)

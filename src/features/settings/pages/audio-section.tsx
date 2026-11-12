@@ -97,20 +97,41 @@ function useInputLevel(channel: AudioChannel) {
 /**
  * The computer's microphones while the section is open (Rust polls them
  * only while some window subscribed). `onChange` runs on every report.
+ * Hiding the window ends the subscription; the window getting the focus
+ * back subscribes again and reads the list anew.
  */
 function useAudioInputs(onChange: () => void) {
   const [inputs, setInputs] = useState<AudioInputs | null>(null);
   const changed = useRef(onChange);
   changed.current = onChange;
 
-  useEffect(
-    () =>
-      subscribeAudioInputs((next) => {
-        setInputs(next);
-        changed.current();
-      }),
-    []
-  );
+  useEffect(() => {
+    let stopped = false;
+    let unsubscribe: () => void = () => undefined;
+    const start = () => {
+      stopped = false;
+      unsubscribe = subscribeAudioInputs(
+        (next) => {
+          setInputs(next);
+          changed.current();
+        },
+        () => {
+          stopped = true;
+        }
+      );
+    };
+    start();
+    const stopFocus = listenToWindowFocus(() => {
+      if (stopped) {
+        unsubscribe();
+        start();
+      }
+    });
+    return () => {
+      stopFocus();
+      unsubscribe();
+    };
+  }, []);
   return inputs;
 }
 

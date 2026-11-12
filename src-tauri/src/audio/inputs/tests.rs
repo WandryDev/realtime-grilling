@@ -10,6 +10,7 @@ struct Machine {
     now: AtomicI64,
     events: Mutex<Vec<AudioInputs>>,
     retargets: AtomicUsize,
+    stopped: Mutex<Vec<String>>,
 }
 
 impl Machine {
@@ -57,6 +58,10 @@ impl InputsSink for FakeSink {
 
     fn target_changed(&self) {
         self.0.retargets.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn stopped(&self, label: &str) {
+        self.0.stopped.lock().unwrap().push(label.to_owned());
     }
 }
 
@@ -274,4 +279,62 @@ fn the_poller_thread_sends_changes_and_stops_with_the_last_subscriber() {
     machine.plug("Webcam", false);
     thread::sleep(Duration::from_millis(60));
     assert!(machine.take_events().is_empty(), "the poller stopped");
+}
+
+/// The main window hides (its close only hides it) and is shown again: it
+/// hears that its subscription went, and its new one polls like the first.
+#[test]
+fn a_hidden_window_is_told_and_subscribes_again() {
+    let (inputs, machine) = machine(None);
+    inputs.start("main");
+    inputs.remove_window("main");
+    assert!(!inputs.is_polling());
+    assert_eq!(*machine.stopped.lock().unwrap(), vec!["main".to_owned()]);
+    inputs.remove_window("main");
+    inputs.remove_window("widget");
+    assert_eq!(
+        machine.stopped.lock().unwrap().len(),
+        1,
+        "only a window that had a subscription hears of it"
+    );
+
+    // The window's stop of the dropped subscription arrives late: ignored.
+    inputs.stop("main");
+    inputs.start("main");
+    assert!(inputs.is_polling());
+    inputs.poll();
+    machine.plug("USB Mic", false);
+    inputs.poll();
+    assert_eq!(machine.take_events().len(), 1);
+    inputs.stop("main");
+    assert!(!inputs.is_polling(), "one start, one stop");
+}
+
+/// A new choice while a window listens reopens a running meter once.
+#[test]
+fn a_new_choice_reopens_the_meter_once() {
+    let (inputs, machine) = machine(None);
+    inputs.start("main");
+    inputs.poll();
+    inputs.select(Some("AirPods Pro".to_owned()));
+    assert_eq!(machine.retargets(), 1);
+    inputs.select(None);
+    assert_eq!(machine.retargets(), 2, "back to the default once");
+}
+
+/// A new subscription period forgets the device the last one opened.
+#[test]
+fn a_new_subscription_forgets_the_last_target() {
+    let (inputs, machine) = machine(Some("AirPods Pro"));
+    inputs.start("main");
+    inputs.poll();
+    inputs.stop("main");
+    machine.unplug("AirPods Pro");
+    inputs.start("main");
+    inputs.poll();
+    assert_eq!(
+        machine.retargets(),
+        0,
+        "the first poll of a period only remembers"
+    );
 }

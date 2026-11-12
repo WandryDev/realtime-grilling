@@ -42,8 +42,15 @@ vi.mock("@tauri-apps/api/event", () => ({
   emitTo: vi.fn(() => Promise.resolve()),
   listen: fake.listen,
 }));
+const FOCUS = "tauri://focus";
+
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ label: "main", listen: fake.listen }),
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: fake.listen,
+    onFocusChanged: (handler: (event: { payload: boolean }) => void) =>
+      fake.listen(FOCUS, () => handler({ payload: true })),
+  }),
 }));
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => "macos" }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -380,6 +387,30 @@ describe("«Звук» in Tauri", () => {
     expect(
       await screen.findByText("Модель распознавания не скачана")
     ).toBeTruthy();
+  });
+
+  it("Скрыли и показали окно: listens to the devices again and reads them anew", async () => {
+    render(<AudioSection />);
+    await waitFor(() =>
+      expect(invokedWith("audio_inputs_start")).toHaveLength(1)
+    );
+    // The focus while subscribed changes nothing.
+    await emit(FOCUS, true);
+    expect(invokedWith("audio_inputs_start")).toHaveLength(1);
+
+    // The window hides: Rust dropped the subscription.
+    await emit("audio-inputs-stopped", null);
+    fake.audioInputs = inputs({ devices: [MACBOOK, USB] });
+    await emit(FOCUS, true);
+    await waitFor(() =>
+      expect(invokedWith("audio_inputs_start")).toHaveLength(2)
+    );
+    expect(invokedWith("audio_inputs_get")).toHaveLength(2);
+    expect(await microphoneOptions()).toContain("USB Audio Device");
+
+    // A second focus doesn't subscribe twice.
+    await emit(FOCUS, true);
+    expect(invokedWith("audio_inputs_start")).toHaveLength(2);
   });
 
   it("stops listening to the devices when the section closes", async () => {

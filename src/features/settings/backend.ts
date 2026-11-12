@@ -52,7 +52,8 @@ export class SettingsBackend extends Context.Service<
     ) => Effect.Effect<void, BackendError>;
     /**
      * The microphones and the chosen one's state, then every change, while
-     * the stream runs (Rust polls the devices only while subscribed).
+     * the stream runs (Rust polls the devices only while subscribed). Ends
+     * when the app stopped listening on its own (the window was hidden).
      */
     readonly audioInputs: Stream.Stream<AudioInputs, BackendError>;
     /**
@@ -88,9 +89,11 @@ export class SettingsBackend extends Context.Service<
   static readonly layerTauri = Layer.succeed(SettingsBackend, {
     agentUsage: call(() => commands.agentUsage()),
     audioInputs: currentThenChanges(
-      (emit) =>
+      (emit, end) =>
         Effect.gen(function* () {
           yield* subscribe(events.audioInputsChanged, emit);
+          // Hiding the window dropped its subscription in Rust.
+          yield* subscribe(events.audioInputsStopped, end);
           yield* Effect.acquireRelease(
             call(() => commands.audioInputsStart()),
             () => Effect.ignore(call(() => commands.audioInputsStop()))

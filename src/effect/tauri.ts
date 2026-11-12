@@ -157,21 +157,28 @@ export function listen<T>(
  * first, then `current` is read and emitted, so a change between the two
  * is never lost. A change that arrives while `current` is read is at least
  * as new as the read and goes out instead of it: a stale read never
- * overrides an event.
+ * overrides an event. `end` ends the stream (the source stopped on its
+ * own).
  */
 export function currentThenChanges<T, E>(
   subscribeTo: (
-    emit: (value: T) => void
+    emit: (value: T) => void,
+    end: () => void
   ) => Effect.Effect<unknown, E, Scope.Scope>,
   current: Effect.Effect<T, E>
 ): Stream.Stream<T, E> {
   return Stream.callback<T, E>((queue) =>
     Effect.gen(function* () {
       let changed = false;
-      yield* subscribeTo((value) => {
-        changed = true;
-        Queue.offerUnsafe(queue, value);
-      });
+      yield* subscribeTo(
+        (value) => {
+          changed = true;
+          Queue.offerUnsafe(queue, value);
+        },
+        () => {
+          Queue.endUnsafe(queue);
+        }
+      );
       const now = yield* current;
       if (!changed) {
         Queue.offerUnsafe(queue, now);

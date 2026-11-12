@@ -79,18 +79,23 @@ export function revealInFinder(path: string) {
 /* ------------------------------------------------- Звук и распознавание */
 
 /**
- * The microphones now and on every change, while subscribed. Returns the
+ * The microphones now and on every change, while subscribed. `onEnd`: the
+ * app stopped listening on its own (the window was hidden). Returns the
  * unsubscribe function.
  */
 export function subscribeAudioInputs(
-  onInputs: (inputs: AudioInputs) => void
+  onInputs: (inputs: AudioInputs) => void,
+  onEnd?: () => void
 ): () => void {
   return runCancelable(
     SettingsBackend.use((backend) =>
       Stream.runForEach(backend.audioInputs, (inputs) =>
         Effect.sync(() => onInputs(inputs))
       )
-    ).pipe(Effect.ignore)
+    ).pipe(
+      Effect.flatMap(() => Effect.sync(() => onEnd?.())),
+      Effect.ignore
+    )
   );
 }
 

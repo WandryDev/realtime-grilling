@@ -24,7 +24,7 @@ use tauri_specta::Event;
 
 use crate::error::CaptureFailure;
 
-pub use inputs::{AudioInputs, AudioInputsChanged, Inputs, InputsSink};
+pub use inputs::{AudioInputs, AudioInputsChanged, AudioInputsStopped, Inputs, InputsSink};
 pub use levels::AudioLevels;
 
 #[derive(
@@ -118,6 +118,12 @@ impl<R: Runtime> InputsSink for AppInputsSink<R> {
             return;
         };
         levels.restart_in_background(AudioSource::Microphone);
+    }
+
+    fn stopped(&self, label: &str) {
+        if let Err(error) = AudioInputsStopped.emit_to(&self.0, label) {
+            eprintln!("grill: failed to emit audio-inputs-stopped to {label}: {error}");
+        }
     }
 }
 

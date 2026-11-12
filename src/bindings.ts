@@ -202,9 +202,10 @@ export const commands = {
 	 *  «Удалить всё»: every project, person, call, transcript, summary and
 	 *  connection, the recordings' files, the connectors' secrets; the settings
 	 *  back to their defaults (no `agentPath`, onboarding not done). Then
-	 *  onboarding shows and the main window hides. `Invalid` while a call or a
-	 *  recording goes on (discard it first); `External` when a file or a secret
-	 *  could not be removed (the rest is gone all the same).
+	 *  onboarding shows from its first step and the main window hides.
+	 *  `Invalid` while a call or a recording goes on (discard it first); no
+	 *  call starts until it is done. `External` when a file or a secret could
+	 *  not be removed (the rest is gone all the same).
 	 */
 	dataDeleteAll: () => typedError<null, CommandError>(__TAURI_INVOKE("data_delete_all")),
 	/**
@@ -553,6 +554,7 @@ export const events = {
 	agentInstallProgress: makeEvent<AgentInstallProgress, AgentInstallProgress>("agent-install-progress"),
 	agentStatus: makeEvent<AgentStatus, AgentStatus>("agent-status"),
 	audioInputsChanged: makeEvent<AudioInputsChanged, AudioInputsChanged>("audio-inputs-changed"),
+	audioInputsStopped: makeEvent<AudioInputsStopped, AudioInputsStopped>("audio-inputs-stopped"),
 	audioLevel: makeEvent<AudioLevel, AudioLevel>("audio-level"),
 	audioLevelStopped: makeEvent<AudioLevelStopped, AudioLevelStopped>("audio-level-stopped"),
 	briefProgress: makeEvent<BriefProgress, BriefProgress>("brief-progress"),
@@ -662,6 +664,14 @@ export type AudioInputs = {
  *  only while some window subscribed (`audio_inputs_start`).
  */
 export type AudioInputsChanged = AudioInputs;
+
+/**
+ *  Rust ended the calling window's subscriptions to the microphones: the
+ *  window was hidden. To that window only; it subscribes again
+ *  (`audio_inputs_start`, after reading `audio_inputs_get`) when it is
+ *  shown.
+ */
+export type AudioInputsStopped = null;
 
 /**
  *  The level of a source, ~10 times a second, to the windows that

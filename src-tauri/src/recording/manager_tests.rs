@@ -84,6 +84,7 @@ struct NoInputsSink;
 impl InputsSink for NoInputsSink {
     fn changed(&self, _inputs: &crate::audio::AudioInputs) {}
     fn target_changed(&self) {}
+    fn stopped(&self, _label: &str) {}
 }
 
 impl Rig {
