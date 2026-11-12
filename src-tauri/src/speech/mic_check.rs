@@ -1,5 +1,5 @@
 //! The mic check of onboarding (speech-recognition design.md decision 15):
-//! up to 8 s from the default input, cut short when the VAD closes a phrase
+//! up to 8 s from the chosen (else the default) input, cut short when the VAD closes a phrase
 //! after speech, recognized as one phrase. Nothing is stored.
 
 use std::{
@@ -17,6 +17,7 @@ use super::{
 use crate::{
     audio::{
         clock,
+        inputs::Target,
         sink::{self, SampleSink as _},
         sources::{self, ensure_access},
     },
@@ -121,16 +122,17 @@ pub fn listen(
     }
 }
 
-/// Up to [`MAX_LISTEN`] from the default input, with the access checked as
-/// for a recording. Blocks: call it off the async workers.
-pub fn listen_to_microphone(vad_model: &Path) -> CommandResult<Vec<f32>> {
+/// Up to [`MAX_LISTEN`] from `target` (the chosen microphone, else the
+/// default one), with the access checked as for a recording. Blocks: call
+/// it off the async workers.
+pub fn listen_to_microphone(vad_model: &Path, target: &Target) -> CommandResult<Vec<f32>> {
     ensure_access(
         &permissions::status(PermissionKind::Microphone),
         "микрофону",
     )?;
     let (ring_sink, mut source) = sink::ring(sink::RING_SAMPLES, sink::RING_BLOCKS);
     let breakdown = ring_sink.breakdown();
-    let opened = sources::open_microphone(ring_sink)?;
+    let opened = sources::open_microphone(target, ring_sink)?;
     let mut timeline = Timeline::new(clock::now_ns());
     let mut block = Vec::new();
     let mut frame = [0.0; FRAME];

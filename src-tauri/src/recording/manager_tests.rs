@@ -8,7 +8,11 @@ use std::{
 
 use super::*;
 use crate::{
-    audio::sink::{BlockFormat, SampleSink},
+    audio::{
+        Inputs, InputsSink,
+        inputs::{InputDevice, InputEnumerator},
+        sink::{BlockFormat, SampleSink},
+    },
     recording::store::{ME_FILE, OTHERS_FILE, RECORDINGS_DIR},
     speech::status::TranscriptionState,
     storage::{
@@ -36,6 +40,13 @@ struct Rig {
     /// System audio pushes zeros (no access on macOS).
     system_silent: AtomicBool,
     playing: Arc<AtomicBool>,
+    /// The microphones and the choice (settings-real): «Я» opens what they
+    /// resolve to. `None`: the default input only.
+    inputs: Option<Inputs>,
+    /// The machine's input devices behind `inputs`.
+    devices: Arc<Mutex<Vec<InputDevice>>>,
+    /// The device each microphone open got.
+    mic_opened: Mutex<Vec<Option<String>>>,
 }
 
 impl Default for Rig {
@@ -53,11 +64,78 @@ impl Default for Rig {
             switch_on_open: Mutex::default(),
             system_silent: AtomicBool::new(false),
             playing: Arc::new(AtomicBool::new(false)),
+            inputs: None,
+            devices: Arc::default(),
+            mic_opened: Mutex::default(),
         }
     }
 }
 
+struct FakeInputs(Arc<Mutex<Vec<InputDevice>>>);
+
+impl InputEnumerator for FakeInputs {
+    fn list(&self) -> Vec<InputDevice> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+struct NoInputsSink;
+
+impl InputsSink for NoInputsSink {
+    fn changed(&self, _inputs: &crate::audio::AudioInputs) {}
+    fn target_changed(&self) {}
+}
+
 impl Rig {
+    /// A MacBook (built-in microphone, the default) with `devices` plugged
+    /// in, and `chosen` in the settings.
+    fn with_microphones(chosen: Option<&str>, devices: &[&str]) -> Self {
+        let plugged = Arc::new(Mutex::new(
+            std::iter::once(InputDevice::named("built-in", true))
+                .chain(devices.iter().map(|name| InputDevice::named(name, false)))
+                .collect(),
+        ));
+        let inputs = Inputs::new(
+            FakeInputs(Arc::clone(&plugged)),
+            chosen.map(str::to_owned),
+            NoInputsSink,
+            crate::storage::now_ms,
+            None,
+        );
+        Self {
+            inputs: Some(inputs),
+            devices: plugged,
+            ..Self::default()
+        }
+    }
+
+    /// A device leaves the list; if «Я» records it, its stream reports
+    /// `DeviceNotAvailable`.
+    fn unplug_device(&self, name: &str) {
+        self.devices
+            .lock()
+            .unwrap()
+            .retain(|device| device.name != name);
+        let recording = self.mic_opened.lock().unwrap().last().cloned().flatten();
+        if recording.as_deref() == Some(name)
+            && let Some((stop, breakdown)) = self.live.lock().unwrap().get(&AudioSource::Microphone)
+        {
+            stop.store(true, Ordering::SeqCst);
+            breakdown.fail(CaptureFailure::NoDevice, "Микрофон отключён");
+        }
+    }
+
+    fn plug_device(&self, name: &str) {
+        self.devices
+            .lock()
+            .unwrap()
+            .push(InputDevice::named(name, false));
+    }
+
+    fn mic_opened(&self) -> Vec<Option<String>> {
+        self.mic_opened.lock().unwrap().clone()
+    }
+
     fn permit(&self, kind: PermissionKind, state: PermissionState) {
         self.permissions.lock().unwrap().insert(kind, state);
     }
@@ -162,6 +240,11 @@ impl CaptureDevices for FakeDevices {
         }
         self.0.opened.lock().unwrap().push(source);
         if source == AudioSource::Microphone
+            && let Some(inputs) = &self.0.inputs
+        {
+            self.0.mic_opened.lock().unwrap().push(inputs.target().name);
+        }
+        if source == AudioSource::Microphone
             && let Some(next) = self.0.switch_on_open.lock().unwrap().take()
         {
             *self.0.default_input.lock().unwrap() = Some(next);
@@ -189,8 +272,11 @@ impl CaptureDevices for FakeDevices {
         })
     }
 
-    fn default_input(&self) -> Option<String> {
-        self.0.default_input.lock().unwrap().clone()
+    fn microphone_input(&self) -> Option<String> {
+        match &self.0.inputs {
+            Some(inputs) => inputs.target().name,
+            None => self.0.default_input.lock().unwrap().clone(),
+        }
     }
 }
 
@@ -242,8 +328,24 @@ impl Fixture {
     }
 
     fn configured(setup: impl FnOnce(&Rig), configure: impl FnOnce(&mut Config)) -> Self {
+        Self::on(Rig::default(), setup, configure)
+    }
+
+    /// On a machine with microphones (settings-real), the supervisor at its
+    /// app period.
+    fn microphones(chosen: Option<&str>, devices: &[&str]) -> Self {
+        Self::on(
+            Rig::with_microphones(chosen, devices),
+            |_| {},
+            |config| {
+                config.supervise = Duration::from_millis(500);
+            },
+        )
+    }
+
+    fn on(rig: Rig, setup: impl FnOnce(&Rig), configure: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let rig = Arc::new(Rig::default());
+        let rig = Arc::new(rig);
         setup(&rig);
         let seen = Arc::new(Seen::default());
         let storage = Arc::new(Storage::open_in(dir.path()));
@@ -600,6 +702,88 @@ fn an_unplugged_microphone_reconnects_and_system_audio_has_no_gap() {
     let others = opus_duration_ms(&fx.file(&id, OTHERS_FILE));
     assert!(me.abs_diff(others) <= 20, "me {me} ms, others {others} ms");
     assert!(others >= 900, "{others}");
+}
+
+/// `call-recording`, «Выбранный микрофон»: «Я» records the USB
+/// microphone, not the built-in default.
+#[test]
+fn the_chosen_microphone_is_recorded() {
+    let fx = Fixture::microphones(Some("USB Mic"), &["USB Mic"]);
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
+    thread::sleep(Duration::from_millis(700));
+    fx.manager.stop(&id).unwrap();
+    assert_eq!(fx.rig.mic_opened(), [Some("USB Mic".to_owned())]);
+}
+
+/// `call-recording`, «Отключили AirPods»: AirPods as «Как в системе», the
+/// default moves to the built-in microphone, «Я» follows within 2 s and
+/// «Остальные» never stops.
+#[test]
+fn the_default_microphone_unplugged_moves_to_the_new_default() {
+    let fx = Fixture::microphones(None, &[]);
+    *fx.rig.devices.lock().unwrap() = vec![
+        InputDevice::named("built-in", false),
+        InputDevice::named("AirPods", true),
+    ];
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let unplugged = Instant::now();
+    *fx.rig.devices.lock().unwrap() = vec![InputDevice::named("built-in", true)];
+    fx.rig.unplug_device("AirPods");
+    while fx.rig.mic_opened().len() < 2 {
+        assert!(unplugged.elapsed() < Duration::from_secs(2), "not switched");
+        thread::sleep(Duration::from_millis(5));
+    }
+    fx.wait_for("ok", |status| status.channels.me == ChannelState::Ok);
+    let stats = fx.manager.stop_with_stats(&id).unwrap().unwrap();
+    assert_eq!(
+        fx.rig.mic_opened(),
+        [Some("AirPods".to_owned()), Some("built-in".to_owned())]
+    );
+    assert_eq!(fx.rig.opened(AudioSource::System), 1, "never reopened");
+    assert_eq!(stats[1].samples_dropped, 0);
+}
+
+/// `call-recording`, «Выбранный микрофон вернулся»: the default input while
+/// the chosen one is missing, the chosen one within 2 s after it is back.
+#[test]
+fn the_chosen_microphone_is_recorded_again_when_it_returns() {
+    let fx = Fixture::microphones(Some("USB Mic"), &["USB Mic"]);
+    let id = fx.manager.start(&RecordingLinks::default()).unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    let unplugged = Instant::now();
+    fx.rig.unplug_device("USB Mic");
+    while fx.rig.mic_opened().len() < 2 {
+        assert!(unplugged.elapsed() < Duration::from_secs(2), "no fallback");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fx.rig.mic_opened()[1].as_deref(), Some("built-in"));
+    fx.wait_for("ok on the default", |status| {
+        status.channels.me == ChannelState::Ok
+    });
+    // The fallback stays while the USB microphone is away.
+    thread::sleep(Duration::from_millis(1_100));
+    assert_eq!(fx.rig.mic_opened().len(), 2);
+
+    let plugged = Instant::now();
+    fx.rig.plug_device("USB Mic");
+    while fx.rig.mic_opened().len() < 3 {
+        assert!(plugged.elapsed() < Duration::from_secs(2), "not back");
+        thread::sleep(Duration::from_millis(5));
+    }
+    fx.wait_for("ok", |status| status.channels.me == ChannelState::Ok);
+    thread::sleep(Duration::from_millis(100));
+    fx.manager.stop(&id).unwrap();
+    assert_eq!(
+        fx.rig.mic_opened(),
+        [
+            Some("USB Mic".to_owned()),
+            Some("built-in".to_owned()),
+            Some("USB Mic".to_owned())
+        ]
+    );
+    assert_eq!(fx.rig.opened(AudioSource::System), 1, "«Остальные» went on");
 }
 
 #[test]

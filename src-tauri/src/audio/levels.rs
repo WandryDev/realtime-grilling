@@ -196,7 +196,16 @@ impl AudioLevels {
             Entry::Opening(Windows::from([(label.to_owned(), 1)])),
         );
         drop(entries);
+        self.open_placeholder(source).map_err(|(error, _)| error)
+    }
 
+    /// Opens the device of a source whose placeholder (`Entry::Opening`) is
+    /// in the map, and puts the capture in its place. A failed open removes
+    /// the placeholder and returns the windows that waited on it.
+    fn open_placeholder(
+        &self,
+        source: AudioSource,
+    ) -> Result<(), (crate::error::CommandError, Windows)> {
         let feed = Feed::default();
         let opened = self.0.opener.open(source, feed.clone());
 
@@ -214,7 +223,7 @@ impl AudioLevels {
             Err(error) => {
                 drop(entries);
                 self.0.settled.notify_all();
-                return Err(error);
+                return Err((error, windows));
             }
         };
         if windows.is_empty() {
@@ -240,6 +249,58 @@ impl AudioLevels {
             self.spawn_ticker(source, stopped, tick);
         }
         Ok(())
+    }
+
+    /// Closes a running capture and opens the device of the source again
+    /// for the same windows: the chosen microphone changed (settings-real
+    /// design.md, decision 1). The old device closes first. A failed open
+    /// ends the subscriptions with `AudioLevelStopped` and the reason.
+    /// Nothing when no one listens. Blocks while the device opens.
+    pub fn restart(&self, source: AudioSource) {
+        let closed = {
+            let mut entries = self.entries();
+            let windows = match entries.get(&source) {
+                Some(Entry::Running(capture)) => capture.windows.clone(),
+                _ => return,
+            };
+            entries.insert(source, Entry::Opening(windows))
+        };
+        drop(closed);
+        if let Err((error, windows)) = self.open_placeholder(source) {
+            let event = match &error {
+                crate::error::CommandError::External {
+                    reason: Some(reason),
+                    message,
+                } => AudioLevelStopped {
+                    source,
+                    reason: Some(*reason),
+                    message: Some(message.clone()),
+                },
+                other => AudioLevelStopped {
+                    source,
+                    reason: Some(crate::error::CaptureFailure::Busy),
+                    message: Some(other.to_string()),
+                },
+            };
+            for label in windows.keys() {
+                self.0.sink.stopped(label, &event);
+            }
+        }
+    }
+
+    /// [`Self::restart`] on its own thread (tests: inline).
+    pub fn restart_in_background(&self, source: AudioSource) {
+        if self.0.tick.is_none() {
+            self.restart(source);
+            return;
+        }
+        let levels = self.clone();
+        let spawned = thread::Builder::new()
+            .name("grill-level-restart".to_owned())
+            .spawn(move || levels.restart(source));
+        if let Err(error) = spawned {
+            eprintln!("grill: failed to restart the level meter: {error}");
+        }
     }
 
     /// Ends one subscription of a window; the last one closes the device.
@@ -716,6 +777,91 @@ mod tests {
 
         levels.start("onboarding", AudioSource::Microphone).unwrap();
         assert_eq!(opened(&counters), (1, 0));
+    }
+
+    /// `audio-check`, «Сменили микрофон»: the meter reopens on the new
+    /// device for the same windows, the old one closes first.
+    #[test]
+    fn a_restart_reopens_the_device_for_the_same_windows() {
+        /// Opens the chosen microphone; notes its name and how many devices
+        /// were closed by then.
+        struct Chosen(
+            Arc<Counters>,
+            Arc<Mutex<Vec<(String, usize)>>>,
+            Arc<Mutex<String>>,
+        );
+
+        impl Opener for Chosen {
+            fn open(&self, source: AudioSource, feed: Feed) -> CommandResult<Opened> {
+                if source == AudioSource::Microphone {
+                    let device = self.2.lock().unwrap().clone();
+                    if device == "broken" {
+                        return Err(CommandError::capture(CaptureFailure::Busy, "Занят"));
+                    }
+                    let closed = self.0.closed.load(Ordering::SeqCst);
+                    self.1.lock().unwrap().push((device, closed));
+                }
+                FakeOpener(Arc::clone(&self.0)).open(source, feed)
+            }
+        }
+
+        let counters = Arc::new(Counters::default());
+        let windows = Arc::new(Windows::default());
+        let names = Arc::new(Mutex::new(Vec::new()));
+        let chosen = Arc::new(Mutex::new("AirPods Pro".to_owned()));
+        let levels = AudioLevels::new(
+            Chosen(
+                Arc::clone(&counters),
+                Arc::clone(&names),
+                Arc::clone(&chosen),
+            ),
+            FakeSink(Arc::clone(&windows)),
+            None,
+        );
+        levels.restart(AudioSource::Microphone);
+        assert_eq!(opened(&counters), (0, 0), "no one listens: nothing opens");
+
+        levels.start("main", AudioSource::Microphone).unwrap();
+        levels.start("main", AudioSource::Microphone).unwrap();
+        levels.start("main", AudioSource::System).unwrap();
+        *chosen.lock().unwrap() = "USB Mic".to_owned();
+        levels.restart(AudioSource::Microphone);
+        assert_eq!(
+            *names.lock().unwrap(),
+            [("AirPods Pro".to_owned(), 0), ("USB Mic".to_owned(), 1)],
+            "the AirPods closed before the USB microphone opened"
+        );
+        assert_eq!(opened(&counters), (3, 1), "the old microphone closed");
+        counters.feeds.lock().unwrap()[&AudioSource::Microphone].push([0.5]);
+        levels.tick(AudioSource::Microphone);
+        let events = take_events(&windows);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1.level > 0.5, "the new device's level");
+        assert!(take_stopped(&windows).is_empty());
+
+        // Both subscriptions moved over.
+        levels.stop("main", AudioSource::Microphone);
+        assert_eq!(opened(&counters), (3, 1));
+        levels.stop("main", AudioSource::Microphone);
+        assert_eq!(opened(&counters), (3, 2));
+
+        // A device that can't open ends the subscriptions with the reason.
+        levels.start("main", AudioSource::Microphone).unwrap();
+        *chosen.lock().unwrap() = "broken".to_owned();
+        levels.restart(AudioSource::Microphone);
+        assert_eq!(
+            take_stopped(&windows),
+            [(
+                "main".to_owned(),
+                AudioLevelStopped {
+                    source: AudioSource::Microphone,
+                    reason: Some(CaptureFailure::Busy),
+                    message: Some("Занят".to_owned()),
+                }
+            )]
+        );
+        levels.tick(AudioSource::Microphone);
+        assert!(take_events(&windows).is_empty());
     }
 
     #[test]

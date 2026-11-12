@@ -1,6 +1,6 @@
-//! The real devices behind the meters (decision 12): the default input
-//! through `cpal`, system audio through a process tap (macOS) or loopback
-//! (Windows). A capture without the access is refused up front: opening
+//! The real devices behind the meters (decision 12): the chosen input
+//! (settings-real design.md, decision 1) or the default one through `cpal`,
+//! system audio through a process tap (macOS) or loopback (Windows). A capture without the access is refused up front: opening
 //! the microphone before the user answered would show the prompt.
 
 use std::{
@@ -15,6 +15,7 @@ use cpal::{
 
 use super::{
     AudioSource,
+    inputs::{Inputs, Target},
     level::Feed,
     levels::{Opened, Opener},
     sink::{BlockFormat, SampleSink},
@@ -24,7 +25,10 @@ use crate::{
     permissions::{self, PermissionKind, PermissionState, PermissionStatus},
 };
 
-pub struct DeviceOpener;
+/// The meters' devices: the microphone «Я» resolves through `inputs`.
+pub struct DeviceOpener {
+    pub inputs: Inputs,
+}
 
 impl Opener for DeviceOpener {
     fn open(&self, source: AudioSource, feed: Feed) -> CommandResult<Opened> {
@@ -34,7 +38,7 @@ impl Opener for DeviceOpener {
                     &permissions::status(PermissionKind::Microphone),
                     "микрофону",
                 )?;
-                open_microphone(feed)
+                open_microphone(&self.inputs.target(), feed)
             }
             AudioSource::System => {
                 #[cfg(target_os = "macos")]
@@ -67,10 +71,15 @@ pub fn ensure_access(status: &PermissionStatus, what: &str) -> CommandResult<()>
     }
 }
 
-/// The default input into `sink`. The caller checks the access first.
-pub fn open_microphone(sink: impl SampleSink) -> CommandResult<Opened> {
+/// The input `target` names (the chosen microphone, or the default one
+/// while it is missing) into `sink`; the default input when no device has
+/// that name any more. The caller checks the access first.
+pub fn open_microphone(target: &Target, sink: impl SampleSink) -> CommandResult<Opened> {
+    if target.fallback {
+        eprintln!("grill: the chosen microphone is missing, opening the default one");
+    }
     Ok(Opened {
-        capture: Box::new(Microphone::open(sink)?),
+        capture: Box::new(Microphone::open(target.name.clone(), sink)?),
         playing: None,
     })
 }
@@ -115,14 +124,7 @@ pub fn open_system(_sink: impl SampleSink) -> CommandResult<Opened> {
     ))
 }
 
-/// An id of the default input device now, to notice that it changed;
-/// `None` without one.
-pub fn default_input_id() -> Option<String> {
-    let device = cpal::default_host().default_input_device()?;
-    device.id().ok().map(|id| id.to_string())
-}
-
-/// The default input device. `cpal::Stream` must stay on the thread that
+/// The input device «Я» opens: the one named `target`, else the default. `cpal::Stream` must stay on the thread that
 /// built it, so the stream lives on its own thread until this is dropped.
 struct Microphone {
     stop: Option<mpsc::Sender<()>>,
@@ -130,12 +132,12 @@ struct Microphone {
 }
 
 impl Microphone {
-    fn open(sink: impl SampleSink) -> CommandResult<Self> {
+    fn open(name: Option<String>, sink: impl SampleSink) -> CommandResult<Self> {
         let (ready_sender, ready) = mpsc::channel();
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = thread::Builder::new()
             .name("grill-mic".to_owned())
-            .spawn(move || match build_input(sink) {
+            .spawn(move || match build_input(name.as_deref(), sink) {
                 Ok(stream) => {
                     let _ = ready_sender.send(Ok(()));
                     // Returns when `stop` is dropped.
@@ -180,8 +182,22 @@ fn cpal_error(error: &cpal::Error) -> CommandError {
     CommandError::capture(reason, format!("Не удалось открыть микрофон: {error}"))
 }
 
-fn build_input<S: SampleSink>(sink: S) -> CommandResult<cpal::Stream> {
-    let device = cpal::default_host().default_input_device().ok_or_else(|| {
+/// The input device named `name`; the default one without a name or when
+/// none has it.
+fn input_device(name: Option<&str>) -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    let named = name.and_then(|name| {
+        host.input_devices().ok()?.find(|device| {
+            device
+                .description()
+                .is_ok_and(|description| description.name().trim() == name)
+        })
+    });
+    named.or_else(|| host.default_input_device())
+}
+
+fn build_input<S: SampleSink>(name: Option<&str>, sink: S) -> CommandResult<cpal::Stream> {
+    let device = input_device(name).ok_or_else(|| {
         CommandError::capture(CaptureFailure::NoDevice, "Нет ни одного микрофона")
     })?;
     let supported = device

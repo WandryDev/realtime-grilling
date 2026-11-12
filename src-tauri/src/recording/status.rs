@@ -44,7 +44,7 @@ impl ChannelState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingChannels {
-    /// The default input ("Я").
+    /// The chosen input, else the default one ("Я").
     pub me: ChannelState,
     /// What the other apps play ("Остальные").
     pub others: ChannelState,

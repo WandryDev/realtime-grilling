@@ -6,6 +6,7 @@
 //! (`specs/mic-activity`).
 
 pub mod clock;
+pub mod inputs;
 pub mod level;
 pub mod levels;
 #[cfg(target_os = "macos")]
@@ -23,6 +24,7 @@ use tauri_specta::Event;
 
 use crate::error::CaptureFailure;
 
+pub use inputs::{AudioInputs, AudioInputsChanged, Inputs, InputsSink};
 pub use levels::AudioLevels;
 
 #[derive(
@@ -30,7 +32,7 @@ pub use levels::AudioLevels;
 )]
 #[serde(rename_all = "camelCase")]
 pub enum AudioSource {
-    /// The default input device ("Я").
+    /// The chosen input device, else the default one ("Я").
     Microphone,
     /// What the other apps play ("Остальные"), without this app.
     System,
@@ -90,11 +92,44 @@ impl AudioLevelStopped {
 }
 
 /// The meters of the app: real devices, events to windows by label.
-pub fn levels_for_app<R: Runtime>(app: &AppHandle<R>) -> AudioLevels {
+pub fn levels_for_app<R: Runtime>(app: &AppHandle<R>, inputs: &Inputs) -> AudioLevels {
     AudioLevels::new(
-        sources::DeviceOpener,
+        sources::DeviceOpener {
+            inputs: inputs.clone(),
+        },
         levels::WindowSink(app.clone()),
         Some(levels::TICK),
+    )
+}
+
+/// The inputs' events in the app: `AudioInputsChanged` to every window; a
+/// new device to open reopens a running microphone meter.
+struct AppInputsSink<R: Runtime>(AppHandle<R>);
+
+impl<R: Runtime> InputsSink for AppInputsSink<R> {
+    fn changed(&self, inputs: &AudioInputs) {
+        if let Err(error) = AudioInputsChanged(inputs.clone()).emit(&self.0) {
+            eprintln!("grill: failed to emit audio-inputs-changed: {error}");
+        }
+    }
+
+    fn target_changed(&self) {
+        let Some(levels) = self.0.try_state::<AudioLevels>() else {
+            return;
+        };
+        levels.restart_in_background(AudioSource::Microphone);
+    }
+}
+
+/// The computer's microphones and the chosen one (`selected`: the stored
+/// `microphone`, `None` for «Как в системе»).
+pub fn inputs_for_app<R: Runtime>(app: &AppHandle<R>, selected: Option<String>) -> Inputs {
+    Inputs::new(
+        inputs::CpalInputs,
+        selected,
+        AppInputsSink(app.clone()),
+        crate::storage::now_ms,
+        Some(inputs::POLL),
     )
 }
 
@@ -104,5 +139,8 @@ pub fn levels_for_app<R: Runtime>(app: &AppHandle<R>) -> AudioLevels {
 pub fn forget_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     if let Some(levels) = app.try_state::<AudioLevels>() {
         levels.remove_window_in_background(label);
+    }
+    if let Some(inputs) = app.try_state::<Inputs>() {
+        inputs.remove_window(label);
     }
 }

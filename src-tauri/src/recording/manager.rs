@@ -67,9 +67,11 @@ pub trait CaptureDevices: Send + Sync + 'static {
     /// [`Breakdown`]. The access is checked before.
     fn open(&self, source: AudioSource, sink: RingSink) -> CommandResult<Opened>;
 
-    /// An id of the default input now (to notice it changed); `None`
-    /// without one.
-    fn default_input(&self) -> Option<String>;
+    /// The input «Я» opens now: the chosen microphone when it is there,
+    /// else the default one (settings-real design.md, decision 1). The
+    /// supervisor reopens «Я» when it changes, so the channel follows the
+    /// chosen device away and back. `None` without one.
+    fn microphone_input(&self) -> Option<String>;
 }
 
 /// The database plus the files' store as the recorder sees them.
@@ -275,8 +277,8 @@ impl Shared {
         let started_at = storage::now_ms();
         let (sink, me_source) = new_ring();
         // Read before opening: a switch while the device opens shows up as
-        // a different default on the next check, not as the one opened.
-        let me_input = devices.default_input();
+        // a different input on the next check, not as the one opened.
+        let me_input = devices.microphone_input();
         let me_device = Device {
             breakdown: me_source.breakdown(),
             opened: Some(devices.open(AudioSource::Microphone, sink)?),
@@ -871,7 +873,7 @@ struct Device {
     /// `None` while reconnecting or without access.
     opened: Option<Opened>,
     breakdown: Breakdown,
-    /// The default input it was opened on (microphone).
+    /// The input it was opened on (microphone).
     input: Option<String>,
 }
 
@@ -917,7 +919,7 @@ impl Supervisor {
     fn check_microphone(&mut self) {
         let failure = self.me.breakdown.take();
         if self.me.opened.is_some() {
-            let switched = self.shared.devices.default_input() != self.me.input;
+            let switched = self.shared.devices.microphone_input() != self.me.input;
             if failure.is_none() && !switched {
                 return;
             }
@@ -926,7 +928,7 @@ impl Supervisor {
                     "grill: the microphone broke while recording, reopening: {}",
                     failure.message
                 ),
-                None => eprintln!("grill: the default microphone changed, reopening"),
+                None => eprintln!("grill: the microphone to record changed, reopening"),
             }
             self.me.opened = None;
             self.shared
@@ -973,8 +975,8 @@ impl Supervisor {
         );
     }
 
-    /// Opens the default device of a closed channel again and hands its
-    /// ring to the recorder.
+    /// Opens the device of a closed channel again (for «Я» the chosen
+    /// microphone, else the default one) and hands its ring to the recorder.
     fn reopen(&mut self, channel: Channel) {
         let devices = &*self.shared.devices;
         let (kind, what) = channel.permission();
@@ -985,7 +987,7 @@ impl Supervisor {
         let (sink, source) = new_ring();
         let breakdown = source.breakdown();
         // Before opening, as in `begin`.
-        let input = devices.default_input();
+        let input = devices.microphone_input();
         match devices.open(channel.source(), sink) {
             Ok(opened) => {
                 let device = match channel {

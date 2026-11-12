@@ -14,7 +14,7 @@ use super::{
     store::RecordingStore,
 };
 use crate::{
-    audio::{AudioSource, levels::Opened, sink::RingSink, sources},
+    audio::{AudioSource, Inputs, levels::Opened, sink::RingSink, sources},
     error::{CommandError, CommandResult},
     permissions::{self, PermissionKind, PermissionStatus},
     speech::{
@@ -26,8 +26,11 @@ use crate::{
     vad,
 };
 
-/// The default input and the system audio of this computer.
-struct AppDevices;
+/// The chosen (else the default) input and the system audio of this
+/// computer.
+struct AppDevices {
+    inputs: Inputs,
+}
 
 impl CaptureDevices for AppDevices {
     fn permission(&self, kind: PermissionKind) -> PermissionStatus {
@@ -36,13 +39,13 @@ impl CaptureDevices for AppDevices {
 
     fn open(&self, source: AudioSource, sink: RingSink) -> CommandResult<Opened> {
         match source {
-            AudioSource::Microphone => sources::open_microphone(sink),
+            AudioSource::Microphone => sources::open_microphone(&self.inputs.target(), sink),
             AudioSource::System => sources::open_system(sink),
         }
     }
 
-    fn default_input(&self) -> Option<String> {
-        sources::default_input_id()
+    fn microphone_input(&self) -> Option<String> {
+        self.inputs.target().name
     }
 }
 
@@ -87,14 +90,20 @@ impl<R: Runtime> RecordingHost for AppHost<R> {
 
 /// The recorder of the app: real devices, bundled VAD model, phrases to
 /// the live pass on `recognizer`.
-pub fn manager_for_app<R: Runtime>(app: &AppHandle<R>, recognizer: Recognizer) -> RecordingManager {
+pub fn manager_for_app<R: Runtime>(
+    app: &AppHandle<R>,
+    recognizer: Recognizer,
+    inputs: &Inputs,
+) -> RecordingManager {
     let phrases = TranscriptSink::new(
         speech::service::app_host(app),
         recognizer,
         LiveConfig::default(),
     );
     RecordingManager::new(
-        AppDevices,
+        AppDevices {
+            inputs: inputs.clone(),
+        },
         AppHost { app: app.clone() },
         Config::new(vad::bundled_model_path(app), Arc::new(phrases)),
     )
