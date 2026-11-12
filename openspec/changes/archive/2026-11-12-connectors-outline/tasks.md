@@ -31,7 +31,7 @@
 ## 5. Проверка и выпуск
 
 - [x] 5.1 Прогнать `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate connectors-outline --strict` проходит.
-- [ ] 5.2 Ручной прогон в подписанном debug-бандле с настоящим Outline:
+- [x] 5.2 Ручной прогон в подписанном debug-бандле с настоящим Outline:
   - подключение по ключу, ключ в Keychain и не в базе;
   - выбор коллекции в мастере, бриф по документам Outline;
   - правка документа в Outline → «Обновить» → «Бриф мог устареть»;

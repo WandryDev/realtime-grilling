@@ -172,3 +172,5 @@ trait SourceProvider: Connector {   // Capability::ProjectSources
 ## Open Questions
 
 - Отдаёт ли `documents.list` поле `text` в облачном Outline на текущей версии API. Ответ меняет только число запросов (см. риски), а не поведение.
+
+- Ручной прогон выполнен менеджером 2026-11-12. Ответы на вопросы выше в этот документ не записаны.
