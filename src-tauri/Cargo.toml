@@ -77,6 +77,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Connector secrets in the OS store: Keychain, Credential Manager
 # (connectors-outline design.md, decision 2).
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+rust-stemmers = "1.2.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

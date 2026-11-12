@@ -9,6 +9,7 @@ pub mod fast_loop;
 pub mod install;
 pub mod login;
 pub mod process;
+pub mod slow_loop;
 
 use std::{
     path::{Path, PathBuf},
