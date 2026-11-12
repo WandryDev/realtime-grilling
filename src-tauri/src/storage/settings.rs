@@ -1,9 +1,10 @@
 //! App preferences: key → JSON value.
 //!
-//! The keys are those of the frontend's `SettingsValues` plus
-//! `onboardingCompleted`. Rust knows the keys it acts on (and their defaults);
-//! the rest it stores as given, and the frontend merges them over its own
-//! defaults.
+//! The keys are those of the frontend's `SettingsValues` plus the ones Rust
+//! writes itself (`onboardingCompleted`, `speechModel`, `speechBenchmark`,
+//! `agentPath`). Only the keys of [`KNOWN_KEYS`] are stored, each with its
+//! value checked (settings-real design.md, decision 6); the frontend merges
+//! what it gets over its own defaults.
 
 use std::collections::BTreeMap;
 
@@ -54,6 +55,47 @@ pub const AUTO_END: &str = "autoEnd";
 /// «Компактный оверлей»: a started call shows the overlay, not the call
 /// window (decision 5).
 pub const COMPACT_OVERLAY: &str = "compactOverlay";
+/// «Микрофон»: [`MIC_SYSTEM`] («Как в системе») or a device name
+/// (settings-real design.md, decision 1).
+pub const MICROPHONE: &str = "microphone";
+/// The `microphone` value «Как в системе»: the default input at capture.
+pub const MIC_SYSTEM: &str = "system";
+/// «Аудиозаписи звонков»: days as a string (`"7"`, `"30"`, `"90"`) or
+/// `"never"` (settings-real design.md, decision 5).
+pub const AUDIO_RETENTION: &str = "audioRetention";
+/// «Расшифровки»: days as a string (`"90"`, `"180"`, `"365"`) or `"never"`
+/// for a value an earlier build stored.
+pub const TRANSCRIPT_RETENTION: &str = "transcriptRetention";
+/// «Тема»: only `light` works for now; `dark` and `system` are «скоро».
+pub const THEME: &str = "theme";
+
+/// Every key the app stores; anything else is `Invalid`.
+pub const KNOWN_KEYS: &[&str] = &[
+    ONBOARDING_COMPLETED,
+    LAUNCH_AT_LOGIN,
+    HIDE_ON_SHARE,
+    SHORTCUTS,
+    MIC_BUSY_BEHAVIOR,
+    AGENT_PATH,
+    SPEECH_MODEL,
+    SPEECH_BENCHMARK,
+    CALL_LANGUAGE,
+    QUESTION_COUNT,
+    QUESTION_FREQUENCY,
+    QUESTION_REQUEUE_MINUTES,
+    AUTO_END,
+    COMPACT_OVERLAY,
+    MICROPHONE,
+    AUDIO_RETENTION,
+    TRANSCRIPT_RETENTION,
+    THEME,
+];
+
+const AUDIO_RETENTION_VALUES: &[&str] = &["7", "30", "90", NEVER];
+const TRANSCRIPT_RETENTION_VALUES: &[&str] = &["90", "180", "365", NEVER];
+const NEVER: &str = "never";
+/// `transcriptRetention` when nothing is stored: «Через 6 месяцев».
+pub const DEFAULT_TRANSCRIPT_RETENTION: &str = "180";
 
 pub const SETTINGS_ID: &str = "settings";
 
@@ -91,6 +133,13 @@ pub fn defaults() -> SettingsMap {
         (AUTO_END.to_owned(), json!("10")),
         (COMPACT_OVERLAY.to_owned(), json!(true)),
         (SPEECH_MODEL.to_owned(), json!(ModelId::Turbo.as_str())),
+        (MICROPHONE.to_owned(), json!(MIC_SYSTEM)),
+        (AUDIO_RETENTION.to_owned(), json!(NEVER)),
+        (
+            TRANSCRIPT_RETENTION.to_owned(),
+            json!(DEFAULT_TRANSCRIPT_RETENTION),
+        ),
+        (THEME.to_owned(), json!("light")),
         (
             SHORTCUTS.to_owned(),
             json!({
@@ -122,39 +171,67 @@ pub fn get(connection: &Connection) -> CommandResult<SettingsMap> {
     Ok(settings)
 }
 
-/// Checks the types of the keys Rust acts on.
+/// Checks that every key is known and its value fits it. `Invalid`
+/// otherwise; nothing of the patch is written then.
 pub fn validate(patch: &SettingsMap) -> CommandResult<()> {
     for (key, value) in patch {
-        if key.trim().is_empty() {
-            return Err(CommandError::invalid("Пустой ключ настройки"));
+        if !KNOWN_KEYS.contains(&key.as_str()) {
+            return Err(CommandError::invalid(format!(
+                "Неизвестная настройка: {key}"
+            )));
         }
-        let valid = match key.as_str() {
-            ONBOARDING_COMPLETED | LAUNCH_AT_LOGIN | HIDE_ON_SHARE | COMPACT_OVERLAY => {
-                value.is_boolean()
-            }
-            AUTO_END => value.is_string() || value.is_number(),
-            SHORTCUTS => serde_json::from_value::<Shortcuts>(value.clone()).is_ok(),
-            MIC_BUSY_BEHAVIOR => value.as_str().and_then(MicBusyBehavior::parse).is_some(),
-            SPEECH_MODEL => value.as_str().and_then(ModelId::parse).is_some(),
-            CALL_LANGUAGE => value.as_str().and_then(CallLanguage::parse).is_some(),
-            // Any JSON: the benchmark owns its shape.
-            SPEECH_BENCHMARK => true,
-            // Only a path to the agent CLI: it is what the agent commands run.
-            AGENT_PATH => {
-                value.is_null()
-                    || value.as_str().is_some_and(|path| {
-                        crate::agent::discover::has_cli_name(std::path::Path::new(path))
-                    })
-            }
-            _ => true,
-        };
-        if !valid {
+        if !valid_value(key, value) {
             return Err(CommandError::invalid(format!(
                 "Неверное значение настройки {key}: {value}"
             )));
         }
     }
     Ok(())
+}
+
+fn one_of(value: &Value, allowed: &[&str]) -> bool {
+    value.as_str().is_some_and(|text| allowed.contains(&text))
+}
+
+/// A whole number as a string or a number.
+fn whole_number(value: &Value) -> Option<i64> {
+    match value {
+        Value::String(text) => text.trim().parse().ok(),
+        Value::Number(number) => number.as_i64(),
+        _ => None,
+    }
+}
+
+fn valid_value(key: &str, value: &Value) -> bool {
+    match key {
+        ONBOARDING_COMPLETED | LAUNCH_AT_LOGIN | HIDE_ON_SHARE | COMPACT_OVERLAY => {
+            value.is_boolean()
+        }
+        // Minutes as the frontend stores them (`"10"`), a number, or `"never"`.
+        AUTO_END => value.as_str() == Some(NEVER) || whole_number(value).is_some_and(|m| m >= 0),
+        SHORTCUTS => serde_json::from_value::<Shortcuts>(value.clone()).is_ok(),
+        MIC_BUSY_BEHAVIOR => value.as_str().and_then(MicBusyBehavior::parse).is_some(),
+        SPEECH_MODEL => value.as_str().and_then(ModelId::parse).is_some(),
+        CALL_LANGUAGE => value.as_str().and_then(CallLanguage::parse).is_some(),
+        QUESTION_COUNT => matches!(whole_number(value), Some(1 | 3 | 5)),
+        QUESTION_FREQUENCY => one_of(value, &["rare", "normal", "often"]),
+        QUESTION_REQUEUE_MINUTES => whole_number(value).is_some_and(|minutes| minutes >= 1),
+        // Any JSON: the benchmark owns its shape.
+        SPEECH_BENCHMARK => true,
+        // Only a path to the agent CLI: it is what the agent commands run.
+        AGENT_PATH => {
+            value.is_null()
+                || value.as_str().is_some_and(|path| {
+                    crate::agent::discover::has_cli_name(std::path::Path::new(path))
+                })
+        }
+        // «Как в системе» or a device name, which may be absent right now.
+        MICROPHONE => value.as_str().is_some_and(|name| !name.trim().is_empty()),
+        AUDIO_RETENTION => one_of(value, AUDIO_RETENTION_VALUES),
+        TRANSCRIPT_RETENTION => one_of(value, TRANSCRIPT_RETENTION_VALUES),
+        THEME => one_of(value, &["light", "dark", "system"]),
+        _ => false,
+    }
 }
 
 /// Writes the given keys; the others keep their values.
@@ -244,6 +321,40 @@ pub fn auto_end(settings: &SettingsMap) -> Option<std::time::Duration> {
     minutes
         .filter(|minutes| *minutes > 0)
         .map(|minutes| std::time::Duration::from_secs(minutes * 60))
+}
+
+/// The chosen microphone: `None` for «Как в системе» (also a missing or
+/// unreadable value), else the device name.
+pub fn microphone(settings: &SettingsMap) -> Option<String> {
+    settings
+        .get(MICROPHONE)
+        .and_then(Value::as_str)
+        .filter(|name| *name != MIC_SYSTEM && !name.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// Days of a retention value; `None` for `"never"` (and anything unreadable).
+fn retention_days(settings: &SettingsMap, key: &str, default: Option<i64>) -> Option<i64> {
+    match settings.get(key) {
+        None => default,
+        Some(value) => match value.as_str() {
+            Some(NEVER) => None,
+            _ => whole_number(value).filter(|days| *days > 0).or(default),
+        },
+    }
+}
+
+/// `audioRetention` in days; `None` keeps the audio («Не удалять», the
+/// default).
+pub fn audio_retention_days(settings: &SettingsMap) -> Option<i64> {
+    retention_days(settings, AUDIO_RETENTION, None)
+}
+
+/// `transcriptRetention` in days; `None` keeps the transcripts (`"never"`).
+/// Missing or unreadable is [`DEFAULT_TRANSCRIPT_RETENTION`].
+pub fn transcript_retention_days(settings: &SettingsMap) -> Option<i64> {
+    let default = DEFAULT_TRANSCRIPT_RETENTION.parse().ok();
+    retention_days(settings, TRANSCRIPT_RETENTION, default)
 }
 
 /// `compactOverlay`; a missing (or unreadable) value is on.
@@ -340,6 +451,210 @@ mod tests {
         ] {
             assert_eq!(auto_end(&with(never.clone())), None, "{never}");
         }
+    }
+
+    fn invalid(patch: &SettingsMap) -> bool {
+        matches!(validate(patch), Err(CommandError::Invalid { .. }))
+    }
+
+    fn one(key: &str, value: Value) -> SettingsMap {
+        SettingsMap::from([(key.to_owned(), value)])
+    }
+
+    /// `app-settings`, «Неизвестный ключ».
+    #[test]
+    fn an_unknown_key_is_invalid_and_nothing_is_written() {
+        let connection = crate::storage::open_in_memory().unwrap();
+        for removed in [
+            "systemAudio",
+            "recordingsFolder",
+            "interfaceLanguage",
+            "finalCheck",
+            "agentSignedIn",
+            "whatever",
+        ] {
+            // With a valid key next to it: the whole patch is refused.
+            let patch = SettingsMap::from([
+                (HIDE_ON_SHARE.to_owned(), json!(false)),
+                (removed.to_owned(), json!("x")),
+            ]);
+            let error = put(&connection, &patch).unwrap_err();
+            assert!(matches!(error, CommandError::Invalid { .. }), "{removed}");
+        }
+        let rows: i64 = connection
+            .query_row("SELECT count(*) FROM settings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "nothing written");
+        assert_eq!(get(&connection).unwrap(), defaults());
+    }
+
+    #[test]
+    fn known_keys_take_only_their_values() {
+        let good = [
+            (ONBOARDING_COMPLETED, json!(true)),
+            (AUTO_END, json!("5")),
+            (AUTO_END, json!("never")),
+            (AUTO_END, json!(15)),
+            (CALL_LANGUAGE, json!("both")),
+            (QUESTION_COUNT, json!("5")),
+            (QUESTION_COUNT, json!(1)),
+            (QUESTION_FREQUENCY, json!("often")),
+            (QUESTION_REQUEUE_MINUTES, json!(8)),
+            (MICROPHONE, json!("system")),
+            (MICROPHONE, json!("AirPods Pro")),
+            (AUDIO_RETENTION, json!("7")),
+            (AUDIO_RETENTION, json!("never")),
+            (TRANSCRIPT_RETENTION, json!("365")),
+            (THEME, json!("light")),
+        ];
+        for (key, value) in good {
+            assert!(validate(&one(key, value.clone())).is_ok(), "{key} {value}");
+        }
+        let bad = [
+            (ONBOARDING_COMPLETED, json!("yes")),
+            (AUTO_END, json!("soon")),
+            (AUTO_END, json!(null)),
+            (CALL_LANGUAGE, json!("en")),
+            (QUESTION_COUNT, json!("4")),
+            (QUESTION_FREQUENCY, json!("always")),
+            (QUESTION_REQUEUE_MINUTES, json!(0)),
+            (MICROPHONE, json!("")),
+            (MICROPHONE, json!(null)),
+            (AUDIO_RETENTION, json!("30d")),
+            (AUDIO_RETENTION, json!(30)),
+            (TRANSCRIPT_RETENTION, json!("6m")),
+            (TRANSCRIPT_RETENTION, json!("30")),
+            (THEME, json!("blue")),
+        ];
+        for (key, value) in bad {
+            assert!(invalid(&one(key, value.clone())), "{key} {value}");
+        }
+    }
+
+    #[test]
+    fn readers_of_the_new_keys() {
+        assert_eq!(microphone(&defaults()), None);
+        assert_eq!(microphone(&SettingsMap::new()), None);
+        assert_eq!(
+            microphone(&one(MICROPHONE, json!("USB Mic"))).as_deref(),
+            Some("USB Mic")
+        );
+        assert_eq!(audio_retention_days(&defaults()), None, "«Не удалять»");
+        assert_eq!(
+            audio_retention_days(&one(AUDIO_RETENTION, json!("30"))),
+            Some(30)
+        );
+        assert_eq!(
+            audio_retention_days(&one(AUDIO_RETENTION, json!("30d"))),
+            None
+        );
+        assert_eq!(transcript_retention_days(&defaults()), Some(180));
+        assert_eq!(transcript_retention_days(&SettingsMap::new()), Some(180));
+        assert_eq!(
+            transcript_retention_days(&one(TRANSCRIPT_RETENTION, json!("90"))),
+            Some(90)
+        );
+        assert_eq!(
+            transcript_retention_days(&one(TRANSCRIPT_RETENTION, json!("never"))),
+            None
+        );
+    }
+
+    /// Migration 0011 on a version 10 database.
+    #[test]
+    fn migration_0011_drops_the_dead_keys_and_keeps_the_rest() {
+        use rusqlite_migration::Migrations;
+
+        use crate::storage::{DATABASE_FILE, MIGRATION_LIST, MIGRATIONS, SCHEMA_VERSION, open};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATABASE_FILE);
+        let rows = |connection: &Connection| -> Vec<(String, String)> {
+            let mut statement = connection
+                .prepare("SELECT key, value FROM settings ORDER BY key")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let kept = [
+            ("autoEnd", "\"5\""),
+            ("callLanguage", "\"uk\""),
+            ("compactOverlay", "false"),
+            ("hideOnShare", "false"),
+            ("onboardingCompleted", "true"),
+            ("questionCount", "\"1\""),
+            ("shortcuts", "{\"toggle-call\":[\"⌥\",\"G\"]}"),
+            ("speechBenchmark", "{\"turbo\":{\"passed\":true}}"),
+            ("theme", "\"light\""),
+        ];
+        {
+            let connection = open(&path, &Migrations::from_slice(&MIGRATION_LIST[..10])).unwrap();
+            let mut insert = connection
+                .prepare("INSERT INTO settings (key, value) VALUES (?1, ?2)")
+                .unwrap();
+            for (key, value) in kept.iter().chain(&[
+                ("systemAudio", "\"zoom\""),
+                ("recordingsFolder", "\"~/Grill\""),
+                ("interfaceLanguage", "\"en\""),
+                ("finalCheck", "\"10\""),
+                ("agentSignedIn", "true"),
+                ("microphone", "\"airpods\""),
+                ("audioRetention", "\"30d\""),
+                ("transcriptRetention", "\"1y\""),
+            ]) {
+                insert.execute([key, value]).unwrap();
+            }
+            connection
+                .execute_batch(
+                    "INSERT INTO calls (id, title, status, created_at, updated_at)
+                       VALUES ('call', '', 'finished', 1, 1);
+                     INSERT INTO recordings (id, call_id, status, started_at, ended_at,
+                                             me_file, others_file, created_at, updated_at)
+                       VALUES ('rec', 'call', 'finished', 1, 2, 'm', 'o', 1, 1);",
+                )
+                .unwrap();
+        }
+
+        let connection = open(&path, &MIGRATIONS).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION as i64);
+        let mut expected: Vec<(String, String)> = kept
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        expected.extend([
+            ("audioRetention".to_owned(), "\"30\"".to_owned()),
+            ("microphone".to_owned(), "\"system\"".to_owned()),
+            ("transcriptRetention".to_owned(), "\"365\"".to_owned()),
+        ]);
+        expected.sort();
+        assert_eq!(rows(&connection), expected);
+        let transcript_deleted: Option<i64> = connection
+            .query_row(
+                "SELECT transcript_deleted_at FROM recordings WHERE id = 'rec'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(transcript_deleted, None);
+        let violations: i64 = connection
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+        // Every value left is one the whitelist takes.
+        let stored = get(&connection).unwrap();
+        let patch: SettingsMap = stored
+            .into_iter()
+            .filter(|(key, _)| key != SPEECH_MODEL)
+            .collect();
+        validate(&patch).unwrap();
     }
 
     #[test]

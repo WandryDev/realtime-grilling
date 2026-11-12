@@ -76,6 +76,7 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../migrations/0009_connectors.sql")).foreign_key_check(),
     // Rebuilds `agent_calls`: runs with the foreign keys off.
     M::up(include_str!("../../migrations/0010_context_findings.sql")).foreign_key_check(),
+    M::up(include_str!("../../migrations/0011_settings_real.sql")),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
