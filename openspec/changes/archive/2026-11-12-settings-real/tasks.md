@@ -73,7 +73,7 @@
 
 - [x] 6.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate settings-real --strict` проходит.
 - [x] 6.2 Changeset (`minor`): настоящие настройки звука, данных и агента; убранные контролы. Проверка: файл `.changeset/settings-real.md` есть.
-- [ ] 6.3 Ручной прогон в подписанном бандле:
+- [x] 6.3 Ручной прогон в подписанном бандле:
   - выбор AirPods и индикатор;
   - отключение AirPods — плашка;
   - «Проверить звук»;
