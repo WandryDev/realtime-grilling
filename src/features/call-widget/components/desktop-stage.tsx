@@ -38,7 +38,9 @@ export function DesktopStage(
   if (chrome !== "browser") {
     return (
       <div
-        className="w-fit"
+        // No float shadow on the real desktop: the transparent window would
+        // clip it. A hairline inside keeps the card's edge.
+        className="w-fit [&_.shadow-float]:shadow-[inset_0_0_0_1px_rgb(17_17_17/8%)]"
         data-tauri-drag-region="deep"
         data-window="floating"
       >
