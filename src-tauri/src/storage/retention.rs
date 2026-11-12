@@ -10,7 +10,7 @@
 //! [`run`] adds the files and the event, and runs 30 s after the start and
 //! then once a day ([`schedule`]).
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use rusqlite::{Connection, params};
 
@@ -74,9 +74,11 @@ pub fn audio_due(connection: &Connection, now: i64) -> CommandResult<Vec<String>
 
 /// The database part of a pass at `now` by the stored retention periods:
 /// marks the audio deleted (as «Удалить запись») and deletes the
-/// transcripts that are due. One `DataChanged` of the calls when anything
-/// changed: `projectId` `null` makes every window re-read its calls.
-/// Run it in one transaction; delete the audio files after the commit.
+/// transcripts that are due. One `DataChanged` per call it touched (a call's
+/// pages re-read on their own call's event; a recording without a call
+/// sends its own id), `projectId` `null` so every window re-reads its
+/// calls too. Run it in one transaction; delete the audio files after the
+/// commit.
 pub fn purge_at(connection: &Connection, now: i64) -> CommandResult<(Purged, Vec<DataChanged>)> {
     let settings = settings::get(connection)?;
     let mut purged = Purged::default();
@@ -104,30 +106,20 @@ pub fn purge_at(connection: &Connection, now: i64) -> CommandResult<(Purged, Vec
             purged.transcripts.push(id);
         }
     }
-    if purged.is_empty() {
-        return Ok((purged, Vec::new()));
-    }
-    let last = purged
-        .audio
-        .iter()
-        .chain(&purged.transcripts)
-        .max()
-        .cloned()
-        .unwrap_or_default();
-    let call: Option<String> = connection
-        .query_row(
+    let mut touched = BTreeSet::new();
+    for id in purged.audio.iter().chain(&purged.transcripts) {
+        let call: Option<String> = connection.query_row(
             "SELECT call_id FROM recordings WHERE id = ?1",
-            [&last],
+            [id],
             |row| row.get(0),
-        )
-        .unwrap_or(None);
-    let event = DataChanged::new(
-        Entity::Call,
-        call.as_deref().unwrap_or(&last),
-        None,
-        Change::Updated,
-    );
-    Ok((purged, vec![event]))
+        )?;
+        touched.insert(call.unwrap_or_else(|| id.clone()));
+    }
+    let events = touched
+        .iter()
+        .map(|id| DataChanged::new(Entity::Call, id, None, Change::Updated))
+        .collect();
+    Ok((purged, events))
 }
 
 /// What a pass needs besides the database.

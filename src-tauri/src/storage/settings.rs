@@ -560,6 +560,40 @@ mod tests {
         );
     }
 
+    /// Migration 0012 on a version 11 database: the demo `macbook` is «Как
+    /// в системе», a real device's name stays.
+    #[test]
+    fn migration_0012_maps_the_demo_macbook_to_the_system_input() {
+        use rusqlite_migration::Migrations;
+
+        use crate::storage::{DATABASE_FILE, MIGRATION_LIST, MIGRATIONS, open};
+
+        let microphone = |stored: &str| -> String {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(DATABASE_FILE);
+            {
+                let connection =
+                    open(&path, &Migrations::from_slice(&MIGRATION_LIST[..11])).unwrap();
+                connection
+                    .execute(
+                        "INSERT INTO settings (key, value) VALUES ('microphone', ?1)",
+                        [stored],
+                    )
+                    .unwrap();
+            }
+            let connection = open(&path, &MIGRATIONS).unwrap();
+            connection
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'microphone'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(microphone("\"macbook\""), "\"system\"");
+        assert_eq!(microphone("\"USB Mic\""), "\"USB Mic\"");
+    }
+
     /// Migration 0011 on a version 10 database.
     #[test]
     fn migration_0011_drops_the_dead_keys_and_keeps_the_rest() {

@@ -153,7 +153,9 @@ pub fn recordings_dir(data_dir: &Path) -> std::path::PathBuf {
     data_dir.join(RECORDINGS_DIR)
 }
 
-/// «Папка записей»: the folder, what it takes, the calls with audio.
+/// «Папка записей»: the folder, what it takes, the calls with audio. The
+/// folder is made if no recording made it yet, so «Показать в Finder» has
+/// something to show on a fresh install.
 pub async fn recordings_info(storage: &Storage) -> CommandResult<RecordingsInfo> {
     let dir = storage
         .data_dir()
@@ -161,9 +163,14 @@ pub async fn recordings_info(storage: &Storage) -> CommandResult<RecordingsInfo>
         .ok_or_else(|| CommandError::storage("Нет папки данных приложения"))?;
     let calls = storage.read(calls_with_audio).await?;
     let path = dir.to_string_lossy().into_owned();
-    let bytes = tauri::async_runtime::spawn_blocking(move || dir_bytes(&dir))
-        .await
-        .map_err(|error| CommandError::storage(error.to_string()))?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = fs::create_dir_all(&dir) {
+            eprintln!("grill: could not make the recordings' folder: {error}");
+        }
+        dir_bytes(&dir)
+    })
+    .await
+    .map_err(|error| CommandError::storage(error.to_string()))?;
     Ok(RecordingsInfo { path, bytes, calls })
 }
 

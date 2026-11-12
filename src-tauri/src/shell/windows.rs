@@ -44,6 +44,35 @@ pub fn toggle<R: Runtime>(app: &AppHandle<R>, label: &str) {
     }
 }
 
+/// The first step of onboarding, the route its window opens with.
+pub const ONBOARDING_ROUTE: &str = "/onboarding";
+
+/// Loads the onboarding window anew at its first step («Удалить всё»): it
+/// was only hidden when onboarding ended, so it still shows the last step
+/// and keeps what the steps remembered in memory.
+pub fn restart_onboarding<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = window(app, ONBOARDING) else {
+        return;
+    };
+    let reloaded = window.url().and_then(|mut url| {
+        url.set_path(ONBOARDING_ROUTE);
+        url.set_query(None);
+        url.set_fragment(None);
+        window.navigate(url)
+    });
+    if let Err(error) = reloaded {
+        eprintln!("grill: failed to start onboarding again: {error}");
+    }
+}
+
+/// «Удалить всё» is done: onboarding shows from its first step, the main
+/// window hides.
+pub fn onboarding_again<R: Runtime>(app: &AppHandle<R>) {
+    restart_onboarding(app);
+    show(app, ONBOARDING);
+    hide(app, MAIN);
+}
+
 /// The window the app opens with: onboarding until it is done, then main.
 pub fn entry_label(onboarding_completed: bool) -> &'static str {
     if onboarding_completed {
@@ -60,5 +89,35 @@ pub fn protect_overlay<R: Runtime>(app: &AppHandle<R>, protected: bool) {
         && let Err(error) = window.set_content_protected(protected)
     {
         eprintln!("grill: failed to set content protection: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tauri::{WebviewUrl, WebviewWindowBuilder, test::mock_builder};
+
+    use super::*;
+
+    /// «Удалить всё» after onboarding ended on «Готово»: the hidden window
+    /// opens its first step, without the query of the last one.
+    #[test]
+    fn onboarding_again_loads_its_first_step() {
+        let app = mock_builder()
+            .build(tauri::generate_context!(test = true))
+            .expect("failed to build the mock app");
+        let window = WebviewWindowBuilder::new(
+            &app,
+            ONBOARDING,
+            WebviewUrl::App("onboarding/done?from=agent".into()),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(window.url().unwrap().path(), "/onboarding/done");
+
+        onboarding_again(app.handle());
+
+        let url = window.url().unwrap();
+        assert_eq!(url.path(), ONBOARDING_ROUTE);
+        assert_eq!(url.query(), None);
     }
 }

@@ -91,7 +91,11 @@ fn recordings_info_counts_the_files_and_the_calls_with_audio() {
             bytes: 0,
             calls: 0,
         },
-        "no folder yet"
+        "no recordings yet"
+    );
+    assert!(
+        fx.recordings_dir().is_dir(),
+        "«Показать в Finder» opens a folder that is there"
     );
 
     let (_, first) = fx.call_with_audio(None, 1_000);

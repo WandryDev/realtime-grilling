@@ -1173,3 +1173,24 @@ fn the_session_serializes_in_camel_case() {
         })
     );
 }
+
+/// «Удалить всё» with «Сразу записывать»: a busy microphone during the
+/// wipe starts no call until the wipe lets go; a live call refuses it.
+#[tokio::test]
+async fn no_call_starts_while_the_data_is_deleted() {
+    let fx = Fixture::new();
+    let hold = fx.calls.hold_idle().await.unwrap();
+
+    fx.calls.start_on_mic("zoom.us");
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!fx.calls.is_active());
+    assert_eq!(fx.count("calls"), 0, "nothing written under the hold");
+
+    drop(hold);
+    fx.until(CallSessionStatus::Live).await;
+    let error = fx.calls.hold_idle().await.err().unwrap();
+    assert!(matches!(error, CommandError::Invalid { .. }), "{error:?}");
+}

@@ -631,6 +631,12 @@ async fn follow_mic(shared: Weak<Shared>, mut events: mpsc::UnboundedReceiver<Mi
     }
 }
 
+/// No call starts while it lives (`CallManager::hold_idle`): a start, the
+/// window's or «Сразу записывать», waits for it to drop.
+pub struct IdleHold<'a> {
+    _control: tokio::sync::MutexGuard<'a, Control>,
+}
+
 /// The call in progress, in the Tauri state. Cheap to clone.
 #[derive(Clone)]
 pub struct CallManager {
@@ -673,6 +679,18 @@ impl CallManager {
     pub fn toggle_steps(&self) -> Vec<WindowStep> {
         let status = self.current().status;
         windows::toggle_call(status, self.shared.overlay.load(Ordering::SeqCst))
+    }
+
+    /// Keeps the manager idle while the hold lives («Удалить всё» deletes
+    /// the data under it). `Invalid` while a call is live or finishing.
+    pub async fn hold_idle(&self) -> CommandResult<IdleHold<'_>> {
+        let control = self.shared.control.lock().await;
+        if is_active(&control.session) {
+            return Err(CommandError::invalid(
+                "Идёт звонок: завершите или удалите его, потом удаляйте данные",
+            ));
+        }
+        Ok(IdleHold { _control: control })
     }
 
     /// "Начать": creates the call and records it, or returns the call in

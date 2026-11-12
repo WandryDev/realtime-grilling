@@ -285,19 +285,32 @@ fn a_recording_in_progress_is_untouched() {
     assert_eq!(fx.segments(&live), 1);
 }
 
-/// One `DataChanged` per pass, whatever it deleted: the calls without a
-/// project scope, so every window re-reads its calls.
+/// One `DataChanged` per call a pass touched, however much of it went
+/// (the audio and the transcript of one call: one event): each call's
+/// pages re-read. Without a project scope, so every window re-reads its
+/// calls too. Nothing deleted: no event.
 #[test]
-fn one_event_per_pass() {
+fn one_event_per_call_touched() {
     let fx = Fixture::new("30", "90");
-    for days in [31, 45, 100, 120] {
-        fx.call(days, false);
-    }
+    let mut touched: Vec<String> = [31, 45, 100, 120]
+        .into_iter()
+        .map(|days| fx.call(days, false).0)
+        .collect();
+    fx.call(10, false);
     let (purged, events, _) = fx.pass();
     assert_eq!(purged.audio.len(), 4);
     assert_eq!(purged.transcripts.len(), 2);
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0].entity, Entity::Call);
-    assert_eq!(events[0].project_id, None);
-    assert_eq!(events[0].change, Change::Updated);
+    let mut ids: Vec<String> = events.iter().map(|event| event.id.clone()).collect();
+    ids.sort();
+    touched.sort();
+    assert_eq!(ids, touched, "{events:?}");
+    for event in &events {
+        assert_eq!(event.entity, Entity::Call);
+        assert_eq!(event.project_id, None);
+        assert_eq!(event.change, Change::Updated);
+    }
+
+    let (purged, events, _) = fx.pass();
+    assert!(purged.is_empty());
+    assert!(events.is_empty());
 }

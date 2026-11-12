@@ -4,7 +4,7 @@
 
 - [x] 1.1 Белый список ключей настроек с проверкой значений; удаление ключей `systemAudio`, `recordingsFolder`, `interfaceLanguage`, `finalCheck`, `agentSignedIn` (design.md, решение 6). Миграция `0011`:
   - удаление строк этих ключей;
-  - `microphone = 'airpods'` → `'system'`;
+  - `microphone = 'airpods'` → `'system'` (`'macbook'` → `'system'` — миграция `0012`);
   - колонка `recordings.transcript_deleted_at`.
 
   Проверка: тест — неизвестный ключ даёт `Invalid` и ничего не пишет; известные ключи с неверным значением отвергаются; миграция с базы версии 10 переносит остальные настройки без изменений, `foreign_key_check` пуст.
@@ -32,7 +32,7 @@
   - «Не удалять»;
   - расшифровка старше срока удалена, итоги и вопросы остались, стоит `transcript_deleted_at`;
   - идущая запись не тронута;
-  - одно `DataChanged` на проход.
+  - по одному `DataChanged` на каждый затронутый звонок.
 - [x] 3.3 `data_delete_all` (решение 8): таблицы данных, файлы записей, секреты коннекторов, сброс настроек, онбординг заново. Проверка: тест на временной базе и фальшивом `SecretStore` — после вызова таблицы пусты, папка записей пуста, секретов нет, настройки по умолчанию.
 
 ## 4. Агент (Rust)
@@ -71,7 +71,7 @@
 
 ## 6. Проверка и выпуск
 
-- [ ] 6.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate settings-real --strict` проходит.
+- [x] 6.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate settings-real --strict` проходит.
 - [ ] 6.2 Changeset (`minor`): настоящие настройки звука, данных и агента; убранные контролы. Проверка: файл `.changeset/settings-real.md` есть.
 - [ ] 6.3 Ручной прогон в подписанном бандле:
   - выбор AirPods и индикатор;

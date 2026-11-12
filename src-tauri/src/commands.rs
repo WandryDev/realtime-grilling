@@ -784,9 +784,10 @@ pub async fn data_summary(storage: State<'_, Storage>) -> CommandResult<DataSumm
 /// «Удалить всё»: every project, person, call, transcript, summary and
 /// connection, the recordings' files, the connectors' secrets; the settings
 /// back to their defaults (no `agentPath`, onboarding not done). Then
-/// onboarding shows and the main window hides. `Invalid` while a call or a
-/// recording goes on (discard it first); `External` when a file or a secret
-/// could not be removed (the rest is gone all the same).
+/// onboarding shows from its first step and the main window hides.
+/// `Invalid` while a call or a recording goes on (discard it first); no
+/// call starts until it is done. `External` when a file or a secret could
+/// not be removed (the rest is gone all the same).
 #[tauri::command]
 #[specta::specta]
 pub async fn data_delete_all(
@@ -798,7 +799,9 @@ pub async fn data_delete_all(
     calls: State<'_, CallManager>,
     cache: State<'_, AudioCache>,
 ) -> CommandResult<()> {
-    if recorder.is_recording() || calls.is_active() {
+    // «Сразу записывать» would start a call mid-wipe: none starts under it.
+    let _no_call = calls.hold_idle().await?;
+    if recorder.is_recording() {
         return Err(CommandError::invalid(
             "Идёт звонок: завершите или удалите его, потом удаляйте данные",
         ));
@@ -838,8 +841,7 @@ pub async fn data_delete_all(
     let cache = cache.inner().clone();
     let _ = tauri::async_runtime::spawn_blocking(move || cache.clear()).await;
     shell::remember_onboarding(&app, false);
-    windows::show(&app, windows::ONBOARDING);
-    windows::hide(&app, windows::MAIN);
+    windows::onboarding_again(&app);
     deleted
 }
 
