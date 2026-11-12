@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback } from "react";
+import { type ComponentType, type ReactNode, useCallback } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -14,9 +14,14 @@ import {
   ContextCard,
   ContextCardBody,
   ContextCardCode,
+  ContextCardEmpty,
+  ContextCardEmptyContent,
+  ContextCardEmptyDescription,
+  ContextCardEmptyTitle,
   ContextCardHeader,
   ContextCardHeading,
   ContextCardMeta,
+  ContextCardOpen,
   ContextCardQuestionLink,
   ContextCardQuote,
   ContextCardQuoteMeta,
@@ -28,9 +33,11 @@ import {
   ContextColumnHeader,
   type ContextSource,
   contextCardSourceVariants,
+  FileSourceIcon,
 } from "@/components/ui/context-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { handleServiceLink } from "@/features/connectors/api";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";
@@ -73,13 +80,26 @@ export function ContextItemView({ item }: { item: ContextItem }) {
     case "brief":
       return <BriefLoadingCard meta={item.meta} title={item.title} />;
     case "sources":
-      return <SourceStatusList className="pt-1.5" sources={item.items} />;
+      return (
+        <SourceStatusList
+          className="pt-1.5"
+          label={item.label}
+          sources={item.items}
+        />
+      );
+    case "empty":
+      return <ContextEmpty item={item} />;
     default:
       return <FindingCard finding={item} />;
   }
 }
 
-/** What the agent found: GitHub code, a ClickUp task, an Outline doc. */
+/**
+ * What the agent found: GitHub code, a ClickUp task, an Outline doc, a
+ * file of the project. A finding with a `url` opens in its service (the
+ * default browser in the app); «к вопросу …» shows the question in the
+ * list; «Убрать» hides the backend's finding in every window.
+ */
 export function FindingCard({
   className,
   finding,
@@ -87,8 +107,18 @@ export function FindingCard({
   className?: string;
   finding: Extract<ContextItem, { kind: "finding" }>;
 }) {
+  const { onHideFinding, onShowQuestion } = useCallActions();
+  const { id, questionId } = finding;
+  const hide = useCallback(() => onHideFinding?.(id), [id, onHideFinding]);
+  const showQuestion = useCallback(() => {
+    if (questionId !== undefined) {
+      onShowQuestion?.(questionId);
+    }
+  }, [onShowQuestion, questionId]);
+  const canHide = finding.hideable && onHideFinding;
+
   return (
-    <ContextCard className={className}>
+    <ContextCard aria-label={finding.title} className={className}>
       <ContextCardHeader>
         <ContextCardSource source={finding.source} />
         <ContextCardHeading>
@@ -105,6 +135,14 @@ export function FindingCard({
             {finding.status}
           </Badge>
         ) : null}
+        {finding.url ? (
+          <ContextCardOpen
+            href={finding.url}
+            onClick={handleServiceLink}
+            rel="noopener noreferrer"
+            target="_blank"
+          />
+        ) : null}
       </ContextCardHeader>
       {finding.body ? (
         <ContextCardBody className={cn(finding.bodyStrong && "font-medium")}>
@@ -120,12 +158,44 @@ export function FindingCard({
           {finding.quote}
         </ContextCardQuote>
       ) : null}
-      {finding.questionLink ? (
-        <ContextCardQuestionLink>
-          {finding.questionLink}
-        </ContextCardQuestionLink>
+      {finding.questionLink || canHide ? (
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          {finding.questionLink ? (
+            <ContextCardQuestionLink onClick={showQuestion}>
+              {finding.questionLink}
+            </ContextCardQuestionLink>
+          ) : null}
+          {canHide ? (
+            <Button
+              className="ml-auto shrink-0"
+              onClick={hide}
+              size="xs"
+              variant="ghost"
+            >
+              Убрать
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </ContextCard>
+  );
+}
+
+/** Nothing to search in: why, and what to do after the call. */
+function ContextEmpty({
+  item,
+}: {
+  item: Extract<ContextItem, { kind: "empty" }>;
+}) {
+  return (
+    <ContextCardEmpty>
+      <ContextCardEmptyContent>
+        <ContextCardEmptyTitle>{item.title}</ContextCardEmptyTitle>
+        <ContextCardEmptyDescription>
+          {item.description}
+        </ContextCardEmptyDescription>
+      </ContextCardEmptyContent>
+    </ContextCardEmpty>
   );
 }
 
@@ -212,25 +282,31 @@ export function BriefLoadingCard({
   );
 }
 
-const SOURCE_ICONS: Record<ContextSource, typeof GitHubIcon> = {
+const SOURCE_ICONS: Record<
+  ContextSource,
+  ComponentType<{ className?: string }>
+> = {
   clickup: ClickUpIcon,
+  file: FileSourceIcon,
   github: GitHubIcon,
   outline: OutlineIcon,
 };
 
-/** Sources the brief is read from, with what each is doing right now. */
+/**
+ * Sources the brief is read from (or the call's findings searched in),
+ * with what each is doing right now.
+ */
 export function SourceStatusList({
   className,
+  label = "Источники брифа",
   sources,
 }: {
   className?: string;
+  label?: string;
   sources: Extract<ContextItem, { kind: "sources" }>["items"];
 }) {
   return (
-    <ul
-      aria-label="Источники брифа"
-      className={cn("flex flex-col gap-0.5", className)}
-    >
+    <ul aria-label={label} className={cn("flex flex-col gap-0.5", className)}>
       {sources.map((source) => {
         const Icon = SOURCE_ICONS[source.source];
         return (

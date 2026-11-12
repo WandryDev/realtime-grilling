@@ -35,6 +35,16 @@ export function QuestionsPanel({
   );
 }
 
+/**
+ * Scrolls the questions list to a question (its row carries
+ * `data-question-id`); nothing when it isn't on the screen.
+ */
+export function scrollToQuestion(questionId: string) {
+  const id = CSS.escape(questionId);
+  const row = document.querySelector(`[data-question-id="${id}"]`);
+  row?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+}
+
 /** Id of the section an anchor scrolls to. */
 export function topicSectionId(prefix: string, topicId: string) {
   return `${prefix}-topic-${topicId}`;

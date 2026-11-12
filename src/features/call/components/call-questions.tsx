@@ -40,6 +40,7 @@ export function CallQuestions({
     empty,
     finalCheck,
     frozen = false,
+    highlightedId,
     hoveredId,
     noTopic,
     parkedFinalCheck,
@@ -68,12 +69,14 @@ export function CallQuestions({
       {finalCheck ? (
         <FinalCheck
           finalCheck={finalCheck}
+          highlightedId={highlightedId}
           id={topicSectionId(prefix, FINAL_CHECK_TOPIC_ID)}
         />
       ) : null}
       {current ? (
         <CurrentTopic
           frozen={frozen}
+          highlightedId={highlightedId}
           hoveredId={hoveredId}
           id={topicSectionId(prefix, current.id)}
           topic={current}
@@ -82,6 +85,7 @@ export function CallQuestions({
       {previous ? (
         <EarlierTopic
           className="pt-4"
+          highlightedId={highlightedId}
           id={topicSectionId(prefix, previous.id)}
           topic={previous}
         />
@@ -89,6 +93,7 @@ export function CallQuestions({
       {earlier.map((topic) => (
         <EarlierTopic
           className="pt-4"
+          highlightedId={highlightedId}
           id={topicSectionId(prefix, topic.id)}
           key={topic.id}
           topic={topic}
@@ -97,6 +102,7 @@ export function CallQuestions({
       {noTopic ? (
         <EarlierTopic
           className="pt-2"
+          highlightedId={highlightedId}
           id={topicSectionId(prefix, noTopic.id)}
           topic={noTopic}
         />
@@ -109,12 +115,14 @@ export function CallQuestions({
 export function CurrentTopic({
   className,
   frozen = false,
+  highlightedId,
   hoveredId,
   id,
   topic,
 }: {
   className?: string;
   frozen?: boolean;
+  highlightedId?: string;
   hoveredId?: string;
   id?: string;
   topic: TopicData;
@@ -127,14 +135,25 @@ export function CurrentTopic({
       title={topic.title}
     >
       {topic.pinned ? (
-        <PinnedQuestion question={topic.pinned} topicId={topic.id} />
+        <PinnedQuestion
+          highlighted={topic.pinned.id === highlightedId}
+          question={topic.pinned}
+          topicId={topic.id}
+        />
       ) : null}
       {topic.main ? (
-        <MainQuestion frozen={frozen} question={topic.main} />
+        <MainQuestion
+          frozen={frozen}
+          highlighted={
+            topic.main.id !== undefined && topic.main.id === highlightedId
+          }
+          question={topic.main}
+        />
       ) : null}
       {topic.questions.map((question) => (
         <OpenQuestion
           frozen={frozen}
+          highlighted={question.id === highlightedId}
           hovered={question.id === hoveredId}
           key={question.id}
           question={question}
@@ -151,10 +170,12 @@ export function CurrentTopic({
 /** Earlier topics and "Без темы": compact rows under a hairline. */
 export function EarlierTopic({
   className,
+  highlightedId,
   id,
   topic,
 }: {
   className?: string;
+  highlightedId?: string;
   id?: string;
   topic: TopicData;
 }) {
@@ -167,7 +188,12 @@ export function EarlierTopic({
       variant="divided"
     >
       {topic.questions.map((question) => (
-        <OpenQuestion key={question.id} question={question} variant="compact" />
+        <OpenQuestion
+          highlighted={question.id === highlightedId}
+          key={question.id}
+          question={question}
+          variant="compact"
+        />
       ))}
       {topic.history ? (
         <TopicHistory
@@ -187,10 +213,12 @@ export function EarlierTopic({
 export function FinalCheck({
   className,
   finalCheck,
+  highlightedId,
   id,
 }: {
   className?: string;
   finalCheck: FinalCheckData;
+  highlightedId?: string;
   id?: string;
 }) {
   return (
@@ -204,9 +232,16 @@ export function FinalCheck({
         title={finalCheck.title}
         variant="plain"
       >
-        <MainQuestion question={finalCheck.main} />
+        <MainQuestion
+          highlighted={
+            finalCheck.main.id !== undefined &&
+            finalCheck.main.id === highlightedId
+          }
+          question={finalCheck.main}
+        />
         {finalCheck.questions.map((question) => (
           <OpenQuestion
+            highlighted={question.id === highlightedId}
             key={question.id}
             pinnable={false}
             question={question}

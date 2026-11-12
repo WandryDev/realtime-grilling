@@ -30,6 +30,7 @@ import { useDemoState } from "@/lib/use-demo-state";
 import {
   actOnQuestion,
   type CallAgentUpdate,
+  hideFinding,
   questionsFromBackend,
   reconnectSource,
   requestSystemAudio,
@@ -40,6 +41,7 @@ import {
   waitForTranscript,
 } from "../api";
 import { FINAL_CHECK_TOPIC_ID } from "../components/call-questions";
+import { scrollToQuestion } from "../components/questions-panel";
 import {
   FEED_LENGTH,
   feedCheckpoint,
@@ -216,6 +218,9 @@ function pinnedIn(state: LiveCallState, topicId: string) {
   const { current } = state.data.questions;
   return current?.id === topicId ? current.pinned?.id : undefined;
 }
+
+/** How long a question stays ringed after «к вопросу …». */
+const QUESTION_HIGHLIGHT_MS = 2500;
 
 /** «Начать звонок» without a call: the start widget, over the windows. */
 function openStartWidget() {
@@ -590,6 +595,39 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
     [track]
   );
 
+  // «Убрать» on a finding: the backend hides it, and its event takes it
+  // out of every window.
+  const onHideFinding = useCallback(
+    (findingId: string) => {
+      if (fromBackend && recordingId) {
+        hideFinding(recordingId, findingId).then(actionFailed, actionFailed);
+      }
+    },
+    [fromBackend, recordingId]
+  );
+
+  // «к вопросу …»: the list scrolls to the question and rings it a moment.
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (highlightTimer.current !== null) {
+        clearTimeout(highlightTimer.current);
+      }
+    },
+    []
+  );
+  const onShowQuestion = useCallback((questionId: string) => {
+    dispatch({ questionId, type: "highlight-question" });
+    scrollToQuestion(questionId);
+    if (highlightTimer.current !== null) {
+      clearTimeout(highlightTimer.current);
+    }
+    highlightTimer.current = setTimeout(() => {
+      highlightTimer.current = null;
+      dispatch({ questionId: null, type: "highlight-question" });
+    }, QUESTION_HIGHLIGHT_MS);
+  }, []);
+
   const onCancelFinish = useCallback(() => {
     resumeCall();
     if (ownCountdown) {
@@ -663,12 +701,14 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       onCancelFinish,
       onCloseWindow,
       onEnd: end,
+      onHideFinding,
       onLeaveFinalCheck: () => dispatch({ type: "leave-final-check" }),
       onMicContinue,
       onQuestionAction,
       onReconnect,
       onRestore,
       onReturnToFinalCheck: () => dispatch({ type: "return-final-check" }),
+      onShowQuestion,
       onToggleTranscript: () => dispatch({ type: "toggle-transcript" }),
       onUnpin,
     }),
@@ -677,10 +717,12 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
       onBannerAction,
       onCancelFinish,
       onCloseWindow,
+      onHideFinding,
       onMicContinue,
       onQuestionAction,
       onReconnect,
       onRestore,
+      onShowQuestion,
       onUnpin,
     ]
   );

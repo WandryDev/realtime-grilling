@@ -28,10 +28,10 @@ import type { CallFeedEvent } from "./types";
  *
  * `layerTauri` takes the transcript from the recognizer (the recording
  * running now, read first, then its events) and whether recognition works
- * from the recording status. Topics, questions, the final check and the
- * agent's state are the backend's (`agent`, agent-fast-loop design.md,
- * decision 11); the script only plays its context cards until the slow
- * loop comes.
+ * from the recording status. Topics, questions, the final check, the
+ * agent's state and the context column's findings are the backend's
+ * (`agent`, agent-fast-loop design.md, decision 11; agent-slow-loop
+ * design.md, decisions 7 and 8): nothing of the script plays there.
  */
 
 /**
@@ -63,12 +63,6 @@ function playScript(
     )
   );
 }
-
-/** The script's context cards: the transcript and the questions are real. */
-const CONTEXT_SCRIPT: readonly FeedStep[] = CALL_SCRIPT.map((step) => ({
-  ...step,
-  events: step.events.filter((event) => event.type === "context"),
-}));
 
 /**
  * What the backend says about the questions of a recording: its whole
@@ -185,6 +179,14 @@ export class CallBackend extends Context.Service<
     readonly retryAgent: (
       recordingId: string | null
     ) => Effect.Effect<void, BackendError>;
+    /**
+     * «Убрать» on a finding of the slow loop: the backend hides it and
+     * every window reads the call state again. The mock has none.
+     */
+    readonly hideFinding: (
+      recordingId: string,
+      findingId: string
+    ) => Effect.Effect<void, BackendError>;
     /** Reconnects an integration that lost its access (GitHub). */
     readonly reconnectSource: Effect.Effect<void>;
     /** Opens the privacy settings and waits for the permission. */
@@ -197,6 +199,7 @@ export class CallBackend extends Context.Service<
     actOnQuestion: () => Effect.void,
     agent: () => Stream.empty,
     feed: (from: number) => playScript(CALL_SCRIPT, from),
+    hideFinding: () => Effect.void,
     reconnectSource: Effect.sleep(SOURCE_RECONNECT_MS),
     requestSystemAudio: Effect.sleep(SYSTEM_AUDIO_GRANT_MS),
     retryAgent: () => Effect.sleep(AGENT_RETRY_MS),
@@ -264,7 +267,7 @@ export class CallBackend extends Context.Service<
       });
 
       const live = Stream.merge(transcription, transcript).pipe(
-        // A failed read or listen leaves the feed to the script.
+        // A failed read or listen ends the feed: the window keeps what it has.
         Stream.catch(() => Stream.empty)
       );
 
@@ -272,8 +275,12 @@ export class CallBackend extends Context.Service<
         actOnQuestion: (id: string, action: QuestionAction) =>
           call(() => commands.questionsAct(id, action)).pipe(Effect.asVoid),
         agent: agentUpdates,
-        feed: (from: number) =>
-          Stream.merge(playScript(CONTEXT_SCRIPT, from), live),
+        // No script: the window has no position in it to resume from.
+        feed: () => live,
+        hideFinding: (recordingId: string, findingId: string) =>
+          call(() => commands.contextFindingHide(recordingId, findingId)).pipe(
+            Effect.asVoid
+          ),
         reconnectSource: Effect.sleep(SOURCE_RECONNECT_MS),
         requestSystemAudio: Effect.sleep(SYSTEM_AUDIO_GRANT_MS),
         retryAgent: (recordingId: string | null) =>

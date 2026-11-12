@@ -4,6 +4,7 @@ import { routes } from "@/lib/routes";
 
 import {
   AGENT_LISTENING,
+  toAgentContext,
   toAgentQuestions,
   toAgentStatusView,
   withFooters,
@@ -37,7 +38,9 @@ import type {
  * feed events and the clicks change them here, with `stash` for «Вернуть».
  * In Tauri the backend keeps them (`backend`): every read of its call state
  * replaces the topics through ./agent-state.ts, the clicks go to the
- * backend and nothing is stashed.
+ * backend and nothing is stashed. The «Контекст» column is the backend's
+ * too: every read rebuilds it from the slow loop's findings, the demo's
+ * context cards stay in the script.
  */
 
 /** The backend's questions and agent (Tauri). */
@@ -88,6 +91,8 @@ export type LiveCallAction =
   | { entryId: string; topicId: string; type: "restore" }
   | { topicId: string; type: "unpin" }
   | { type: "toggle-transcript" }
+  /** «к вопросу …» on a context card; null: the highlight is over. */
+  | { questionId: string | null; type: "highlight-question" }
   | { type: "leave-final-check" }
   | { type: "return-final-check" }
   | {
@@ -195,6 +200,9 @@ export function createLiveCall(data: CallScreenData): LiveCallState {
   };
 }
 
+/** The column's note before the first read of the backend's call state. */
+const BACKEND_CONTEXT_DESCRIPTION = "найдено в материалах";
+
 /** The call as it starts: the agent listens, the brief is being read. */
 export function startingCall() {
   return createLiveCall(CALL_SCREENS.starting);
@@ -202,7 +210,7 @@ export function startingCall() {
 
 /**
  * The call as it starts in Tauri: the transcript is the recognizer's, the
- * questions the backend's, so none of the demo's yet.
+ * questions and the context the backend's, so none of the demo's yet.
  */
 export function backendCall(): LiveCallState {
   const starting = startingCall();
@@ -211,6 +219,7 @@ export function backendCall(): LiveCallState {
     backend: { state: null, status: null, thinkingSince: null },
     data: {
       ...starting.data,
+      context: { description: BACKEND_CONTEXT_DESCRIPTION, items: [] },
       questions: { agent: LIVE_AGENT, anchors: [], empty: AGENT_LISTENING },
       transcript: { ...starting.data.transcript, items: [] },
     },
@@ -796,7 +805,8 @@ function withAgentFooters(state: LiveCallState): LiveCallState {
 
 /**
  * A read of the backend's call state replaces the topics, the final check
- * (kept aside while you are back at the topics) and the footers.
+ * (kept aside while you are back at the topics), the footers and the
+ * context column.
  */
 function applyCallState(
   before: LiveCallState,
@@ -818,14 +828,16 @@ function applyCallState(
     parkedFinalCheck: parked ? view.finalCheck : undefined,
     previous: view.previous,
   };
+  const withNext = withQuestions(state, next);
   return withAgentFooters({
-    ...withQuestions(state, next),
+    ...withNext,
     backend: {
       startedAt: action.startedAt,
       state: action.state,
       status: state.backend?.status ?? null,
       thinkingSince: state.backend?.thinkingSince ?? null,
     },
+    data: { ...withNext.data, context: toAgentContext(action.state) },
   });
 }
 
@@ -881,6 +893,22 @@ function applyAgentStatus(
 
 /* Reducer */
 
+/** A second passed: the call time and the countdowns. */
+function tick(
+  state: LiveCallState,
+  elapsed: number | undefined
+): LiveCallState {
+  return {
+    ...state,
+    agentRetryIn:
+      state.agentRetryIn === null ? null : Math.max(0, state.agentRetryIn - 1),
+    elapsed: state.data.finishing
+      ? state.elapsed
+      : (elapsed ?? state.elapsed + 1),
+    micLeft: state.micLeft === null ? null : Math.max(0, state.micLeft - 1),
+  };
+}
+
 const LIVE_AGENT = { state: "listening" } as const;
 
 export function liveCallReducer(
@@ -894,17 +922,7 @@ export function liveCallReducer(
     case "feed":
       return withAgentFooters(applyFeed(state, action.event));
     case "tick":
-      return {
-        ...state,
-        agentRetryIn:
-          state.agentRetryIn === null
-            ? null
-            : Math.max(0, state.agentRetryIn - 1),
-        elapsed: data.finishing
-          ? state.elapsed
-          : (action.elapsed ?? state.elapsed + 1),
-        micLeft: state.micLeft === null ? null : Math.max(0, state.micLeft - 1),
-      };
+      return tick(state, action.elapsed);
     case "question":
       return questionAction(
         state,
@@ -929,6 +947,17 @@ export function liveCallReducer(
           transcript: {
             ...data.transcript,
             collapsed: !data.transcript.collapsed,
+          },
+        },
+      };
+    case "highlight-question":
+      return {
+        ...state,
+        data: {
+          ...data,
+          questions: {
+            ...questions,
+            highlightedId: action.questionId ?? undefined,
           },
         },
       };

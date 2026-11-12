@@ -98,6 +98,24 @@ export function retryAgentNow(recordingId: string): Promise<string | null> {
   );
 }
 
+/**
+ * «Убрать» on a finding of the backend: every window loses it with the
+ * next `CallStateChanged`. Resolves to why it failed, or null.
+ */
+export function hideFinding(
+  recordingId: string,
+  findingId: string
+): Promise<string | null> {
+  return appRuntime.runPromise(
+    CallBackend.use((backend) =>
+      backend.hideFinding(recordingId, findingId)
+    ).pipe(
+      Effect.as(null),
+      Effect.catch((error) => Effect.succeed(error.message))
+    )
+  );
+}
+
 /* One-off operations */
 
 function runThen(

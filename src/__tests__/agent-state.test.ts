@@ -313,6 +313,54 @@ describe("toAgentQuestions", () => {
   });
 });
 
+describe("findings of the call (document evidence)", () => {
+  it("an answer shows the client's words, not the finding it also cites", () => {
+    const state = callState({
+      currentTopicId: CRM.id,
+      questions: [
+        question("q-shift", "Сколько операторов в смене?", {
+          answerEvidence: [
+            { id: "f-1", quote: "в смене три оператора", source: "document" },
+            segmentEvidence("s-4", "Сейчас их пятеро"),
+          ],
+          status: "answered",
+          topicId: CRM.id,
+          updatedAt: at(21),
+        }),
+      ],
+      topics: [CRM],
+    });
+
+    const history = toAgentQuestions(state, { now: LATER }).current?.history;
+
+    expect(history?.items[0]?.answer).toBe("«Сейчас их пятеро»");
+  });
+
+  it("a finding cited by a contradiction leaves the transcript footers alone", () => {
+    const items: TranscriptItem[] = [
+      {
+        id: `${STATE_RECORDING}:others:8000`,
+        kind: "client",
+        segment: { id: "s-4", startMs: 8000 },
+        text: "Сейчас их пятеро",
+      },
+    ];
+    const questions = [
+      question("q-shift", "Пять операторов или три?", {
+        evidence: [
+          segmentEvidence("s-4", "Сейчас их пятеро"),
+          { id: "f-1", quote: "в смене три оператора", source: "document" },
+        ],
+        gapType: "contradiction",
+      }),
+    ];
+
+    const [phrase] = withFooters(items, questions, NOON);
+
+    expect(phrase?.kind === "client" ? phrase.footer : null).toBeUndefined();
+  });
+});
+
 describe("withFooters", () => {
   const phrase = (
     id: string,

@@ -65,6 +65,19 @@ export function QuestionTagBadge({
   }
 }
 
+/**
+ * The row a context card points at («к вопросу …»): found by its question
+ * id, ringed in accent while highlighted.
+ */
+function questionTarget(id: string | undefined, highlighted: boolean) {
+  return {
+    "data-highlighted": highlighted ? "" : undefined,
+    "data-question-id": id,
+  };
+}
+
+const HIGHLIGHT = "ring-2 ring-accent ring-inset";
+
 /** Single-key shortcuts of the quick actions, while the row has focus. */
 const SHORTCUTS: Record<string, QuestionQuickAction> = {
   h: "hide",
@@ -80,6 +93,7 @@ const SHORTCUTS: Record<string, QuestionQuickAction> = {
 export function OpenQuestion({
   className,
   frozen = false,
+  highlighted = false,
   hovered = false,
   pinnable = true,
   question,
@@ -89,6 +103,8 @@ export function OpenQuestion({
   className?: string;
   /** The agent stopped: the title grays out and the actions go away. */
   frozen?: boolean;
+  /** A context card pointed at it. */
+  highlighted?: boolean;
   /** Pin the hover state for the static screen. */
   hovered?: boolean;
   /** Offer "Закрепить"; the final check list doesn't. */
@@ -126,8 +142,13 @@ export function OpenQuestion({
 
   return (
     <Question
-      className={cn(question.topic && "py-4", className)}
+      className={cn(
+        question.topic && "py-4",
+        highlighted && HIGHLIGHT,
+        className
+      )}
       data-preview={hovered ? "hover" : undefined}
+      {...questionTarget(question.id, highlighted)}
       onKeyDown={canAct ? onKeyDown : undefined}
       variant={variant}
     >
@@ -167,14 +188,21 @@ export function OpenQuestion({
 export function MainQuestion({
   className,
   frozen = false,
+  highlighted = false,
   question,
 }: {
   className?: string;
   frozen?: boolean;
+  /** A context card pointed at it. */
+  highlighted?: boolean;
   question: MainQuestionData;
 }) {
   return (
-    <Question className={className} variant="main">
+    <Question
+      className={cn(highlighted && HIGHLIGHT, className)}
+      variant="main"
+      {...questionTarget(question.id, highlighted)}
+    >
       <QuestionContent>
         <QuestionStatus>{question.status}</QuestionStatus>
         <QuestionTitle className={cn(frozen && "text-muted-foreground")}>
@@ -189,10 +217,13 @@ export function MainQuestion({
 /** Pinned by you: gray plate above the main question, "Открепить". */
 export function PinnedQuestion({
   className,
+  highlighted = false,
   question,
   topicId,
 }: {
   className?: string;
+  /** A context card pointed at it. */
+  highlighted?: boolean;
   question: PinnedQuestionData;
   topicId?: string;
 }) {
@@ -204,7 +235,10 @@ export function PinnedQuestion({
   }, [onUnpin, topicId]);
 
   return (
-    <Question className={cn("bg-surface py-4", className)}>
+    <Question
+      className={cn("bg-surface py-4", highlighted && HIGHLIGHT, className)}
+      {...questionTarget(question.id, highlighted)}
+    >
       <QuestionContent>
         <QuestionTopic className="gap-1.5 pb-1 font-normal">
           <PinIcon className="size-[13px] shrink-0" strokeWidth={1.6} />

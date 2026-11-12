@@ -1,7 +1,9 @@
 import type {
   AgentStatus,
   CallState,
+  ContextFinding,
   Evidence,
+  FindingSourceKind,
   GapType,
   Question,
   Topic,
@@ -12,6 +14,8 @@ import { routes } from "@/lib/routes";
 import type {
   AgentBannerData,
   AgentStatusData,
+  ContextData,
+  ContextItem,
   FinalCheckData,
   HistoryEntry,
   ListeningEmptyData,
@@ -38,7 +42,10 @@ import type {
  * - every topic's history: answered with the quote, hidden and asked
  *   with «Вернуть»;
  * - the final check, each question under its topic's title;
- * - transcript footers from the questions' evidence segments.
+ * - transcript footers from the questions' evidence segments;
+ * - the «Контекст» column: the sources the slow loop searches, its
+ *   search, its findings with the question each points at
+ *   (agent-slow-loop design.md, decision 8).
  *
  * Pure, so the reducer and the overlay share it and the tests read it.
  */
@@ -157,8 +164,14 @@ function pinnedQuestion(
   };
 }
 
+/**
+ * The quote an answer shows: the client's words first, a finding or the
+ * project only when no phrase has one.
+ */
 function quoteOf(evidence: readonly Evidence[] | null) {
-  const quote = evidence?.find((item) => item.quote.trim() !== "")?.quote;
+  const quoted = (evidence ?? []).filter((item) => item.quote.trim() !== "");
+  const quote = (quoted.find((item) => item.source === "segment") ?? quoted[0])
+    ?.quote;
   return quote ? `«${quote.trim()}»` : undefined;
 }
 
@@ -636,4 +649,148 @@ export function toAgentStatusView(
         ...usage,
       };
   }
+}
+
+/* Context */
+
+/** The column's note next to «Контекст». */
+const CONTEXT_DESCRIPTION = "найдено в материалах";
+
+/** No ready sources: nothing to search in, and no findings will come. */
+const NO_SOURCES: ContextItem = {
+  description:
+    "Добавьте файлы, документы Outline или задачи ClickUp на странице проекта после звонка.",
+  id: "ctx-no-sources",
+  kind: "empty",
+  title: "Искать негде: у проекта нет источников",
+};
+
+const FINDING_SOURCE: Record<
+  FindingSourceKind,
+  { label: string; source: "clickup" | "file" | "outline" }
+> = {
+  clickup: { label: "Задача ClickUp", source: "clickup" },
+  file: { label: "Файл проекта", source: "file" },
+  outline: { label: "Документ Outline", source: "outline" },
+};
+
+/** "3 файла", "12 документов", "1 задача". */
+function sourceCount(count: number, one: string, few: string, many: string) {
+  return `${count} ${plural(count, one, few, many)}`;
+}
+
+/** The ready sources the search covers, the kinds with none left out. */
+function sourcesItem(state: CallState): ContextItem | undefined {
+  const { clickup, files, outline } = state.contextSources;
+  const items: Extract<ContextItem, { kind: "sources" }>["items"] = [];
+  if (files > 0) {
+    items.push({
+      id: "files",
+      name: "Файлы",
+      source: "file",
+      status: sourceCount(files, "файл", "файла", "файлов"),
+    });
+  }
+  if (outline > 0) {
+    items.push({
+      id: "outline",
+      name: "Outline",
+      source: "outline",
+      status: sourceCount(outline, "документ", "документа", "документов"),
+    });
+  }
+  if (clickup > 0) {
+    items.push({
+      id: "clickup",
+      name: "ClickUp",
+      source: "clickup",
+      status: sourceCount(clickup, "задача", "задачи", "задач"),
+    });
+  }
+  if (items.length === 0) {
+    return;
+  }
+  return { id: "ctx-sources", items, kind: "sources", label: "Где ищу" };
+}
+
+function cites(question: Question, findingId: string) {
+  return question.evidence.some(
+    (item) => item.source === "document" && item.id === findingId
+  );
+}
+
+/**
+ * The open question a finding points at: the one it is about, else the
+ * first that cites it. Answered, asked or hidden ones are no longer in the
+ * list, so there is nothing to show.
+ */
+function questionOf(
+  finding: ContextFinding,
+  questions: readonly Question[]
+): Question | undefined {
+  const open = questions.filter(isOpen);
+  return (
+    open.find((question) => question.id === finding.questionId) ??
+    open.find((question) => cites(question, finding.id))
+  );
+}
+
+/** A finding of the slow loop as a context card. */
+export function findingItem(
+  finding: ContextFinding,
+  questions: readonly Question[]
+): ContextItem {
+  const { label, source } = FINDING_SOURCE[finding.sourceKind];
+  const question = questionOf(finding, questions);
+  const url = finding.sourceUrl ?? undefined;
+  return {
+    hideable: true,
+    id: finding.id,
+    kind: "finding",
+    meta: label,
+    source,
+    time: wallClock(finding.createdAt),
+    title: finding.sourceName,
+    ...(finding.note.trim() === "" ? {} : { body: finding.note }),
+    ...(finding.quote.trim() === "" ? {} : { quote: finding.quote }),
+    ...(question
+      ? {
+          questionId: question.id,
+          questionLink: `к вопросу «${question.text}»`,
+        }
+      : {}),
+    ...(url ? { url } : {}),
+  };
+}
+
+/**
+ * The «Контекст» column from the call state: what the search covers, the
+ * search while it runs, the findings, the newest first (the backend's
+ * order). Without ready sources it says there is nothing to search in.
+ */
+export function toAgentContext(state: CallState): ContextData {
+  const items: ContextItem[] = [];
+  const sources = sourcesItem(state);
+  if (sources) {
+    items.push(sources);
+  } else {
+    items.push(NO_SOURCES);
+  }
+  if (sources && state.contextSearch?.running) {
+    const queries = state.contextSearch.queries.filter(
+      (query) => query.trim() !== ""
+    );
+    items.push({
+      id: "ctx-searching",
+      kind: "searching",
+      text:
+        queries.length > 0
+          ? `Ищу в материалах: ${queries.join(", ")}`
+          : "Ищу в материалах",
+    });
+  }
+  for (const finding of state.findings) {
+    items.push(findingItem(finding, state.questions));
+  }
+  return { description: CONTEXT_DESCRIPTION, items };
 }

@@ -204,6 +204,8 @@ export interface QuestionsData {
   finalCheck?: FinalCheckData;
   /** The agent stopped: questions stay readable but gray out. */
   frozen?: boolean;
+  /** Question a context card pointed at («к вопросу …»), highlighted. */
+  highlightedId?: string;
   /** Question shown in its hover state with the quick actions. */
   hoveredId?: string;
   /** "Без темы": questions waiting for a convenient moment. */
@@ -227,10 +229,14 @@ export type ContextItem =
       /** Body as a title (ClickUp task name). */
       bodyStrong?: boolean;
       code?: string;
+      /** «Убрать»: the backend's finding (Tauri), hidden by its `id`. */
+      hideable?: boolean;
       id: string;
       kind: "finding";
       meta: string;
       metaMono?: boolean;
+      /** The question `questionLink` scrolls to; without it the link is inert. */
+      questionId?: string;
       questionLink?: string;
       quote?: string;
       quoteMeta?: string;
@@ -239,6 +245,8 @@ export type ContextItem =
       status?: string;
       time?: string;
       title: string;
+      /** The document or task in its service: «Открыть в источнике». */
+      url?: string;
     }
   | {
       action: string;
@@ -254,8 +262,12 @@ export type ContextItem =
       title: string;
     }
   | { id: string; kind: "brief"; meta: string; title: string }
+  /** Nothing to search in: no findings will come. */
+  | { description: string; id: string; kind: "empty"; title: string }
   | {
       id: string;
+      /** Spoken name of the list; «Источники брифа» by default. */
+      label?: string;
       items: {
         done?: boolean;
         id: string;
@@ -343,6 +355,8 @@ export interface CallScreenActions {
   onCloseWindow?: () => void;
   /** "Завершить" in the title bar or on the mic panel. */
   onEnd?: () => void;
+  /** «Убрать» on a finding of the backend. */
+  onHideFinding?: (findingId: string) => void;
   /** "Вернуться к темам" on the final check banner. */
   onLeaveFinalCheck?: () => void;
   /** "Продолжить" on the mic panel. */
@@ -358,6 +372,8 @@ export interface CallScreenActions {
   onRestore?: (topicId: string, entryId: string) => void;
   /** "К финальной проверке" after leaving it. */
   onReturnToFinalCheck?: () => void;
+  /** «к вопросу …» on a context card: show that question in the list. */
+  onShowQuestion?: (questionId: string) => void;
   /** "свернуть" and "Развернуть расшифровку". */
   onToggleTranscript?: () => void;
   /** "Открепить". */
