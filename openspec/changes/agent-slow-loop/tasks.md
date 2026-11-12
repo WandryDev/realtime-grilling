@@ -2,11 +2,11 @@
 
 ## 1. Хранение и контракт (Rust)
 
-- [ ] 1.1 Миграция `0010`: `context_findings` и `slowLoop` в `CHECK` у `agent_calls` (design.md, решение 5). Хранилище находок: вставка, убрать (`hidden_at`), вытеснение (`evicted_at`), видимые находки записи, привязка `question_id`. Проверка:
+- [x] 1.1 Миграция `0010`: `context_findings` и `slowLoop` в `CHECK` у `agent_calls` (design.md, решение 5). Хранилище находок: вставка, убрать (`hidden_at`), вытеснение (`evicted_at`), видимые находки записи, привязка `question_id`. Проверка:
   - тест миграции с базы версии 9: журнал вызовов и вопросы сохранены, `foreign_key_check` пуст;
   - удаление записи удаляет находки, удаление источника обнуляет `source_id`, а снимок остаётся;
   - лимит 12 с вытеснением старой находки без вопроса.
-- [ ] 1.2 `searchable_texts(project_id)` в `storage::sources`: тексты готовых источников с видом (`file`, `outline`, `clickup`) и ссылкой. Проверка: тест — файл, документ Outline и задача ClickUp возвращаются с верным видом и ссылкой, а неготовые не возвращаются.
+- [x] 1.2 `searchable_texts(project_id)` в `storage::sources`: тексты готовых источников с видом (`file`, `outline`, `clickup`) и ссылкой. Проверка: тест — файл, документ Outline и задача ClickUp возвращаются с верным видом и ссылкой, а неготовые не возвращаются.
 - [ ] 1.3 Контракт окон:
   - `CallState.findings`, `contextSearch`, `contextSources`;
   - команда `context_finding_hide` с `callStateChanged`;

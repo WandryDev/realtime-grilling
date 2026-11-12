@@ -15,7 +15,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
 
-use super::{json::Json, new_id, now_ms, recordings, settings};
+use super::{
+    context_findings::{self, ContextFinding, ContextSearch, ContextSources},
+    json::Json,
+    new_id, now_ms, recordings, settings,
+};
 use crate::error::{CommandError, CommandResult};
 
 /* Evidence */
@@ -28,6 +32,9 @@ pub enum EvidenceSource {
     Segment,
     /// The project: its description `P1` or a brief item `B1…Bn`.
     Project,
+    /// A finding of the slow loop in the project's sources (`id`: the
+    /// finding's id; the agent sees it as `D1…Dn`).
+    Document,
 }
 
 /// Where a question, a card field or an answer comes from: the source and a
@@ -306,6 +313,14 @@ pub struct CallState {
     pub questions: Vec<Question>,
     /// Set once the agent started the final check.
     pub final_check: Option<FinalCheck>,
+    /// The slow loop's visible findings, the newest first
+    /// (agent-slow-loop design.md, decision 7).
+    pub findings: Vec<ContextFinding>,
+    /// The slow loop's search while the live pass runs; `null` when it
+    /// doesn't search (no live pass, no ready sources).
+    pub context_search: Option<ContextSearch>,
+    /// The ready sources of the recording's project the slow loop searches.
+    pub context_sources: ContextSources,
 }
 
 impl CallState {
@@ -450,6 +465,9 @@ pub enum AgentCallKind {
     /// The short call that asks whether the topic changed
     /// (question-volume design.md, decision 2).
     TopicCheck,
+    /// The slow loop's search in the project's sources (agent-slow-loop
+    /// design.md, decision 3).
+    SlowLoop,
 }
 
 impl AgentCallKind {
@@ -457,6 +475,7 @@ impl AgentCallKind {
         match self {
             Self::FastLoop => "fastLoop",
             Self::TopicCheck => "topicCheck",
+            Self::SlowLoop => "slowLoop",
         }
     }
 
@@ -465,6 +484,7 @@ impl AgentCallKind {
         match text {
             "fastLoop" => Ok(Self::FastLoop),
             "topicCheck" => Ok(Self::TopicCheck),
+            "slowLoop" => Ok(Self::SlowLoop),
             other => Err(rusqlite::Error::InvalidColumnType(
                 0,
                 format!("kind {other}"),
@@ -732,6 +752,9 @@ pub fn get(connection: &Connection, recording_id: &str) -> CommandResult<CallSta
         cards: cards(connection, recording_id)?,
         questions,
         final_check,
+        findings: context_findings::visible(connection, recording_id)?,
+        context_search: None,
+        context_sources: context_findings::source_counts(connection, recording_id)?,
     })
 }
 
@@ -1029,6 +1052,13 @@ fn add_question(
             now
         ],
     )?;
+    // The finding's card links to the first question that cites it
+    // (agent-slow-loop design.md, decision 6).
+    for item in &new.evidence {
+        if item.source == EvidenceSource::Document {
+            context_findings::link_question(connection, recording_id, &item.id, &id)?;
+        }
+    }
     Ok(id)
 }
 

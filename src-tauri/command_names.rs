@@ -42,6 +42,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "transcript_state",
     "call_state_get",
     "questions_act",
+    "context_finding_hide",
     "agent_retry",
     "settings_get",
     "settings_update",

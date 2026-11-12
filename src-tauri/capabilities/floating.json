@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "floating",
-  "description": "Start widget and call overlay: read projects (with the brief state and the overview, projects_overview), people and calls; start and run a call; drag and hide; hand over to another window (windows_show); read whether another app uses the microphone (mic_activity_get); refresh an outdated brief in the background before a call (brief_prepare); read, start, finish, resume the call in progress and stop its countdown (call_current, call_start, call_finish, call_resume, call_keep; the summary build closes it and «Удалить все данные» discards it in the main window); read the call's summary and its build (summary_get; building again and stopping it are the main window's); watch the recording (recording_status; the call starts and stops it, so no window may); read the transcript (transcript_*); read the call's questions and topics, act on a question and retry the agent (call_state_get, questions_act, agent_retry). No project, document, people or settings changes.",
+  "description": "Start widget and call overlay: read projects (with the brief state and the overview, projects_overview), people and calls; start and run a call; drag and hide; hand over to another window (windows_show); read whether another app uses the microphone (mic_activity_get); refresh an outdated brief in the background before a call (brief_prepare); read, start, finish, resume the call in progress and stop its countdown (call_current, call_start, call_finish, call_resume, call_keep; the summary build closes it and «Удалить все данные» discards it in the main window); read the call's summary and its build (summary_get; building again and stopping it are the main window's); watch the recording (recording_status; the call starts and stops it, so no window may); read the transcript (transcript_*); read the call's questions and topics, act on a question, hide a finding of the column «Контекст» and retry the agent (call_state_get, questions_act, context_finding_hide, agent_retry). No project, document, people or settings changes.",
   "windows": ["widget", "overlay"],
   "permissions": [
     "core:default",
@@ -26,6 +26,7 @@
     "allow-transcript-for-recording",
     "allow-call-state-get",
     "allow-questions-act",
+    "allow-context-finding-hide",
     "allow-agent-retry",
     "allow-settings-get",
     "allow-windows-show",

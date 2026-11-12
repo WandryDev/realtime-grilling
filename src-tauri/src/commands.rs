@@ -612,6 +612,20 @@ pub async fn questions_act(
     Ok(())
 }
 
+/// «Убрать» on a finding of the column «Контекст»: it is hidden in every
+/// window (`CallStateChanged`) and no longer given to the agent; questions
+/// that cite it stay. `NotFound` when the recording has no such finding.
+#[tauri::command]
+#[specta::specta]
+pub async fn context_finding_hide(
+    app: AppHandle,
+    storage: State<'_, Storage>,
+    recording_id: String,
+    finding_id: String,
+) -> CommandResult<()> {
+    fast_loop_app::hide_finding(&app, &storage, recording_id, finding_id).await
+}
+
 /// «Повторить»: calls the agent of the recording now, or checks it again
 /// when it was not ready. `NotFound` when the recording's live pass doesn't
 /// run.

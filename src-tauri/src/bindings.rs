@@ -78,6 +78,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::transcript_state,
             commands::call_state_get,
             commands::questions_act,
+            commands::context_finding_hide,
             commands::agent_retry,
             commands::settings_get,
             commands::settings_update,

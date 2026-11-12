@@ -423,6 +423,7 @@ fn sources(evidence: &[Evidence]) -> String {
         .map(|item| match item.source {
             EvidenceSource::Segment => format!("S:{}", one_line(&item.id)),
             EvidenceSource::Project => one_line(&item.id),
+            EvidenceSource::Document => "находка".to_owned(),
         })
         .collect();
     ids.join(", ")

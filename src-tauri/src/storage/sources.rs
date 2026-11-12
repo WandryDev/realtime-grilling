@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{new_id, now_ms, projects};
+use super::{context_findings::FindingSourceKind, new_id, now_ms, projects};
 use crate::{
     connectors::ConnectorKind,
     error::{CommandError, CommandResult},
@@ -332,6 +332,60 @@ pub fn ready_texts(connection: &Connection, project_id: &str) -> CommandResult<V
             sha256: row.get(3)?,
             text: row.get(4)?,
             truncated: row.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// A `ready` document the slow loop searches (agent-slow-loop design.md,
+/// decision 2): a file, an Outline document or a ClickUp task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchableSource {
+    pub id: String,
+    /// The file's name, the document's or the task's title.
+    pub name: String,
+    pub kind: FindingSourceKind,
+    /// The document or the task in its service; `None` for a file.
+    pub url: Option<String>,
+    pub text: String,
+}
+
+/// The project's `ready` files, Outline documents and ClickUp tasks with
+/// their text and link, in the order they were added. Other connectors'
+/// documents are not searched.
+pub fn searchable_texts(
+    connection: &Connection,
+    project_id: &str,
+) -> CommandResult<Vec<SearchableSource>> {
+    let mut statement = connection.prepare(
+        "SELECT id, name, connector, external_url, text FROM project_sources
+          WHERE project_id = ?1 AND status = 'ready'
+            AND (kind = 'file' OR connector IN ('outline', 'clickup'))
+          ORDER BY created_at, id",
+    )?;
+    let rows = statement.query_map([project_id], |row| {
+        let connector: Option<String> = row.get(2)?;
+        let kind = match connector.as_deref() {
+            None => Some(FindingSourceKind::File),
+            Some(name) => FindingSourceKind::parse(name),
+        };
+        let kind = kind.ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Text,
+                format!("unsearchable connector {connector:?}").into(),
+            )
+        })?;
+        Ok(SearchableSource {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            kind,
+            url: if kind == FindingSourceKind::File {
+                None
+            } else {
+                row.get(3)?
+            },
+            text: row.get(4)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -997,5 +1051,88 @@ mod tests {
                 .unwrap(),
             "nothing left to remove"
         );
+    }
+
+    /// Task 1.2: a file, an Outline document and a ClickUp task come with
+    /// their kind and link; what is not ready, and GitHub, does not.
+    #[test]
+    fn searchable_texts_have_their_kind_and_link() {
+        use crate::agent::fast_loop::testing::{add_source, database, recording};
+
+        let db = database();
+        let recording_id = recording(&db);
+        let file = add_source(&db, &recording_id, None, "ТЗ.docx", "Текст ТЗ", true);
+        add_source(&db, &recording_id, None, "скан.pdf", "", false);
+        let outline = add_source(
+            &db,
+            &recording_id,
+            Some("outline"),
+            "Регламент смены",
+            "# Регламент",
+            true,
+        );
+        add_source(&db, &recording_id, Some("outline"), "Черновик", "x", false);
+        let task = add_source(
+            &db,
+            &recording_id,
+            Some("clickup"),
+            "Задача",
+            "# Задача",
+            true,
+        );
+        add_source(
+            &db,
+            &recording_id,
+            Some("github"),
+            "README",
+            "# Readme",
+            true,
+        );
+        let project_id = crate::storage::recordings::get(&db, &recording_id)
+            .unwrap()
+            .project_id
+            .unwrap();
+
+        let found = searchable_texts(&db, &project_id).unwrap();
+        let seen: Vec<(&str, &str, FindingSourceKind, Option<&str>, &str)> = found
+            .iter()
+            .map(|source| {
+                (
+                    source.id.as_str(),
+                    source.name.as_str(),
+                    source.kind,
+                    source.url.as_deref(),
+                    source.text.as_str(),
+                )
+            })
+            .collect();
+        let outline_url = format!("https://outline.example/{outline}");
+        let task_url = format!("https://clickup.example/{task}");
+        let mut expected = vec![
+            (
+                file.as_str(),
+                "ТЗ.docx",
+                FindingSourceKind::File,
+                None,
+                "Текст ТЗ",
+            ),
+            (
+                outline.as_str(),
+                "Регламент смены",
+                FindingSourceKind::Outline,
+                Some(outline_url.as_str()),
+                "# Регламент",
+            ),
+            (
+                task.as_str(),
+                "Задача",
+                FindingSourceKind::ClickUp,
+                Some(task_url.as_str()),
+                "# Задача",
+            ),
+        ];
+        // Same `created_at`: by id.
+        expected.sort_by_key(|row| row.0);
+        assert_eq!(seen, expected);
     }
 }

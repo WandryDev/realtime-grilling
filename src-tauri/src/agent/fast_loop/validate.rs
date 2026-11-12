@@ -167,6 +167,7 @@ impl CallContext {
         let sources = match source {
             EvidenceSource::Segment => &self.segments,
             EvidenceSource::Project => &self.project_items,
+            EvidenceSource::Document => return None,
         };
         sources.iter().find(|item| item.id == id)
     }
@@ -1533,6 +1534,9 @@ mod tests {
             cards: vec![card],
             questions: Vec::new(),
             final_check: None,
+            findings: Vec::new(),
+            context_search: None,
+            context_sources: Default::default(),
         };
         let context =
             CallContext::new(&state, vec![SourceText::said("S1", OTHERS, S1)], Vec::new());

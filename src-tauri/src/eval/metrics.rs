@@ -402,20 +402,26 @@ fn rejected(report: &Report) -> Vec<Rejected> {
     list
 }
 
+/// The fast loop's calls and its topic checks: the slow loop's search is
+/// not what a replay measures.
 fn calls(report: &Report) -> Calls {
-    let durations: Vec<i64> = report.calls.iter().map(|call| call.duration_ms).collect();
-    let sum = |field: fn(&super::report::ReportCall) -> Option<i64>| {
-        report.calls.iter().filter_map(field).sum()
+    let fast = || {
+        report
+            .calls
+            .iter()
+            .filter(|call| call.kind != CallKind::SlowLoop)
     };
+    let durations: Vec<i64> = fast().map(|call| call.duration_ms).collect();
+    let sum = |field: fn(&super::report::ReportCall) -> Option<i64>| fast().filter_map(field).sum();
     Calls {
-        count: report.calls.len(),
+        count: fast().count(),
         p50_ms: percentile(&durations, 0.5),
         p95_ms: percentile(&durations, 0.95),
         input_tokens: sum(|call| call.input_tokens),
         output_tokens: sum(|call| call.output_tokens),
         cache_read: sum(|call| call.cache_read),
         cache_write: sum(|call| call.cache_write),
-        cost_usd: report.calls.iter().filter_map(|call| call.cost_usd).sum(),
+        cost_usd: fast().filter_map(|call| call.cost_usd).sum(),
         topic_checks: report
             .calls
             .iter()

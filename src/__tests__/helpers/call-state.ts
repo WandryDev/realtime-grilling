@@ -87,8 +87,11 @@ export function visible(
 export function callState(fields: Partial<CallState> = {}): CallState {
   return {
     cards: [],
+    contextSearch: null,
+    contextSources: { clickup: 0, files: 0, outline: 0 },
     currentTopicId: null,
     finalCheck: null,
+    findings: [],
     questions: [],
     recordingId: STATE_RECORDING,
     topics: [],

@@ -13,7 +13,7 @@ use super::{
 use crate::{
     agent::{self, AgentState, claude_cli::ClaudeCodeCli, discover::SearchEnv},
     error::{CommandError, CommandResult},
-    storage::{self, Storage, call_state},
+    storage::{self, Storage, call_state, context_findings},
 };
 
 /// `app_data_dir()/agent`: the CLI's work dir and the prefix files.
@@ -138,6 +138,27 @@ pub fn view(
     })
 }
 
+/// «Убрать» on a finding of the slow loop (agent-slow-loop design.md,
+/// decision 7): it is no longer shown nor given to the agent; every window
+/// gets `CallStateChanged` once. `NotFound` when the recording has no such
+/// finding.
+pub async fn hide_finding<R: Runtime>(
+    app: &AppHandle<R>,
+    storage: &Storage,
+    recording_id: String,
+    finding_id: String,
+) -> CommandResult<()> {
+    let id = recording_id.clone();
+    storage
+        .write(app, move |db| {
+            context_findings::hide(db, &id, &finding_id, storage::now_ms())?;
+            Ok(((), Vec::new()))
+        })
+        .await?;
+    call_state_changed(app, &recording_id);
+    Ok(())
+}
+
 /// After `questionCount` changed: every list that depends on it is
 /// recomputed. Returns the recordings whose windows must read again.
 pub fn recompute_lists(connection: &Connection) -> CommandResult<Vec<String>> {
@@ -228,6 +249,100 @@ mod tests {
         let first = call_state::get(&db, &id).unwrap().questions[0].id.clone();
         call_state::act(&db, &first, QuestionAction::Hide).unwrap();
         assert_eq!(visible(&db, &id), ["Второй"]);
+    }
+
+    /// Task 1.3: «Убрать» → the finding is not in `call_state_get`, one
+    /// `CallStateChanged` for its recording; an unknown one is `NotFound`.
+    #[test]
+    fn hiding_a_finding_removes_it_from_the_call_state_with_one_event() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::{
+            agent::fast_loop::testing::{FakeAgent, Provider, TestHost},
+            storage::context_findings::{FindingSourceKind, Inserted, NewFinding},
+        };
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::generate_context!(test = true))
+            .expect("failed to build the mock app");
+        tauri_specta::Builder::<tauri::test::MockRuntime>::new()
+            .events(tauri_specta::collect_events![CallStateChanged])
+            .mount_events(&app);
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&received);
+        CallStateChanged::listen_any(&app, move |event| {
+            sink.lock().unwrap().push(event.payload.recording_id);
+        });
+
+        let storage = Storage::in_memory();
+        let (id, finding) = storage
+            .read_now(|db| {
+                let id = recording(db);
+                let inserted = context_findings::insert_at(
+                    db,
+                    &id,
+                    &NewFinding {
+                        source_id: None,
+                        source_kind: FindingSourceKind::ClickUp,
+                        source_name: "Задача".to_owned(),
+                        source_url: Some("https://app.clickup.com/t/1".to_owned()),
+                        chunk_key: "s#0".to_owned(),
+                        quote: "старший смены распределяет звонки".to_owned(),
+                        note: "Дополняет: кто распределяет".to_owned(),
+                        question_id: None,
+                        agent_call_id: None,
+                    },
+                    10,
+                )?;
+                let Inserted::Added { id: finding, .. } = inserted else {
+                    panic!("no room");
+                };
+                Ok((id, finding))
+            })
+            .unwrap();
+        // `call_state_get` of a recording that is not recording.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fast_loop = runtime.block_on(async {
+            crate::agent::fast_loop::testing::fast_loop(
+                TestHost::new(database()),
+                Provider::ready(FakeAgent::new([])),
+                std::env::temp_dir(),
+            )
+        });
+        let read = |storage: &Storage| {
+            storage
+                .read_now(|db| view(db, &fast_loop, &id))
+                .unwrap()
+                .state
+                .findings
+        };
+        assert_eq!(read(&storage).len(), 1);
+
+        tauri::async_runtime::block_on(hide_finding(
+            app.handle(),
+            &storage,
+            id.clone(),
+            finding.clone(),
+        ))
+        .unwrap();
+        assert!(read(&storage).is_empty());
+        assert_eq!(*received.lock().unwrap(), vec![id.clone()]);
+
+        let missing = tauri::async_runtime::block_on(hide_finding(
+            app.handle(),
+            &storage,
+            id.clone(),
+            "missing".to_owned(),
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(missing, CommandError::NotFound { .. }),
+            "{missing:?}"
+        );
+        assert_eq!(received.lock().unwrap().len(), 1, "no event for a failure");
     }
 
     #[test]

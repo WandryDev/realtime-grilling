@@ -179,6 +179,9 @@ pub enum CallKind {
     #[default]
     FastLoop,
     TopicCheck,
+    /// The slow loop's search in the project's sources (a replay doesn't
+    /// run it; an export of a real recording has them).
+    SlowLoop,
 }
 
 /// A live segment fed to the loop.
@@ -310,6 +313,7 @@ pub fn results(
             kind: match call.kind {
                 call_state::AgentCallKind::FastLoop => CallKind::FastLoop,
                 call_state::AgentCallKind::TopicCheck => CallKind::TopicCheck,
+                call_state::AgentCallKind::SlowLoop => CallKind::SlowLoop,
             },
             at_ms: since(call.started_at),
             duration_ms: call.duration_ms,

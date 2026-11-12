@@ -155,6 +155,12 @@ export const commands = {
 	 */
 	questionsAct: (id: string, action: QuestionAction) => typedError<null, CommandError>(__TAURI_INVOKE("questions_act", { id, action })),
 	/**
+	 *  «Убрать» on a finding of the column «Контекст»: it is hidden in every
+	 *  window (`CallStateChanged`) and no longer given to the agent; questions
+	 *  that cite it stay. `NotFound` when the recording has no such finding.
+	 */
+	contextFindingHide: (recordingId: string, findingId: string) => typedError<null, CommandError>(__TAURI_INVOKE("context_finding_hide", { recordingId, findingId })),
+	/**
 	 *  «Повторить»: calls the agent of the recording now, or checks it again
 	 *  when it was not ready. `NotFound` when the recording's live pass doesn't
 	 *  run.
@@ -1021,6 +1027,18 @@ export type CallState = {
 	questions: Question[],
 	/**  Set once the agent started the final check. */
 	finalCheck: FinalCheck | null,
+	/**
+	 *  The slow loop's visible findings, the newest first
+	 *  (agent-slow-loop design.md, decision 7).
+	 */
+	findings: ContextFinding[],
+	/**
+	 *  The slow loop's search while the live pass runs; `null` when it
+	 *  doesn't search (no live pass, no ready sources).
+	 */
+	contextSearch: ContextSearch | null,
+	/**  The ready sources of the recording's project the slow loop searches. */
+	contextSources: ContextSources,
 };
 
 /**
@@ -1249,6 +1267,43 @@ export type ConnectorView = {
 	error: string | null,
 };
 
+/**  A visible finding, as the windows show it. */
+export type ContextFinding = {
+	id: string,
+	sourceKind: FindingSourceKind,
+	/**  The document's, task's or file's name when it was found. */
+	sourceName: string,
+	/**  The document or task in its service; absent for a file. */
+	sourceUrl?: string | null,
+	/**  In the source's own spelling. */
+	quote: string,
+	/**  One line: what it confirms, adds or contradicts. */
+	note: string,
+	/**  The question it is about, or the first new question that cited it. */
+	questionId?: string | null,
+	/**  Milliseconds since the Unix epoch, UTC. */
+	createdAt: number,
+};
+
+/**
+ *  The slow loop's search of a recording while its live pass runs: whether
+ *  a call runs, and the agent's queries it searches with.
+ */
+export type ContextSearch = {
+	running: boolean,
+	queries: string[],
+};
+
+/**
+ *  How many ready sources of each kind the recording's project has: what
+ *  the slow loop searches.
+ */
+export type ContextSources = {
+	files: number,
+	outline: number,
+	clickup: number,
+};
+
 /**
  *  Sent to every window after a write is committed, never on failure.
  * 
@@ -1326,7 +1381,12 @@ export type EvidenceSource =
 /**  A transcript segment of the recording (`id`: the segment id). */
 "segment" | 
 /**  The project: its description `P1` or a brief item `B1…Bn`. */
-"project";
+"project" | 
+/**
+ *  A finding of the slow loop in the project's sources (`id`: the
+ *  finding's id; the agent sees it as `D1…Dn`).
+ */
+"document";
 
 /**
  *  A container or a document in the service. The id is the connector's
@@ -1361,6 +1421,12 @@ export type FinalCheck = {
 	 */
 	questionIds: string[],
 };
+
+/**
+ *  What a finding's source is: a project's file, an Outline document or a
+ *  ClickUp task.
+ */
+export type FindingSourceKind = "file" | "outline" | "clickup";
 
 /**  Why a question is asked. */
 export type GapType = 

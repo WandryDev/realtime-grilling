@@ -361,6 +361,7 @@ fn question_block((question, shown_at): Shown<'_>) -> String {
             let id = match item.source {
                 EvidenceSource::Segment => format!("S:{}", item.id),
                 EvidenceSource::Project => item.id.clone(),
+                EvidenceSource::Document => format!("находка {}", item.id),
             };
             format!("{id} «{}»", one_line(&item.quote))
         })

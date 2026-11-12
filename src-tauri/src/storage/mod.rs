@@ -10,6 +10,7 @@ pub mod call_search;
 pub mod call_state;
 pub mod calls;
 pub mod connectors;
+pub mod context_findings;
 pub mod json;
 pub mod people;
 pub mod projects;
@@ -73,6 +74,8 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../migrations/0008_question_volume.sql")),
     // Rebuilds `project_sources`: runs with the foreign keys off.
     M::up(include_str!("../../migrations/0009_connectors.sql")).foreign_key_check(),
+    // Rebuilds `agent_calls`: runs with the foreign keys off.
+    M::up(include_str!("../../migrations/0010_context_findings.sql")).foreign_key_check(),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);

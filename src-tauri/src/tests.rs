@@ -1374,6 +1374,12 @@ mod acl {
             ("overlay", "call_state_get"),
             ("overlay", "questions_act"),
             ("overlay", "agent_retry"),
+            // Every window that shows the call hides a finding of the
+            // column «Контекст» (agent-slow-loop task 1.3).
+            ("main", "context_finding_hide"),
+            ("onboarding", "context_finding_hide"),
+            ("widget", "context_finding_hide"),
+            ("overlay", "context_finding_hide"),
             // The home screen and the start widget read the overview; only
             // the main window manages documents.
             ("main", "projects_overview"),
@@ -1459,6 +1465,7 @@ fn capabilities_match_the_command_list() {
         "call_keep",
         "call_state_get",
         "questions_act",
+        "context_finding_hide",
         "agent_retry",
         "transcript_for_recording",
         "mic_activity_get",

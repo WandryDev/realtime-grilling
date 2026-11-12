@@ -372,3 +372,46 @@ pub fn fast_loop(host: Arc<TestHost>, provider: Arc<Provider>, dir: PathBuf) -> 
         LoopConfig::new(dir),
     )
 }
+
+/// Adds a source with `text` to the project of `recording_id`: a file
+/// (`connector` `None`) or a connector's document (`outline`, `clickup`,
+/// `github`) with `url`. Returns its id.
+pub fn add_source(
+    connection: &Connection,
+    recording_id: &str,
+    connector: Option<&str>,
+    name: &str,
+    text: &str,
+    ready: bool,
+) -> String {
+    let project_id = recordings::get(connection, recording_id)
+        .unwrap()
+        .project_id
+        .expect("a recording of a project");
+    let id = storage::new_id();
+    let sha = format!("{:0>64}", id.replace('-', ""));
+    let status = if ready { "ready" } else { "failed" };
+    match connector {
+        None => connection
+            .execute(
+                "INSERT INTO project_sources
+                   (id, project_id, kind, name, extension, size, sha256, stored_path, text,
+                    text_chars, truncated, status, created_at, updated_at)
+                 VALUES (?1, ?2, 'file', ?3, 'md', 1, ?4, 'p/x.md', ?5, 1, 0, ?6, 1, 1)",
+                rusqlite::params![id, project_id, name, sha, text, status],
+            )
+            .unwrap(),
+        Some(kind) => connection
+            .execute(
+                "INSERT INTO project_sources
+                   (id, project_id, kind, name, extension, size, sha256, stored_path, text,
+                    text_chars, truncated, status, created_at, updated_at, connector,
+                    external_id, external_url, external_version, account_ref)
+                 VALUES (?1, ?2, 'connector', ?3, 'md', 1, ?4, '', ?5, 1, 0, ?6, 1, 1, ?7, ?1,
+                         'https://' || ?7 || '.example/' || ?1, 'v1', 'team')",
+                rusqlite::params![id, project_id, name, sha, text, status, kind],
+            )
+            .unwrap(),
+    };
+    id
+}
