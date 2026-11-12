@@ -417,6 +417,9 @@ pub struct CallRecording {
     pub duration_ms: Option<i64>,
     /// "Удалить запись" removed its files: no player.
     pub audio_deleted: bool,
+    /// The retention period deleted its transcript: `segments` is empty
+    /// and the summary's links to phrases lead nowhere.
+    pub transcript_deleted: bool,
     /// Where the second pass is.
     pub transcript_state: TranscriptState,
     /// The pass of `segments`: refined once the second pass stored it.
@@ -462,6 +465,7 @@ pub fn transcript(
                 started_at: recording.started_at,
                 ended_at: recording.ended_at,
                 audio_deleted,
+                transcript_deleted: recording.transcript_deleted_at.is_some(),
                 transcript_state: recording.transcript_state,
                 pass,
                 segments,

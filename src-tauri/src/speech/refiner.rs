@@ -227,10 +227,12 @@ fn unrefined(connection: &rusqlite::Connection) -> CommandResult<Vec<String>> {
 }
 
 /// A stopped recording with its audio whose second pass has not finished
-/// (`call-recording`: no second pass without the audio).
+/// (`call-recording`: no second pass without the audio), and whose
+/// transcript the retention period did not delete.
 fn needs_refining(recording: &Recording) -> bool {
     recording.status != RecordingState::Recording
         && recording.audio_deleted_at.is_none()
+        && recording.transcript_deleted_at.is_none()
         && matches!(
             recording.transcript_state,
             TranscriptState::Live | TranscriptState::Refining
@@ -514,7 +516,8 @@ async fn refine(inner: &Inner, recording_id: &str) -> Outcome {
 
     let id = recording_id.to_owned();
     let stored = database(host, move |connection| {
-        if recordings::get(connection, &id)?.audio_deleted_at.is_some() {
+        let recording = recordings::get(connection, &id)?;
+        if recording.audio_deleted_at.is_some() || recording.transcript_deleted_at.is_some() {
             return Ok(None);
         }
         transcript::replace_refined(connection, &id, segments).map(Some)

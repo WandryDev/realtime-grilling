@@ -11,6 +11,7 @@ pub mod call_state;
 pub mod calls;
 pub mod connectors;
 pub mod context_findings;
+pub mod data;
 pub mod json;
 pub mod people;
 pub mod projects;
@@ -20,6 +21,7 @@ pub mod proposals;
     reason = "create / finish / delete are for the RecordingManager (audio-capture task 4.5)"
 )]
 pub mod recordings;
+pub mod retention;
 pub mod settings;
 pub mod sources;
 pub mod summaries;

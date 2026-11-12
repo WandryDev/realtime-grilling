@@ -141,12 +141,16 @@ pub struct Recording {
     /// transcript and its questions stay. `None` while the files are there.
     /// The second pass and the files' sweep skip such a recording.
     pub audio_deleted_at: Option<i64>,
+    /// When the retention period deleted its transcript (settings-real
+    /// design.md, decision 5); `None` while it is there.
+    pub transcript_deleted_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 const SELECT: &str = "SELECT id, call_id, status, started_at, ended_at, me_file, others_file,
-       created_at, updated_at, project_id, participant_ids, transcript_state, audio_deleted_at
+       created_at, updated_at, project_id, participant_ids, transcript_state, audio_deleted_at,
+       transcript_deleted_at
   FROM recordings";
 
 fn from_row(row: &Row) -> rusqlite::Result<Recording> {
@@ -169,6 +173,7 @@ fn from_row(row: &Row) -> rusqlite::Result<Recording> {
         },
         transcript_state: TranscriptState::parse(&transcript_state)?,
         audio_deleted_at: row.get(12)?,
+        transcript_deleted_at: row.get(13)?,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
     })
