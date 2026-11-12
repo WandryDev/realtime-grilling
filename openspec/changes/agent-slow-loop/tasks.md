@@ -69,8 +69,8 @@
 
 ## 6. Проверка и выпуск
 
-- [ ] 6.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate agent-slow-loop --strict` проходит.
-- [ ] 6.2 Changeset (`minor`): находки из материалов проекта во время звонка, без демо-карточек в приложении. Проверка: файл `.changeset/agent-slow-loop.md` есть.
+- [x] 6.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`. Проверка: всё зелёное, `bindings.ts` стабилен, `openspec validate agent-slow-loop --strict` проходит.
+- [x] 6.2 Changeset (`minor`): находки из материалов проекта во время звонка, без демо-карточек в приложении. Проверка: файл `.changeset/agent-slow-loop.md` есть.
 - [ ] 6.3 Ручной прогон в подписанном debug-бандле: звонок по проекту с документами Outline и задачами ClickUp. Проверить:
   - находки появляются через минуту после начала разговора и при смене темы, у них верные цитаты и работает «Открыть в источнике»;
   - «Убрать» работает;

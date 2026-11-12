@@ -448,3 +448,23 @@ fn the_pause_and_the_pace_stop_at_the_end_of_the_discussion() {
     assert_eq!(compute(&report, None).longest_pause, Some(unmarked));
     assert!(!markdown(&report, None).contains("Конец обсуждения"));
 }
+
+/// The slow loop's rejected findings stay out of the fast loop's reasons.
+#[test]
+fn rejections_leave_out_the_slow_loop() {
+    let mut report = run();
+    let mut slow = call(
+        21 * MINUTE,
+        1_000,
+        0.05,
+        json!([
+            { "index": 0, "op": "finding", "reason": "quoteNotFound", "quote": "чужая цитата" },
+            { "index": 1, "op": "finding", "reason": "repeat", "quote": "повтор" }
+        ]),
+    );
+    slow.kind = CallKind::SlowLoop;
+    report.calls.push(slow);
+    let metrics = compute(&report, None);
+    assert_eq!(metrics.rejected_total(), 5);
+    assert!(metrics.rejected.iter().all(|item| item.reason != "repeat"));
+}

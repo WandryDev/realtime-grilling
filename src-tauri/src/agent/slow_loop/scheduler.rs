@@ -275,6 +275,9 @@ impl SlowLoop {
 
     /// Builds the index and writes the prompt, then runs the scheduler.
     async fn start(self, recording_id: String, receiver: mpsc::UnboundedReceiver<Message>) {
+        // The first call's minute counts from the start of the recording,
+        // not from when a large index is ready.
+        let started = Instant::now();
         let id = recording_id.clone();
         let read = database(&self.0.host, move |connection| {
             let project_id = recordings::get(connection, &id)?.project_id;
@@ -326,7 +329,7 @@ impl SlowLoop {
                 prompt_file,
                 agent: None,
             },
-            started: Instant::now(),
+            started,
             last_start: None,
             words: 0,
             topic_due: false,

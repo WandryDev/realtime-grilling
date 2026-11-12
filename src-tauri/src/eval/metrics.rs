@@ -376,6 +376,8 @@ fn rejected(report: &Report) -> Vec<Rejected> {
     let items = report
         .calls
         .iter()
+        // The slow loop's findings are not the fast loop's operations.
+        .filter(|call| call.kind != CallKind::SlowLoop)
         .filter_map(|call| call.rejected.as_array())
         .flatten();
     for item in items {

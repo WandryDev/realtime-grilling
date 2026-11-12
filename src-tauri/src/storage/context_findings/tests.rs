@@ -382,3 +382,71 @@ fn the_sources_are_counted_by_kind() {
         json!({ "files": 1, "outline": 2, "clickup": 1 })
     );
 }
+
+/// Two findings of one call over the limit: the first takes the place of
+/// the only old one that can go, and the second finds no room instead of
+/// pushing the first out.
+#[test]
+fn a_finding_of_the_call_is_not_evicted_by_the_next_one() {
+    let db = database();
+    let id = recording(&db);
+    let ids: Vec<String> = (0..MAX_VISIBLE)
+        .map(|n| {
+            let at = i64::try_from(n).unwrap() * 10;
+            added(
+                insert_at(
+                    &db,
+                    &id,
+                    &finding(&format!("s#{n}"), &format!("цитата {n}")),
+                    at,
+                )
+                .unwrap(),
+            )
+        })
+        .collect();
+    call_state::apply_patch(
+        &db,
+        &id,
+        &ValidatedPatch {
+            ops: vec![
+                ValidatedOp::CreateTopic {
+                    title: "Смены".to_owned(),
+                },
+                ValidatedOp::AddQuestion(NewQuestion {
+                    text: "Сколько операторов в смене?".to_owned(),
+                    description: String::new(),
+                    card_field: CardLens::Users,
+                    gap_type: GapType::Empty,
+                    priority: 2,
+                    evidence: vec![Evidence {
+                        source: EvidenceSource::Segment,
+                        id: "s1".to_owned(),
+                        quote: "операторов в смене".to_owned(),
+                    }],
+                }),
+            ],
+        },
+    )
+    .unwrap();
+    let question = call_state::get(&db, &id).unwrap().questions[0].id.clone();
+    // Every finding but the oldest is about the question.
+    db.execute(
+        "UPDATE context_findings SET question_id = ?2 WHERE recording_id = ?1 AND id <> ?3",
+        [&id, &question, &ids[0]],
+    )
+    .unwrap();
+
+    let Inserted::Added { id: first, evicted } =
+        insert_at(&db, &id, &finding("s#a", "первая новая цитата"), 5_000).unwrap()
+    else {
+        panic!("the first finding of the call is added");
+    };
+    assert_eq!(evicted.as_deref(), Some(ids[0].as_str()));
+    assert_eq!(
+        insert_at(&db, &id, &finding("s#b", "вторая новая цитата"), 5_000).unwrap(),
+        Inserted::NoRoom
+    );
+    let shown = visible(&db, &id).unwrap();
+    assert_eq!(shown.len(), MAX_VISIBLE);
+    assert!(shown.iter().any(|finding| finding.id == first));
+}

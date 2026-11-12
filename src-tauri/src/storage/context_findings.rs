@@ -178,12 +178,19 @@ pub fn known(connection: &Connection, recording_id: &str) -> CommandResult<Vec<K
 
 /// The visible finding of the recording that may give its place: the oldest
 /// that is about no question and that no question of the recording cites.
-fn evictable(connection: &Connection, recording_id: &str) -> CommandResult<Option<String>> {
+/// A finding of the same call (added at `now`) never gives its place to
+/// the next one of that call.
+fn evictable(
+    connection: &Connection,
+    recording_id: &str,
+    now: i64,
+) -> CommandResult<Option<String>> {
     Ok(connection
         .query_row(
             "SELECT f.id FROM context_findings f
               WHERE f.recording_id = ?1 AND f.hidden_at IS NULL AND f.evicted_at IS NULL
                 AND f.question_id IS NULL
+                AND f.created_at < ?2
                 AND NOT EXISTS (
                   SELECT 1 FROM questions q, json_each(q.evidence) e
                    WHERE q.recording_id = f.recording_id
@@ -196,7 +203,7 @@ fn evictable(connection: &Connection, recording_id: &str) -> CommandResult<Optio
                      AND json_extract(e.value, '$.id') = f.id)
               ORDER BY f.created_at, f.id
               LIMIT 1",
-            [recording_id],
+            params![recording_id, now],
             |row| row.get(0),
         )
         .optional()?)
@@ -219,7 +226,7 @@ pub fn insert_at(
         )?;
         let mut evicted = None;
         if usize::try_from(shown).unwrap_or(usize::MAX) >= MAX_VISIBLE {
-            let Some(oldest) = evictable(connection, recording_id)? else {
+            let Some(oldest) = evictable(connection, recording_id, now)? else {
                 return Ok(Inserted::NoRoom);
             };
             connection.execute(
