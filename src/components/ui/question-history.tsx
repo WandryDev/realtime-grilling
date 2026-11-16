@@ -3,6 +3,7 @@
 import * as React from "react"
 import { cn } from "cn"
 
+import { appearClassName, useAppear } from "@/components/ui/appear"
 import { Button, type ButtonProps } from "@/components/ui/button"
 
 /*
@@ -16,6 +17,9 @@ import { Button, type ButtonProps } from "@/components/ui/button"
  * - `unanswered`: orange ring, the question in ink, accent note, "Вернуть".
  * - `hidden`: hidden by you, gray cross, "Вернуть".
  * - `irrelevant`: dropped by the agent, gray dash, reason and time.
+ *
+ * Inside an AppearScope a row added later drops 4px into place, the way the
+ * question left its list.
  */
 type QuestionHistoryStatus =
   | "answered"
@@ -217,13 +221,19 @@ function QuestionHistoryItem({
     [status, questionId]
   )
   const { label, mark: Mark, markOffset } = STATUSES[status]
+  const entering = useAppear()
 
   return (
     <ItemContext.Provider value={context}>
       <li
         data-slot="question-history-item"
         data-status={status}
-        className={cn("flex gap-3.5 px-7 py-3", className)}
+        data-entering={entering ? "" : undefined}
+        className={cn(
+          "flex gap-3.5 px-7 py-3",
+          appearClassName("drop"),
+          className
+        )}
         {...props}
       >
         <span

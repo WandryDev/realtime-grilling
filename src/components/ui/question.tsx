@@ -4,6 +4,7 @@ import * as React from "react"
 import { cva } from "class-variance-authority"
 import { cn } from "cn"
 
+import { useAppear, useExitEnd } from "@/components/ui/appear"
 import { Button, type ButtonProps } from "@/components/ui/button"
 
 /*
@@ -17,9 +18,13 @@ import { Button, type ButtonProps } from "@/components/ui/button"
  * Rows turn gray on hover and reveal `QuestionActions` on the right. The
  * actions stay in the tab order while hidden, so keyboard focus reveals them
  * too. `state="answered"` dims the row to 60%, grays the question and shows
- * the client's quote in ink. After ~3 s the list sets `leaving`, the row
- * fades and slides down into "Обсудили в этой теме"; remove it on
- * `onAnimationEnd`.
+ * the client's quote in ink.
+ *
+ * Motion: inside an AppearScope a question that arrives later rises into
+ * place (rows 4px, the main card 6px, 200ms on the enter curve). `leaving`
+ * plays the exit, a 150ms fade with a 4px slide down towards "Обсудили в
+ * этой теме", hides the row from input and screen readers, and calls
+ * `onExited` when it is over; the list removes the row then.
  */
 type QuestionVariant = "main" | "default" | "compact"
 type QuestionState = "open" | "answered"
@@ -39,13 +44,15 @@ function useQuestion() {
 }
 
 const questionVariants = cva(
-  "group/question relative flex gap-4 px-7 transition-[background-color,opacity] duration-200 motion-reduce:transition-none data-leaving:pointer-events-none data-leaving:animate-out data-leaving:fade-out data-leaving:slide-out-to-bottom-2 data-leaving:duration-300 data-leaving:ease-out data-leaving:fill-mode-forwards motion-reduce:data-leaving:slide-out-to-bottom-0",
+  "group/question relative flex gap-4 px-7 transition-[background-color,opacity] duration-200 motion-reduce:transition-none data-entering:animate-in data-entering:fade-in-0 data-entering:ease-enter data-leaving:pointer-events-none data-leaving:animate-out data-leaving:fade-out data-leaving:slide-out-to-bottom-1 data-leaving:duration-150 data-leaving:ease-exit data-leaving:fill-mode-forwards",
   {
     variants: {
       variant: {
-        main: "rounded-lg bg-accent-soft py-6",
-        default: "rounded-md py-[18px] hover:bg-surface focus-within:bg-surface",
-        compact: "rounded-md py-3 hover:bg-surface focus-within:bg-surface",
+        main: "rounded-lg bg-accent-soft py-6 data-entering:slide-in-from-bottom-[6px]",
+        default:
+          "rounded-md py-[18px] hover:bg-surface focus-within:bg-surface data-entering:slide-in-from-bottom-1",
+        compact:
+          "rounded-md py-3 hover:bg-surface focus-within:bg-surface data-entering:slide-in-from-bottom-1",
       },
       state: {
         open: "",
@@ -64,6 +71,8 @@ type QuestionProps = React.ComponentProps<"div"> & {
   state?: QuestionState
   /** Plays the exit: fades out and slides down. */
   leaving?: boolean
+  /** The exit is over (at once when nothing animates): remove the row. */
+  onExited?: () => void
 }
 
 function Question({
@@ -71,6 +80,8 @@ function Question({
   variant = "default",
   state = "open",
   leaving = false,
+  onExited,
+  ref,
   ...props
 }: QuestionProps) {
   const titleId = React.useId()
@@ -78,17 +89,35 @@ function Question({
     () => ({ variant, state, titleId }),
     [variant, state, titleId]
   )
+  const entering = useAppear()
+  const root = React.useRef<HTMLDivElement | null>(null)
+  const setRoot = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      root.current = node
+      if (typeof ref === "function") {
+        ref(node)
+      } else if (ref) {
+        ref.current = node
+      }
+    },
+    [ref]
+  )
+  useExitEnd(root, leaving, onExited)
 
   return (
     <QuestionContext.Provider value={context}>
       <div
         role="group"
         aria-labelledby={titleId}
+        aria-hidden={leaving || undefined}
+        inert={leaving || undefined}
         data-slot="question"
         data-variant={variant}
         data-state={state}
+        data-entering={entering && !leaving ? "" : undefined}
         data-leaving={leaving ? "" : undefined}
         className={cn(questionVariants({ variant, state }), className)}
+        ref={setRoot}
         {...props}
       />
     </QuestionContext.Provider>
