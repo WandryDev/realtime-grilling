@@ -110,25 +110,19 @@ export function BriefModules({
   modules: BriefModuleView[];
 }) {
   return (
-    <section className={cn("flex flex-col gap-1", className)}>
-      <BriefLabel className="pb-1.5">Модули</BriefLabel>
-      <ul className="flex flex-col gap-1">
+    <section className={cn("flex flex-col gap-2.5", className)}>
+      <BriefLabel>Модули</BriefLabel>
+      <ul className="flex flex-col gap-3">
         {modules.map((module) =>
           module.description ? (
-            <li
-              className="border-border flex shrink-0 flex-col gap-0.5 border-b py-2 last:border-b-0"
-              key={module.name}
-            >
+            <li className="flex shrink-0 flex-col gap-0.5" key={module.name}>
               <span className="text-foreground text-base">{module.name}</span>
               <span className="text-muted-foreground text-sm">
                 {module.description}
               </span>
             </li>
           ) : (
-            <li
-              className="border-border flex h-9 shrink-0 items-center gap-3 border-b last:border-b-0"
-              key={module.name}
-            >
+            <li className="flex shrink-0 items-center gap-3" key={module.name}>
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-base",
@@ -220,14 +214,11 @@ export function BriefGaps({
   gaps: BriefGapView[];
 }) {
   return (
-    <section className={cn("flex flex-col gap-1", className)}>
-      <BriefLabel className="pb-1.5">Неясно до звонка</BriefLabel>
-      <ul className="flex flex-col gap-1">
+    <section className={cn("flex flex-col gap-2.5", className)}>
+      <BriefLabel>Неясно до звонка</BriefLabel>
+      <ul className="flex flex-col gap-3.5">
         {gaps.map((gap) => (
-          <li
-            className="border-border flex flex-col gap-0.5 border-b py-2 last:border-b-0"
-            key={`${gap.lens}-${gap.text}`}
-          >
+          <li className="flex flex-col gap-0.5" key={`${gap.lens}-${gap.text}`}>
             <span className="text-muted-foreground text-sm">
               {CARD_LENS_NAMES[gap.lens]}
             </span>

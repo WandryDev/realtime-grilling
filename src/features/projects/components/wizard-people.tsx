@@ -49,7 +49,7 @@ export function PersonLine({
   tag: string;
 }) {
   return (
-    <Item className={cn("px-0", className)} variant="divided">
+    <Item className={cn("px-0", className)} variant="plain">
       <ItemMedia>
         <PersonAvatar initials={initials} />
       </ItemMedia>

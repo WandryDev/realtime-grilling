@@ -208,7 +208,7 @@ function DocumentRow({
     [onRemove]
   );
   return (
-    <Item className="px-0 py-2.5 last:border-b-0" variant="divided">
+    <Item className="px-0 py-2.5" variant="plain">
       <ItemMedia>
         <FileTextIcon
           aria-hidden="true"
@@ -259,7 +259,7 @@ export function SoonIntegrations({ className }: { className?: string }) {
     <ul aria-label="Интеграции" className={cn("flex flex-col", className)}>
       {SOON.map((integration) => (
         <li aria-disabled="true" key={integration.kind}>
-          <Item className="px-0 py-2.5 last:border-b-0" variant="divided">
+          <Item className="px-0 py-2.5" variant="plain">
             <ItemMedia>
               <SourceTile
                 className="opacity-60"

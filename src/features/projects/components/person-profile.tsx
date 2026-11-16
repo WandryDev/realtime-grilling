@@ -399,12 +399,9 @@ export function Portrait({
     );
   }
   return (
-    <dl className={cn("flex flex-col", className)}>
+    <dl className={cn("flex flex-col gap-5", className)}>
       {rows.map((row) => (
-        <div
-          className="border-border flex gap-4 border-b py-3.5 last:border-b-0"
-          key={row.label}
-        >
+        <div className="flex gap-4" key={row.label}>
           <dt className="text-muted-foreground w-45 shrink-0 text-sm/5">
             {row.label}
           </dt>
@@ -488,11 +485,11 @@ export function ProfileSide({
           Звонков пока не было. После звонка агент предложит дополнить профиль.
         </p>
       ) : null}
-      <ul className="flex flex-col">
+      <ul className="flex flex-col gap-6 pb-3">
         {calls.map((call) => (
-          <li className="border-border border-b last:border-b-0" key={call.id}>
+          <li key={call.id}>
             <Link
-              className="group/call focus-visible:focus-ring flex flex-col gap-1 rounded-xs py-3"
+              className="group/call focus-visible:focus-ring flex flex-col gap-1 rounded-xs"
               href={routes.callSummary(call.id)}
             >
               <span className="text-muted-foreground flex justify-between font-mono text-xs">

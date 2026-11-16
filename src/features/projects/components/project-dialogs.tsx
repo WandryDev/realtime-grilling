@@ -546,12 +546,9 @@ export function DeleteProjectBody({
 }) {
   return (
     <>
-      <dl className="bg-surface flex flex-col rounded-md px-4 py-1">
+      <dl className="bg-surface flex flex-col gap-3 rounded-md px-4 py-3.5">
         {contents.map((entry) => (
-          <div
-            className="border-border flex justify-between gap-4 border-b py-2.5 last:border-b-0"
-            key={entry.label}
-          >
+          <div className="flex justify-between gap-4" key={entry.label}>
             <dt className="text-foreground text-base">{entry.label}</dt>
             <dd
               className={cn(

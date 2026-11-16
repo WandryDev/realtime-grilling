@@ -315,7 +315,7 @@ export function SourcesStep({
         description="Всё необязательно. Агент только читает и ничего не меняет. Источники можно добавить позже на странице проекта."
         title="Откуда брать контекст"
       />
-      <div className="flex flex-col gap-7 *:[section+section]:border-t *:[section+section]:pt-6">
+      <div className="flex flex-col gap-12">
         <SourceBlock
           connected={outline?.connected ?? true}
           connectHref={connectHref}
@@ -428,7 +428,7 @@ export function PeopleStep({
         title="Кто будет на звонках"
       />
       {people.length > 0 ? (
-        <ul aria-label="Люди клиента" className="flex flex-col">
+        <ul aria-label="Люди клиента" className="flex flex-col gap-5">
           {people.map((person) => (
             <li key={person.name}>
               <PersonLine {...person} onRemove={onRemove} />

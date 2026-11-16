@@ -433,7 +433,7 @@ function ServiceDocumentRow({
   const noText = source.status !== "ready";
   const Icon = ICON[kind];
   return (
-    <Item className="px-0 py-2.5 last:border-b-0" variant="divided">
+    <Item className="px-0 py-2.5" variant="plain">
       <ItemMedia>
         <Icon aria-hidden="true" className="size-4" />
       </ItemMedia>

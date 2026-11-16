@@ -64,10 +64,7 @@ export function ProjectAnchors({
 function ProjectSection({ className, ...props }: ComponentProps<"section">) {
   return (
     <section
-      className={cn(
-        "border-border flex scroll-mt-20 flex-col border-t pt-7",
-        className
-      )}
+      className={cn("flex scroll-mt-20 flex-col pt-9", className)}
       {...props}
     />
   );
@@ -384,7 +381,7 @@ export function SourcesSection({
         </p>
       ) : null}
       {sources.length > 0 ? (
-        <div className="flex flex-col">
+        <div className="flex flex-col gap-6">
           {sources.map((source) => (
             <IntegrationRow
               action={
@@ -397,7 +394,7 @@ export function SourcesSection({
                   Настроить
                 </Button>
               }
-              className="[&_[data-slot=item-meta]]:text-muted-foreground gap-3.5 px-0 py-3 last:border-b-0 [&_[data-slot=item-actions]]:w-20 [&_[data-slot=item-meta]]:w-50 [&_[data-slot=item-meta]]:gap-1.5"
+              className="[&_[data-slot=item-meta]]:text-muted-foreground gap-3.5 px-0 [&_[data-slot=item-actions]]:w-20 [&_[data-slot=item-meta]]:w-50 [&_[data-slot=item-meta]]:gap-1.5"
               description={
                 <span className={cn(source.mono && "font-mono text-xs/[18px]")}>
                   {source.description}
@@ -408,6 +405,7 @@ export function SourcesSection({
               name={source.name}
               status="connected"
               statusLabel={source.status}
+              variant="plain"
             />
           ))}
         </div>

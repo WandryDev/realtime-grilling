@@ -96,10 +96,7 @@ export function NotesSection({
   return (
     <section
       aria-labelledby={titleId}
-      className={cn(
-        "border-border flex scroll-mt-20 flex-col gap-4 border-t pt-7",
-        className
-      )}
+      className={cn("flex scroll-mt-20 flex-col gap-4 pt-9", className)}
       id={id}
     >
       <SectionHeading
