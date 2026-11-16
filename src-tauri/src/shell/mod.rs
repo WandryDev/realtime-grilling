@@ -224,10 +224,11 @@ async fn purge_by_retention<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Applies stored settings to the OS: overlay protection, global shortcuts
-/// and, in a release build, autostart. Blocks on the main thread for the
+/// Applies stored settings to the OS: the theme, overlay protection, global
+/// shortcuts and, in a release build, autostart. Blocks on the main thread for the
 /// shortcuts, so off the main thread it must run in a blocking task.
 fn apply_stored<R: Runtime>(app: &AppHandle<R>, settings: &SettingsMap) {
+    windows::apply_theme(app, settings::theme(settings));
     windows::protect_overlay(app, settings::flag(settings, settings::HIDE_ON_SHARE));
     let applied = shortcuts::apply(app, &settings::shortcuts(settings));
     for error in applied.errors {
@@ -414,6 +415,9 @@ pub fn apply_settings<R: Runtime>(
 
     if let Some(protected) = patch.get(settings::HIDE_ON_SHARE).and_then(Value::as_bool) {
         windows::protect_overlay(app, protected);
+    }
+    if patch.contains_key(settings::THEME) {
+        windows::apply_theme(app, settings::theme(patch));
     }
     SettingsEffects {
         corrections,

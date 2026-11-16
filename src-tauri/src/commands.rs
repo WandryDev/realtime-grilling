@@ -811,12 +811,13 @@ pub async fn data_delete_all(
     let secrets = Arc::clone(&app.state::<crate::connectors::Connectors>().secrets);
     let deleted = data::delete_everything(&storage, &app, secrets.as_ref()).await;
     // The OS follows the default settings: autostart, the overlay hidden
-    // from screen sharing, the shortcuts.
+    // from screen sharing, the shortcuts, the theme.
     let defaults = settings::defaults();
     let applied: SettingsMap = [
         settings::LAUNCH_AT_LOGIN,
         settings::HIDE_ON_SHARE,
         settings::SHORTCUTS,
+        settings::THEME,
     ]
     .into_iter()
     .filter_map(|key| Some((key.to_owned(), defaults.get(key)?.clone())))

@@ -66,8 +66,12 @@ pub const AUDIO_RETENTION: &str = "audioRetention";
 /// «Расшифровки»: days as a string (`"90"`, `"180"`, `"365"`) or `"never"`
 /// for a value an earlier build stored.
 pub const TRANSCRIPT_RETENTION: &str = "transcriptRetention";
-/// «Тема»: only `light` works for now; `dark` and `system` are «скоро».
+/// «Тема»: `light`, `dark` or `system` («Как в системе»: the OS appearance,
+/// followed live). Every window and the native title bars follow it.
 pub const THEME: &str = "theme";
+const THEME_VALUES: &[&str] = &["light", "dark", "system"];
+/// `theme` when nothing (or nothing readable) is stored.
+pub const DEFAULT_THEME: &str = "light";
 
 /// Every key the app stores; anything else is `Invalid`.
 pub const KNOWN_KEYS: &[&str] = &[
@@ -139,7 +143,7 @@ pub fn defaults() -> SettingsMap {
             TRANSCRIPT_RETENTION.to_owned(),
             json!(DEFAULT_TRANSCRIPT_RETENTION),
         ),
-        (THEME.to_owned(), json!("light")),
+        (THEME.to_owned(), json!(DEFAULT_THEME)),
         (
             SHORTCUTS.to_owned(),
             json!({
@@ -229,7 +233,7 @@ fn valid_value(key: &str, value: &Value) -> bool {
         MICROPHONE => value.as_str().is_some_and(|name| !name.trim().is_empty()),
         AUDIO_RETENTION => one_of(value, AUDIO_RETENTION_VALUES),
         TRANSCRIPT_RETENTION => one_of(value, TRANSCRIPT_RETENTION_VALUES),
-        THEME => one_of(value, &["light", "dark", "system"]),
+        THEME => one_of(value, THEME_VALUES),
         _ => false,
     }
 }
@@ -271,6 +275,15 @@ pub fn merge_shortcuts(stored: &SettingsMap, mut patch: SettingsMap) -> Settings
 
 pub fn flag(settings: &SettingsMap, key: &str) -> bool {
     settings.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// `theme`; a missing or unknown value is [`DEFAULT_THEME`].
+pub fn theme(settings: &SettingsMap) -> &str {
+    settings
+        .get(THEME)
+        .and_then(Value::as_str)
+        .filter(|theme| THEME_VALUES.contains(theme))
+        .unwrap_or(DEFAULT_THEME)
 }
 
 pub fn shortcuts(settings: &SettingsMap) -> Shortcuts {
@@ -461,6 +474,17 @@ mod tests {
         SettingsMap::from([(key.to_owned(), value)])
     }
 
+    /// `app-settings`, «Тема применяется ко всем окнам»: the stored theme,
+    /// the default when there is none or it is unknown.
+    #[test]
+    fn theme_reads_the_stored_value_or_light() {
+        assert_eq!(theme(&one(THEME, json!("dark"))), "dark");
+        assert_eq!(theme(&one(THEME, json!("system"))), "system");
+        assert_eq!(theme(&SettingsMap::new()), DEFAULT_THEME);
+        assert_eq!(theme(&one(THEME, json!("blue"))), DEFAULT_THEME);
+        assert_eq!(theme(&defaults()), "light");
+    }
+
     /// `app-settings`, «Неизвестный ключ».
     #[test]
     fn an_unknown_key_is_invalid_and_nothing_is_written() {
@@ -506,6 +530,8 @@ mod tests {
             (AUDIO_RETENTION, json!("never")),
             (TRANSCRIPT_RETENTION, json!("365")),
             (THEME, json!("light")),
+            (THEME, json!("dark")),
+            (THEME, json!("system")),
         ];
         for (key, value) in good {
             assert!(validate(&one(key, value.clone())).is_ok(), "{key} {value}");

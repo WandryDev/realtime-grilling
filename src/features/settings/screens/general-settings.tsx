@@ -79,7 +79,7 @@ export function GeneralSettings({
               setting="theme"
             />
           }
-          description="Тёмная появится позже"
+          description="Сразу во всех окнах Grill. «Как в системе» меняется вместе с системой"
           title="Тема"
         />
       </SettingsSection>

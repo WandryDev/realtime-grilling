@@ -1,6 +1,6 @@
 //! The four windows declared in `tauri.conf.json` (design.md, decision 1).
 
-use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, Theme, WebviewWindow};
 
 pub const MAIN: &str = "main";
 pub const ONBOARDING: &str = "onboarding";
@@ -92,6 +92,22 @@ pub fn protect_overlay<R: Runtime>(app: &AppHandle<R>, protected: bool) {
     }
 }
 
+/// The native appearance for a «Тема» value: `None` follows the OS.
+pub fn native_theme(theme: &str) -> Option<Theme> {
+    match theme {
+        "dark" => Some(Theme::Dark),
+        "system" => None,
+        _ => Some(Theme::Light),
+    }
+}
+
+/// «Тема» for the whole app: title bars, traffic lights, native controls and
+/// the webviews' `prefers-color-scheme`, in every window and the ones that
+/// open later. With `system` it follows the OS as it changes.
+pub fn apply_theme<R: Runtime>(app: &AppHandle<R>, theme: &str) {
+    app.set_theme(native_theme(theme));
+}
+
 #[cfg(test)]
 mod tests {
     use tauri::{WebviewUrl, WebviewWindowBuilder, test::mock_builder};
@@ -119,5 +135,13 @@ mod tests {
         let url = window.url().unwrap();
         assert_eq!(url.path(), ONBOARDING_ROUTE);
         assert_eq!(url.query(), None);
+    }
+
+    #[test]
+    fn theme_follows_the_setting_or_the_os() {
+        assert_eq!(native_theme("light"), Some(Theme::Light));
+        assert_eq!(native_theme("dark"), Some(Theme::Dark));
+        assert_eq!(native_theme("system"), None);
+        assert_eq!(native_theme("blue"), Some(Theme::Light));
     }
 }

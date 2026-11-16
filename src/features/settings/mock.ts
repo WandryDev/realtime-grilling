@@ -86,10 +86,10 @@ export const CALL_LANGUAGES: SelectOption[] = [
   { label: "Оба", value: "both" },
 ];
 
-export const THEMES: (SelectOption & { disabled?: boolean })[] = [
+export const THEMES: SelectOption[] = [
   { label: "Светлая", value: "light" },
-  { disabled: true, label: "Тёмная", value: "dark" },
-  { disabled: true, label: "Как в системе", value: "system" },
+  { label: "Тёмная", value: "dark" },
+  { label: "Как в системе", value: "system" },
 ];
 
 /** The recordings' folder of the demo. */

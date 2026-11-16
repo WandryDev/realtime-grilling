@@ -23,9 +23,11 @@ import { currentWindowLabel, MAIN_WINDOW } from "@/lib/window-label";
 
 import { reopenStorage, subscribeToNavigate } from "./api";
 import { MainWindow } from "./main-window";
+import { ThemeSync } from "./theme-sync";
 
 /*
  * Around every page of every window:
+ * - the window follows the «Тема» setting (ThemeSync);
  * - in Tauri, the window follows the backend's call in progress;
  * - the main window opens the routes Rust and the other windows ask for
  *   (the tray's "Настройки", the call window when a call is finishing). It
@@ -57,6 +59,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
   useEffect(() => followCallSession(), []);
   return (
     <>
+      <ThemeSync />
       {mainWindow ? <NavigateListener /> : null}
       {isMainWindowRoute(pathname) ? (
         <MainWindowFrame>{children}</MainWindowFrame>
