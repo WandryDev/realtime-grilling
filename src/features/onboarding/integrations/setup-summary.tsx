@@ -3,18 +3,17 @@ import type { ReactNode } from "react";
 import { ClaudeIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { CheckIcon } from "@/features/onboarding/components/icons";
 import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
-import { DashIcon, MicSmallIcon, SpeechBarsIcon } from "./icons";
+import { MicSmallIcon, SpeechBarsIcon } from "./icons";
 import type { SetupSummaryIcon, SetupSummaryItem } from "./mock";
 import { ServiceLogo } from "./service-logo";
 
 /*
- * Paper "06 Готово": a white card with what was set up. Each row is a green
- * check (or a gray dash when skipped), a 14px mark, the step and its result on
- * the right. Groups (required steps, integrations) are split by a hairline.
- * A skipped integration is gray and offers "Подключить".
+ * Paper "06 Готово": a white card with what was set up. Each row is the
+ * step's 14px mark, the step and its result on the right. Groups (required
+ * steps, integrations) are split by a hairline. A skipped integration is
+ * gray and offers "Подключить" in place of the result.
  */
 export function SetupSummary({
   className,
@@ -88,16 +87,9 @@ function SummaryRow({
   item: SetupSummaryItem;
   onConnect?: () => void;
 }) {
+  const connectable = item.skipped && !item.soon;
   return (
     <li className="flex items-center gap-3 py-2">
-      <span className="flex size-5 shrink-0 items-center justify-center">
-        {item.skipped ? (
-          <DashIcon className="text-empty size-3.5" />
-        ) : (
-          <CheckIcon className="text-confirmed size-3.5" />
-        )}
-        <span className="sr-only">{item.skipped ? "пропущено" : "готово"}</span>
-      </span>
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <SummaryMark icon={item.icon} />
         <span
@@ -109,15 +101,17 @@ function SummaryRow({
           {item.label}
         </span>
       </span>
-      <span
-        className={cn(
-          "text-muted-foreground shrink-0",
-          item.valueMono ? "font-mono text-xs" : "text-sm"
-        )}
-      >
-        {item.value}
-      </span>
-      {item.skipped && !item.soon ? (
+      {connectable ? null : (
+        <span
+          className={cn(
+            "text-muted-foreground shrink-0",
+            item.valueMono ? "font-mono text-xs" : "text-sm"
+          )}
+        >
+          {item.value}
+        </span>
+      )}
+      {connectable ? (
         <Button
           aria-label={`Подключить ${item.label}`}
           className="-my-1"

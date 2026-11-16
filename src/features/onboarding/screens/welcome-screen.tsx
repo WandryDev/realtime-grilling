@@ -38,9 +38,9 @@ export function WelcomeScreen({
     <OnboardingWindow className={className} step="welcome">
       <OnboardingContent>
         <div className="flex flex-col gap-5">
-          <GrillAppIcon badge />
+          <GrillAppIcon />
           <StepHeading
-            description="Помощник для звонков с клиентами. Настроим всё за пару минут, без терминала и технических знаний."
+            description="Помощник для звонков с клиентами. Настроим всё без терминала и технических знаний."
             size="hero"
             title="Здравствуйте, это Grill"
           />

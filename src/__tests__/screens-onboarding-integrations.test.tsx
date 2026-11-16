@@ -180,5 +180,11 @@ describe("DoneScreen", () => {
     expect(
       screen.getByRole("button", { name: "Добавить первый проект" })
     ).toBeDefined();
+    // «Подключить» says it was skipped; one mark per row, the service's.
+    expect(screen.queryByText("пропущено")).toBeNull();
+    const summary = screen.getByRole("region", { name: "Итог настройки" });
+    for (const row of within(summary).getAllByRole("listitem")) {
+      expect(row.querySelectorAll("svg")).toHaveLength(1);
+    }
   });
 });

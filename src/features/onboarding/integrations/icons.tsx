@@ -26,15 +26,6 @@ function Icon({ children, strokeWidth = 1.5, ...props }: IconProps) {
   );
 }
 
-/** Skipped step in the setup summary. */
-export function DashIcon(props: IconProps) {
-  return (
-    <Icon strokeWidth={1.6} {...props}>
-      <path d="M3.5 7h7" />
-    </Icon>
-  );
-}
-
 export function CopyIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.3} {...props}>

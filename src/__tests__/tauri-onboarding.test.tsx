@@ -799,7 +799,7 @@ describe("SpeechPage in Tauri", () => {
     render(<SpeechPage />);
     await screen.findByRole("button", { name: "Скачать" });
 
-    fireEvent.click(screen.getByRole("radio", { name: "Українська" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Украинский" }));
     await waitFor(() =>
       expect(calls("settings_update")).toEqual([
         {

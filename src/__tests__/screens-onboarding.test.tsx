@@ -16,6 +16,7 @@ import {
 import { WelcomeScreen } from "@/features/onboarding/screens/welcome-screen";
 
 const NEXT_NAME = "Продолжить";
+const PAIR_OF_MINUTES = /за пару минут/u;
 
 describe("WelcomeScreen", () => {
   it("greets and starts the setup", () => {
@@ -31,6 +32,11 @@ describe("WelcomeScreen", () => {
     expect(
       screen.getByRole("listitem", { current: "step" }).textContent
     ).toContain("Знакомство");
+    // The footer says how long; the subtitle doesn't repeat it.
+    expect(screen.getByText("Займёт около 5 минут")).toBeDefined();
+    expect(screen.queryByText(PAIR_OF_MINUTES)).toBeNull();
+    // The steps name the window; the title bar doesn't add «Настройка Grill».
+    expect(screen.queryByText("Настройка Grill")).toBeNull();
   });
 });
 
@@ -80,6 +86,7 @@ describe("PermissionsScreen", () => {
 
   it("uses the Windows window controls on Windows", () => {
     render(<PermissionsScreen state="windows" />);
+    expect(screen.queryByText("Настройка Grill")).toBeNull();
 
     expect(screen.getByRole("button", { name: "Закрыть" })).toBeDefined();
     expect(
@@ -141,6 +148,15 @@ describe("AgentScreen", () => {
       "disabled",
       !(state === "ready")
     );
+  });
+});
+
+describe("AgentScreen without a login", () => {
+  it("says it once, in the row, without a «Нужен вход» badge", () => {
+    render(<AgentScreen state="needs-login" />);
+
+    expect(screen.getByText("Вход не выполнен")).toBeDefined();
+    expect(screen.queryByText("Нужен вход")).toBeNull();
   });
 });
 

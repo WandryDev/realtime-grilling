@@ -208,7 +208,7 @@ describe("SpeechPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
     expect(screen.getByRole("button", { name: "Скачать" })).toBeDefined();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Українська" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Украинский" }));
     expect(screen.getByText("Модель для украинского языка")).toBeDefined();
     // The call language is a setting
     expect(getSettings().callLanguage).toBe("uk");

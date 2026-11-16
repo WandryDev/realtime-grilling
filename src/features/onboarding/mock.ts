@@ -30,7 +30,7 @@ export interface SpeechLanguage {
 
 export const SPEECH_LANGUAGES: SpeechLanguage[] = [
   { id: "ru", label: "Русский" },
-  { id: "uk", label: "Українська" },
+  { id: "uk", label: "Украинский" },
 ];
 
 /** Model download for the selected language, as the speech step shows it. */

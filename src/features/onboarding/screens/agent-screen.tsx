@@ -455,9 +455,8 @@ const STATUS: Record<AgentState, ReactNode> = {
       2 из 3
     </AgentStatusBadge>
   ),
-  "needs-login": (
-    <AgentStatusBadge tone="attention">Нужен вход</AgentStatusBadge>
-  ),
+  // The «Вход не выполнен» row says it already.
+  "needs-login": null,
   "not-installed": (
     <AgentStatusBadge tone="neutral">Не установлен</AgentStatusBadge>
   ),

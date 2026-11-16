@@ -119,7 +119,7 @@ export function OnboardingSteps({ current }: { current: OnboardingStepId }) {
 }
 
 /*
- * Windows chrome: the app tile and the window name on the left, the system
+ * Windows chrome: the app tile on the left, the system
  * buttons (46×32) pinned to the top right corner. The steps stay centered
  * between two 160px columns, as on macOS.
  */
@@ -127,13 +127,12 @@ function WindowsTitlebarContent({ step }: { step: OnboardingStepId }) {
   const actions = useWindowActions();
   return (
     <>
-      <p className="text-muted-foreground flex w-40 shrink-0 items-center gap-2 text-sm">
+      <div className="flex w-40 shrink-0 items-center">
         <span
           aria-hidden="true"
           className="bg-foreground size-4 rounded-[5px]"
         />
-        Настройка Grill
-      </p>
+      </div>
       <OnboardingSteps current={step} />
       <div className="w-40 shrink-0" />
       <WindowControlGroup className="absolute top-0 right-0 h-8">
@@ -185,9 +184,7 @@ export function OnboardingWindow({
               <WindowChromeStart />
             </div>
             <OnboardingSteps current={step} />
-            <p className="text-muted-foreground w-40 shrink-0 text-right text-sm">
-              Настройка Grill
-            </p>
+            <div className="w-40 shrink-0" />
           </>
         )}
       </WindowTitlebar>
