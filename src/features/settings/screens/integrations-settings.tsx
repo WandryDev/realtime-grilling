@@ -455,7 +455,11 @@ export function IntegrationsSettings({
 }) {
   return (
     <>
-      <ServiceGroup meta={workingSummary(services)} title="Сервисы">
+      <ServiceGroup
+        className="pt-4"
+        meta={workingSummary(services)}
+        title="Сервисы"
+      >
         {SERVICE_ORDER.map((service) => (
           <IntegrationServiceRow
             handlers={handlers}
@@ -465,7 +469,7 @@ export function IntegrationsSettings({
           />
         ))}
       </ServiceGroup>
-      <ServiceGroup title="Агент">
+      <ServiceGroup className="pt-8" title="Агент">
         <ServiceRow
           description={AGENT_MCP.description}
           icon={<ClaudeIcon />}

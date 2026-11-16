@@ -14,7 +14,7 @@ import { SmallCheckIcon } from "../icons";
  * a 240px column. Rows are separated by hairlines, the list is closed by one.
  */
 
-/** Titled list of services: 16px title, a muted count right. */
+/** Titled list of services: muted 13px title like SettingsSection, a muted count right. */
 export function ServiceGroup({
   children,
   className,
@@ -28,8 +28,8 @@ export function ServiceGroup({
 }) {
   return (
     <section className={cn("flex flex-col", className)}>
-      <div className="flex items-center justify-between gap-4 pb-3">
-        <h2 className="text-lg font-semibold">{title}</h2>
+      <div className="flex items-center justify-between gap-4 pb-1">
+        <h2 className="text-muted-foreground text-sm font-medium">{title}</h2>
         {meta ? <p className="text-muted-foreground text-sm">{meta}</p> : null}
       </div>
       <div className="flex flex-col">{children}</div>
