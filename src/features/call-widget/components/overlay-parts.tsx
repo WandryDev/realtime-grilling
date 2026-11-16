@@ -251,14 +251,16 @@ export function OverlayQuestion({
 
 /*
  * 36px footer under a hairline: the agent's status or a hint on the left,
- * "не видно в демонстрации" on the right (the overlay is excluded from
- * screen sharing).
+ * "не видно в демонстрации" on the right while the overlay is excluded from
+ * screen sharing (`hiddenFromShare`, the setting «Скрывать при демонстрации
+ * экрана»).
  */
 export function OverlayFooter({
   children,
   className,
+  hiddenFromShare = true,
   ...props
-}: ComponentProps<"div">) {
+}: ComponentProps<"div"> & { hiddenFromShare?: boolean }) {
   return (
     <div
       className={cn(
@@ -268,10 +270,12 @@ export function OverlayFooter({
       {...props}
     >
       {children}
-      <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-sm">
-        <EyeOffIcon className="size-3.5" />
-        не видно в демонстрации
-      </span>
+      {hiddenFromShare ? (
+        <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-sm">
+          <EyeOffIcon className="size-3.5" />
+          не видно в демонстрации
+        </span>
+      ) : null}
     </div>
   );
 }

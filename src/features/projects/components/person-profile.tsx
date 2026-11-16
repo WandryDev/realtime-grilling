@@ -294,7 +294,7 @@ export function ScaleCard({
   return (
     <div
       className={cn(
-        "bg-background shadow-card flex flex-col gap-2.5 rounded-md p-4",
+        "bg-surface flex flex-col gap-2.5 rounded-sm px-4 py-3.5",
         className
       )}
     >

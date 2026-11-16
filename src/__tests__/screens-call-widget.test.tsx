@@ -18,6 +18,16 @@ describe("StartWidget", () => {
     expect(screen.getByRole("button", { name: REMOVE_OLGA })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Начать" })).toBeTruthy();
     expect(screen.queryByPlaceholderText("Найти проект")).toBeNull();
+    // The 24px avatar of a participant holds one letter.
+    const initials = [
+      ...document.querySelectorAll(
+        "[data-slot=person-chip] [data-slot=avatar-fallback]"
+      ),
+    ].map((fallback) => fallback.textContent);
+    expect(initials.length).toBeGreaterThan(0);
+    for (const initial of initials) {
+      expect(Array.from(initial ?? "")).toHaveLength(1);
+    }
   });
 
   it("draws the project list open while choosing a project", () => {
@@ -73,6 +83,16 @@ describe("CompactOverlay", () => {
     ).toBeTruthy();
     expect(screen.getByText("Новый, только что")).toBeTruthy();
     expect(screen.getAllByRole("group")).toHaveLength(3);
+    expect(screen.getByText("слушаю")).toBeTruthy();
+  });
+
+  it("says it is hidden from screen sharing only when it is", () => {
+    const { unmount } = render(<CompactOverlay />);
+    expect(screen.getByText("не видно в демонстрации")).toBeTruthy();
+    unmount();
+
+    render(<CompactOverlay hiddenFromShare={false} />);
+    expect(screen.queryByText("не видно в демонстрации")).toBeNull();
     expect(screen.getByText("слушаю")).toBeTruthy();
   });
 

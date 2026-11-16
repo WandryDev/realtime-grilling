@@ -62,6 +62,7 @@ export function CompactOverlay({
   mainQuestion = OVERLAY_MAIN_QUESTION,
   mainQuestionId,
   finalCheckMore = OVERLAY.finalCheckMore,
+  hiddenFromShare = true,
   newQuestion,
   onCollapse,
   onDismissNewQuestion,
@@ -93,6 +94,11 @@ export function CompactOverlay({
   mainQuestionId?: string;
   /** "ещё N в окне": final check questions that didn't fit. */
   finalCheckMore?: number;
+  /**
+   * The overlay is excluded from screen sharing («Скрывать при демонстрации
+   * экрана»): the footer says "не видно в демонстрации".
+   */
+  hiddenFromShare?: boolean;
   /**
    * The card under the collapsed pill. Defaults to the main question
    * (previews); null hides it.
@@ -189,7 +195,7 @@ export function CompactOverlay({
           question={question}
         />
       ))}
-      <OverlayFooter>
+      <OverlayFooter hiddenFromShare={hiddenFromShare}>
         {finalCheck && finalCheckMore > 0 ? (
           <span className="text-muted-foreground text-sm">
             ещё {finalCheckMore} в окне

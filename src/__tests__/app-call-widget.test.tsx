@@ -23,6 +23,7 @@ const { OverlayPage } = await import(
   "@/features/call-widget/pages/overlay-page"
 );
 const { CURRENT_CALL_ID, resetCall } = await import("@/data/call-session");
+const { updateSetting } = await import("@/data/settings");
 const { routes } = await import("@/lib/routes");
 
 const REMOVE_OLGA = /Убрать.*Ольга/u;
@@ -142,6 +143,24 @@ describe("/overlay", () => {
     advance(FIRST_QUESTION_MS);
     expect(screen.getByText(FIRST_FEED_QUESTION)).toBeTruthy();
     expect(screen.getByText("слушаю")).toBeTruthy();
+  });
+
+  it("says «не видно в демонстрации» only while «Скрывать при демонстрации» is on", () => {
+    const page = open(OverlayPage);
+    expect(screen.getByText("не видно в демонстрации")).toBeTruthy();
+    page.unmount();
+
+    act(() => {
+      updateSetting("hideOnShare", false);
+    });
+    try {
+      open(OverlayPage);
+      expect(screen.queryByText("не видно в демонстрации")).toBeNull();
+    } finally {
+      act(() => {
+        updateSetting("hideOnShare", true);
+      });
+    }
   });
 
   it("hides a question: the next one takes the main place", () => {

@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
 /*
  * Participants of the start widget: the widget's person chip one step taller
  * (30px) with a gray avatar, and the × always on view, since the widget is
- * where people are picked for the call.
+ * where people are picked for the call. The 24px avatar holds one letter:
+ * two would not fit.
  */
 export function ParticipantChip({
   className,
@@ -32,7 +33,7 @@ export function ParticipantChip({
         "[&_[data-slot=avatar-fallback]]:bg-border h-[30px] gap-1.5 pr-1 pl-1 has-data-[slot=person-chip-remove]:focus-within:pr-1 has-data-[slot=person-chip-remove]:hover:pr-1",
         className
       )}
-      initials={initials}
+      initials={Array.from(initials).at(0) ?? ""}
       name={name}
       title={detail}
     >

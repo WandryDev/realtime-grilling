@@ -34,6 +34,15 @@ describe("CallScreen", () => {
     expect(screen.getAllByText(text).length).toBeGreaterThan(0);
   });
 
+  it("says «слушаю» once: the empty state, not the panel header too", () => {
+    const { unmount } = render(<CallScreen state="starting" />);
+    expect(screen.queryByText("слушаю")).toBeNull();
+    unmount();
+
+    render(<CallScreen />);
+    expect(screen.getByText("слушаю")).toBeTruthy();
+  });
+
   it("shows the topic headings of the reference screen", () => {
     render(<CallScreen />);
 

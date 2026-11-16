@@ -59,6 +59,12 @@ export function CallQuestions({
           finalCheckCount={
             parkedFinalCheck ? parkedFinalCheck.questions.length + 1 : undefined
           }
+          // "Слушаю…" of the empty state says it already.
+          hideStatus={
+            empty !== undefined &&
+            agent.state === "listening" &&
+            agent.label === undefined
+          }
           sectionIdPrefix={prefix}
           usage={usage}
         />

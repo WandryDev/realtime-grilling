@@ -511,7 +511,7 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
   const openRoute = useOpenRoute();
   const session = useCallSession();
   const project = useProject(session.projectId);
-  const { autoEnd } = useSettings();
+  const { autoEnd, hideOnShare } = useSettings();
   const now = useNowSeconds();
   const [view, setView] = useState<View>(
     demo === "collapsed" ? "collapsed" : "expanded"
@@ -622,6 +622,7 @@ function OverlayFlow({ demo }: { demo: DemoState | undefined }) {
       <CompactOverlay
         {...questions}
         callHref={routes.call()}
+        hiddenFromShare={hideOnShare}
         newQuestion={incoming}
         onCollapse={collapse}
         onDismissNewQuestion={dismissIncoming}

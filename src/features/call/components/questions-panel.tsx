@@ -62,6 +62,7 @@ export function QuestionsNav({
   anchors,
   className,
   finalCheckCount,
+  hideStatus = false,
   sectionIdPrefix,
   usage,
 }: {
@@ -69,6 +70,8 @@ export function QuestionsNav({
   anchors: TopicAnchorData[];
   className?: string;
   finalCheckCount?: number;
+  /** The panel says it listens itself (the empty state): no status here. */
+  hideStatus?: boolean;
   sectionIdPrefix?: string;
   usage?: string;
 }) {
@@ -111,9 +114,11 @@ export function QuestionsNav({
             {usage}
           </span>
         ) : null}
-        <AgentStatus state={agent.state} tone={agent.tone}>
-          {agent.label}
-        </AgentStatus>
+        {hideStatus ? null : (
+          <AgentStatus state={agent.state} tone={agent.tone}>
+            {agent.label}
+          </AgentStatus>
+        )}
       </div>
     </div>
   );
