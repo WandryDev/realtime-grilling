@@ -108,31 +108,27 @@ export function SummarySection({
   className,
   count,
   countTone = "muted",
-  divided = false,
   icon,
   id,
   meta,
+  separate = false,
   title,
 }: {
   children: ReactNode;
   className?: string;
   count?: ReactNode;
   countTone?: "muted" | "accent";
-  /** Hairline on top, 28px above the heading. */
-  divided?: boolean;
   icon?: ReactNode;
   id: string;
   meta?: ReactNode;
+  /** 32px more above the heading: a part of its own after the topics. */
+  separate?: boolean;
   title: string;
 }) {
   return (
     <section
       aria-labelledby={id}
-      className={cn(
-        "flex flex-col gap-2",
-        divided && "border-border border-t pt-7",
-        className
-      )}
+      className={cn("flex flex-col gap-2", separate && "pt-8", className)}
     >
       <header
         className={cn(

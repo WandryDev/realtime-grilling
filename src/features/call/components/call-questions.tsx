@@ -90,7 +90,6 @@ export function CallQuestions({
       ) : null}
       {previous ? (
         <EarlierTopic
-          className="pt-4"
           highlightedId={highlightedId}
           id={topicSectionId(prefix, previous.id)}
           topic={previous}
@@ -98,7 +97,6 @@ export function CallQuestions({
       ) : null}
       {earlier.map((topic) => (
         <EarlierTopic
-          className="pt-4"
           highlightedId={highlightedId}
           id={topicSectionId(prefix, topic.id)}
           key={topic.id}
@@ -107,7 +105,6 @@ export function CallQuestions({
       ))}
       {noTopic ? (
         <EarlierTopic
-          className="pt-2"
           highlightedId={highlightedId}
           id={topicSectionId(prefix, noTopic.id)}
           topic={noTopic}
@@ -191,7 +188,7 @@ export function EarlierTopic({
       id={id}
       meta={topic.meta}
       title={topic.title}
-      variant="divided"
+      variant="earlier"
     >
       {topic.questions.map((question) => (
         <OpenQuestion

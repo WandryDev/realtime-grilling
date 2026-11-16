@@ -45,7 +45,7 @@ export function CenteredState({
   );
 }
 
-/** Hairline-divided rows under a centered state. */
+/** Rows under a centered state, no lines. */
 export function StateList({
   children,
   className,
@@ -76,7 +76,7 @@ export function StateRow({
   return (
     <li
       className={cn(
-        "border-border flex min-h-11 items-center gap-2.5 border-t px-1 py-2.5 text-left last:border-b",
+        "flex min-h-11 items-center gap-2.5 px-1 py-2.5 text-left",
         className
       )}
     >

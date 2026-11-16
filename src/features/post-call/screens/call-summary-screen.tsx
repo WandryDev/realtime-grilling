@@ -165,10 +165,10 @@ function ClickUpSection({ answers }: { answers: ClickUpAnswer[] }) {
   return (
     <SummarySection
       count={`${answered} из ${answers.length}`}
-      divided
       icon={<ClickUpTile />}
       id="clickup"
       meta="в ClickUp пока не отправляем, можно скопировать"
+      separate
       title="Ответы для ClickUp"
     >
       <ClickUpAnswers answers={answers} />
@@ -229,9 +229,9 @@ function ReadyContent({
           className="gap-1"
           count={unasked.length}
           countTone="accent"
-          divided
           id="unasked"
           meta="открытые и без ответа"
+          separate
           title="Не успели спросить"
         >
           <UnaskedQuestions questions={unasked} />

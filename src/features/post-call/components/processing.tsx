@@ -102,7 +102,7 @@ export function ProcessingSteps({
 /** Gray block where the short summary will appear. */
 export function SummarySkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn("border-border border-t pt-7", className)}>
+    <div className={cn("pt-8", className)}>
       <div className="bg-surface flex flex-col gap-3 rounded-md px-7 py-6">
         <Skeleton className="h-3 w-[72px]" />
         <Skeleton className="h-4 w-[92%]" />

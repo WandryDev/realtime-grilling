@@ -157,7 +157,7 @@ function AnchorButton({
 /*
  * A topic block: its header and the questions under it.
  * - `current`: the topic under discussion, header with more air.
- * - `divided`: earlier topics and "Без темы", a hairline on top.
+ * - `earlier`: earlier topics and "Без темы", set apart by 32px on top.
  * - `plain`: the final check list.
  */
 export function TopicSection({
@@ -174,13 +174,13 @@ export function TopicSection({
   id?: string;
   meta: ReactNode;
   title: ReactNode;
-  variant?: "current" | "divided" | "plain";
+  variant?: "current" | "earlier" | "plain";
 }) {
   return (
     <section
       className={cn(
         "flex scroll-mt-16 flex-col",
-        variant === "divided" ? "border-border gap-1 border-t" : "gap-2",
+        variant === "earlier" ? "gap-1 pt-8" : "gap-2",
         className
       )}
       id={id}

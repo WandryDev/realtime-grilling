@@ -256,12 +256,7 @@ export function TaskCardField({
   label: string;
 }) {
   return (
-    <div
-      className={cn(
-        "border-border flex gap-6 border-t px-1 py-[18px]",
-        className
-      )}
-    >
+    <div className={cn("flex gap-6 px-1 py-[18px]", className)}>
       <dt className="text-muted-foreground w-[168px] shrink-0 text-base leading-6 font-medium">
         {label}
       </dt>

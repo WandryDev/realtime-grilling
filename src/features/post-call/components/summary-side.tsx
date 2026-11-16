@@ -71,12 +71,9 @@ export function KnowledgeProposalsCard({
           не примете.
         </p>
       </div>
-      <ul className="flex flex-col">
+      <ul className="flex flex-col gap-2.5">
         {targets.map((target) => (
-          <li
-            className="border-border flex items-center gap-2.5 border-t py-2"
-            key={target.id}
-          >
+          <li className="flex items-center gap-2.5" key={target.id}>
             <TargetMedia initial={target.initial} />
             <span className="flex-1 text-base">{target.name}</span>
             <span className="text-muted-foreground font-mono text-xs tabular-nums">

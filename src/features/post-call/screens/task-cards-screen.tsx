@@ -59,7 +59,7 @@ function TaskCard({
   return (
     <section
       aria-labelledby={headingId}
-      className="flex scroll-mt-6 flex-col gap-7"
+      className="flex flex-col gap-5 pt-6"
       id={`topic-${card.id}`}
     >
       <TaskCardHeading
@@ -206,7 +206,7 @@ export function TaskCardsScreen({
           title="Карточки задач"
         />
         {empty ? null : (
-          <div className="border-border flex items-center justify-between gap-6 border-b pb-4">
+          <div className="flex items-center justify-between gap-6">
             <Tabs
               defaultValue={controlled ? undefined : topics[0]?.id}
               onValueChange={controlled ? changeTopic : undefined}

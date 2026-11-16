@@ -368,15 +368,12 @@ export function ReviewTally({
   ];
 
   return (
-    <SideCard className={cn("gap-0 px-4 py-1.5", className)}>
-      <ul className="flex flex-col">
+    <SideCard className={cn("gap-0 px-4 py-3.5", className)}>
+      <ul className="flex flex-col gap-3">
         {rows.map((row) => {
           const waiting = row.id === "pending";
           return (
-            <li
-              className="border-border flex items-center gap-2.5 border-t py-2.5 first:border-t-0"
-              key={row.id}
-            >
+            <li className="flex items-center gap-2.5" key={row.id}>
               <StatusDot tone={row.tone} />
               <span
                 className={cn(
