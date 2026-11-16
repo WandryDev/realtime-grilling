@@ -95,6 +95,8 @@ export function OpenQuestion({
   frozen = false,
   highlighted = false,
   hovered = false,
+  leaving = false,
+  onExited,
   pinnable = true,
   question,
   topicId,
@@ -107,6 +109,9 @@ export function OpenQuestion({
   highlighted?: boolean;
   /** Pin the hover state for the static screen. */
   hovered?: boolean;
+  /** Gone from the list: plays the exit, then `onExited` with its id. */
+  leaving?: boolean;
+  onExited?: (questionId: string) => void;
   /** Offer "Закрепить"; the final check list doesn't. */
   pinnable?: boolean;
   question: OpenQuestionData;
@@ -117,6 +122,11 @@ export function OpenQuestion({
   const withActions = variant === "default" && !frozen;
   const { onQuestionAction } = useCallActions();
   const canAct = withActions && topicId !== undefined && onQuestionAction;
+
+  const exited = useCallback(
+    () => onExited?.(question.id),
+    [onExited, question.id]
+  );
 
   const act = useCallback(
     (action: QuestionQuickAction) => {
@@ -149,6 +159,8 @@ export function OpenQuestion({
       )}
       data-preview={hovered ? "hover" : undefined}
       {...questionTarget(question.id, highlighted)}
+      leaving={leaving}
+      onExited={exited}
       onKeyDown={canAct ? onKeyDown : undefined}
       variant={variant}
     >

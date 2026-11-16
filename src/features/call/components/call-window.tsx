@@ -45,7 +45,7 @@ export function CallWindow({
 }: {
   className?: string;
   context: ReactNode;
-  /** The call is over: columns fade to 30% and stop taking input. */
+  /** The call is over: columns fade to 30% (200ms) and stop taking input. */
   dimmed?: boolean;
   /** Panels drawn over the window, positioned by the caller. */
   overlay?: ReactNode;
@@ -56,7 +56,14 @@ export function CallWindow({
   return (
     <AppWindow className={cn("relative", className)}>
       {titlebar}
-      <AppWindowBody className={cn(dimmed && "opacity-30")} inert={dimmed}>
+      {/* The columns fade back as the finishing card comes up */}
+      <AppWindowBody
+        className={cn(
+          "ease-enter transition-opacity duration-200",
+          dimmed && "opacity-30"
+        )}
+        inert={dimmed}
+      >
         {transcript}
         {questions}
         {context}

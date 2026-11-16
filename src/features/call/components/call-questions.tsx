@@ -2,9 +2,15 @@
 
 import { useId } from "react";
 
+import { Appear, AppearScope, usePresence } from "@/components/ui/appear";
 import { cn } from "@/lib/utils";
 
-import type { FinalCheckData, QuestionsData, TopicData } from "../types";
+import type {
+  FinalCheckData,
+  OpenQuestionData,
+  QuestionsData,
+  TopicData,
+} from "../types";
 import { AgentBanner, FinalCheckBanner } from "./banners";
 import { ListeningEmpty } from "./listening-empty";
 import { MainQuestion, OpenQuestion, PinnedQuestion } from "./question-rows";
@@ -19,10 +25,18 @@ import { TopicHistory } from "./topic-history";
 /** Topic id the final check list answers to in handlers and anchors. */
 export const FINAL_CHECK_TOPIC_ID = "final-check";
 
+const questionKey = (question: OpenQuestionData) => question.id;
+
 /*
  * The questions panel filled from data, top to bottom: anchors, an agent
  * banner, the empty state or the final check, the current topic, the
  * previous one and "Без темы".
+ *
+ * Motion (inside the call window's AppearScope): a new current topic, the
+ * final check and an agent banner enter as a block; a question added to
+ * the current topic or the final check rises into place on its own; one
+ * that goes (answered, hidden, asked, pinned) fades out before the list
+ * closes up. A topic that moves down to the earlier ones doesn't move.
  */
 export function CallQuestions({
   className,
@@ -70,7 +84,11 @@ export function CallQuestions({
         />
       }
     >
-      {banner ? <AgentBanner banner={banner} className="mt-3" /> : null}
+      {banner ? (
+        <Appear className="mt-3" motion="drop">
+          <AgentBanner banner={banner} />
+        </Appear>
+      ) : null}
       {empty ? <ListeningEmpty empty={empty} /> : null}
       {finalCheck ? (
         <FinalCheck
@@ -85,6 +103,7 @@ export function CallQuestions({
           highlightedId={highlightedId}
           hoveredId={hoveredId}
           id={topicSectionId(prefix, current.id)}
+          key={current.id}
           topic={current}
         />
       ) : null}
@@ -92,6 +111,7 @@ export function CallQuestions({
         <EarlierTopic
           highlightedId={highlightedId}
           id={topicSectionId(prefix, previous.id)}
+          key={previous.id}
           topic={previous}
         />
       ) : null}
@@ -107,6 +127,7 @@ export function CallQuestions({
         <EarlierTopic
           highlightedId={highlightedId}
           id={topicSectionId(prefix, noTopic.id)}
+          key={noTopic.id}
           topic={noTopic}
         />
       ) : null}
@@ -130,43 +151,51 @@ export function CurrentTopic({
   id?: string;
   topic: TopicData;
 }) {
+  const rows = usePresence(topic.questions, questionKey);
+
   return (
-    <TopicSection
-      className={className}
-      id={id}
-      meta={topic.meta}
-      title={topic.title}
-    >
-      {topic.pinned ? (
-        <PinnedQuestion
-          highlighted={topic.pinned.id === highlightedId}
-          question={topic.pinned}
-          topicId={topic.id}
-        />
-      ) : null}
-      {topic.main ? (
-        <MainQuestion
-          frozen={frozen}
-          highlighted={
-            topic.main.id !== undefined && topic.main.id === highlightedId
-          }
-          question={topic.main}
-        />
-      ) : null}
-      {topic.questions.map((question) => (
-        <OpenQuestion
-          frozen={frozen}
-          highlighted={question.id === highlightedId}
-          hovered={question.id === hoveredId}
-          key={question.id}
-          question={question}
-          topicId={topic.id}
-        />
-      ))}
-      {topic.history ? (
-        <TopicHistory history={topic.history} topicId={topic.id} />
-      ) : null}
-    </TopicSection>
+    <Appear>
+      <TopicSection
+        className={className}
+        id={id}
+        meta={topic.meta}
+        title={topic.title}
+      >
+        {topic.pinned ? (
+          <PinnedQuestion
+            highlighted={topic.pinned.id === highlightedId}
+            key={topic.pinned.id}
+            question={topic.pinned}
+            topicId={topic.id}
+          />
+        ) : null}
+        {topic.main ? (
+          <MainQuestion
+            frozen={frozen}
+            highlighted={
+              topic.main.id !== undefined && topic.main.id === highlightedId
+            }
+            key={topic.main.id ?? topic.main.title}
+            question={topic.main}
+          />
+        ) : null}
+        {rows.list.map(({ item: question, key, leaving }) => (
+          <OpenQuestion
+            frozen={frozen}
+            highlighted={!leaving && question.id === highlightedId}
+            hovered={question.id === hoveredId}
+            key={key}
+            leaving={leaving}
+            onExited={rows.exited}
+            question={question}
+            topicId={topic.id}
+          />
+        ))}
+        {topic.history ? (
+          <TopicHistory history={topic.history} topicId={topic.id} />
+        ) : null}
+      </TopicSection>
+    </Appear>
   );
 }
 
@@ -190,21 +219,24 @@ export function EarlierTopic({
       title={topic.title}
       variant="earlier"
     >
-      {topic.questions.map((question) => (
-        <OpenQuestion
-          highlighted={question.id === highlightedId}
-          key={question.id}
-          question={question}
-          variant="compact"
-        />
-      ))}
-      {topic.history ? (
-        <TopicHistory
-          className="mt-1"
-          history={topic.history}
-          topicId={topic.id}
-        />
-      ) : null}
+      {/* Moved down from the current topic, not new: its rows stay still */}
+      <AppearScope>
+        {topic.questions.map((question) => (
+          <OpenQuestion
+            highlighted={question.id === highlightedId}
+            key={question.id}
+            question={question}
+            variant="compact"
+          />
+        ))}
+        {topic.history ? (
+          <TopicHistory
+            className="mt-1"
+            history={topic.history}
+            topicId={topic.id}
+          />
+        ) : null}
+      </AppearScope>
     </TopicSection>
   );
 }
@@ -224,8 +256,10 @@ export function FinalCheck({
   highlightedId?: string;
   id?: string;
 }) {
+  const rows = usePresence(finalCheck.questions, questionKey);
+
   return (
-    <div
+    <Appear
       className={cn("flex scroll-mt-16 flex-col gap-2 pt-4 pb-12", className)}
       id={id}
     >
@@ -240,18 +274,21 @@ export function FinalCheck({
             finalCheck.main.id !== undefined &&
             finalCheck.main.id === highlightedId
           }
+          key={finalCheck.main.id ?? finalCheck.main.title}
           question={finalCheck.main}
         />
-        {finalCheck.questions.map((question) => (
+        {rows.list.map(({ item: question, key, leaving }) => (
           <OpenQuestion
-            highlighted={question.id === highlightedId}
-            key={question.id}
+            highlighted={!leaving && question.id === highlightedId}
+            key={key}
+            leaving={leaving}
+            onExited={rows.exited}
             pinnable={false}
             question={question}
             topicId={FINAL_CHECK_TOPIC_ID}
           />
         ))}
       </TopicSection>
-    </div>
+    </Appear>
   );
 }

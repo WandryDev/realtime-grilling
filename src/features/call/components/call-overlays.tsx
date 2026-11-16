@@ -1,5 +1,6 @@
 "use client";
 
+import { appearClassName, useAppear } from "@/components/ui/appear";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,7 +12,9 @@ import type { FinishingData, FinishingStep, MicReleasedData } from "../types";
 
 /*
  * Panels drawn over the call window. Both sit on the white popover surface
- * with the float shadow; the caller positions them.
+ * with the float shadow; the caller positions them. Arriving during the
+ * call, the microphone panel rises from the bottom edge and the finishing
+ * card scales up from 97% (200ms).
  */
 
 const OVERLAY_SURFACE =
@@ -29,6 +32,7 @@ export function MicReleasedPanel({
   panel: MicReleasedData;
 }) {
   const { onEnd, onMicContinue } = useCallActions();
+  const entering = useAppear();
 
   return (
     <section
@@ -36,8 +40,10 @@ export function MicReleasedPanel({
       className={cn(
         OVERLAY_SURFACE,
         "flex w-[580px] flex-col gap-4 py-5 pr-5 pl-[22px]",
+        appearClassName("rise"),
         className
       )}
+      data-entering={entering ? "" : undefined}
     >
       <div className="flex items-start gap-3.5">
         <span
@@ -94,6 +100,7 @@ export function FinishingCard({
   finishing: FinishingData;
 }) {
   const { onCancelFinish, onCloseWindow } = useCallActions();
+  const entering = useAppear();
 
   return (
     <section
@@ -101,8 +108,10 @@ export function FinishingCard({
       className={cn(
         OVERLAY_SURFACE,
         "flex w-[460px] flex-col gap-[22px] p-7",
+        appearClassName("pop"),
         className
       )}
+      data-entering={entering ? "" : undefined}
       role="dialog"
     >
       <header className="flex flex-col gap-2">

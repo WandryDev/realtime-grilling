@@ -1,5 +1,7 @@
 "use client";
 
+import { Appear, AppearScope } from "@/components/ui/appear";
+
 import { CallActionsProvider } from "../call-actions";
 import { FinishingCard, MicReleasedPanel } from "../components/call-overlays";
 import { CallQuestions } from "../components/call-questions";
@@ -27,6 +29,9 @@ const NO_ACTIONS: CallScreenActions = {};
  * buttons do something (the live window); keep it memoized.
  *
  *   <CallScreen className="size-full" state="final-check" />
+ *
+ * What is on the screen when it opens stays still; questions, findings and
+ * panels that arrive later play their entrance (AppearScope).
  */
 export function CallScreen({
   actions = NO_ACTIONS,
@@ -44,50 +49,55 @@ export function CallScreen({
 
   return (
     <CallActionsProvider actions={actions}>
-      <CallWindow
-        className={className}
-        context={
-          <ContextColumn description={context.description}>
-            {context.items.map((item) => (
-              <ContextItemView item={item} key={item.id} />
-            ))}
-          </ContextColumn>
-        }
-        dimmed={Boolean(finishing)}
-        overlay={
-          <>
-            {micReleased ? (
-              <MicReleasedPanel
-                className="absolute bottom-8 left-1/2 -translate-x-1/2"
-                panel={micReleased}
-              />
-            ) : null}
-            {finishing ? (
-              <FinishingCard
-                className="absolute top-[250px] left-1/2 -translate-x-1/2"
-                finishing={finishing}
-              />
-            ) : null}
-          </>
-        }
-        questions={<CallQuestions questions={questions} />}
-        titlebar={<CallTitlebar call={call} />}
-        transcript={
-          transcript.collapsed ? (
-            <TranscriptRail speaker={railSpeaker(transcript.items)} />
-          ) : (
-            <TranscriptColumn scrollKey={transcript.items.length}>
-              {transcript.unavailable ? (
-                <TranscriptUnavailable unavailable={transcript.unavailable} />
+      <AppearScope>
+        <CallWindow
+          className={className}
+          context={
+            <ContextColumn description={context.description}>
+              {context.items.map((item) => (
+                // Inserted at the top: drops in, the cards below slide down
+                <Appear key={item.id} motion="drop">
+                  <ContextItemView item={item} />
+                </Appear>
+              ))}
+            </ContextColumn>
+          }
+          dimmed={Boolean(finishing)}
+          overlay={
+            <>
+              {micReleased ? (
+                <MicReleasedPanel
+                  className="absolute bottom-8 left-1/2 -translate-x-1/2"
+                  panel={micReleased}
+                />
               ) : null}
-              {transcript.notice ? (
-                <TranscriptNotice notice={transcript.notice} />
+              {finishing ? (
+                <FinishingCard
+                  className="absolute top-[250px] left-1/2 -translate-x-1/2"
+                  finishing={finishing}
+                />
               ) : null}
-              <TranscriptItems items={transcript.items} />
-            </TranscriptColumn>
-          )
-        }
-      />
+            </>
+          }
+          questions={<CallQuestions questions={questions} />}
+          titlebar={<CallTitlebar call={call} />}
+          transcript={
+            transcript.collapsed ? (
+              <TranscriptRail speaker={railSpeaker(transcript.items)} />
+            ) : (
+              <TranscriptColumn scrollKey={transcript.items.length}>
+                {transcript.unavailable ? (
+                  <TranscriptUnavailable unavailable={transcript.unavailable} />
+                ) : null}
+                {transcript.notice ? (
+                  <TranscriptNotice notice={transcript.notice} />
+                ) : null}
+                <TranscriptItems items={transcript.items} />
+              </TranscriptColumn>
+            )
+          }
+        />
+      </AppearScope>
     </CallActionsProvider>
   );
 }

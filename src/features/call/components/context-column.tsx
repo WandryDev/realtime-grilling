@@ -1,6 +1,8 @@
 "use client";
 
-import { type ComponentType, type ReactNode, useCallback } from "react";
+import { type ComponentType, type ReactNode, useCallback, useRef } from "react";
+
+import { useSlideIntoPlace } from "@/components/ui/appear";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -44,7 +46,10 @@ import { useCallActions } from "../call-actions";
 import { CheckIcon } from "../icons";
 import type { ContextItem } from "../types";
 
-/** Right column, 320 wide on the window gray: "Контекст" and the cards. */
+/**
+ * Right column, 320 wide on the window gray: "Контекст" and the cards. A
+ * card inserted or removed above slides the ones below to their new place.
+ */
 export function ContextColumn({
   children,
   className,
@@ -54,13 +59,17 @@ export function ContextColumn({
   className?: string;
   description: ReactNode;
 }) {
+  const ref = useRef<HTMLElement>(null);
+  useSlideIntoPlace(ref);
+
   return (
     <section
       aria-label="Контекст"
       className={cn(
-        "flex w-80 shrink-0 [scrollbar-width:thin] [scrollbar-color:var(--color-border-strong)_transparent] flex-col gap-2.5 overflow-y-auto px-2 py-3",
+        "relative flex w-80 shrink-0 [scrollbar-width:thin] [scrollbar-color:var(--color-border-strong)_transparent] flex-col gap-2.5 overflow-y-auto px-2 py-3",
         className
       )}
+      ref={ref}
     >
       <ContextColumnHeader>
         <h2 className="font-semibold">Контекст</h2>
