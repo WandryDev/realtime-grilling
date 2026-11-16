@@ -61,7 +61,7 @@ export function IntegrationsScreen({
 
   return (
     <OnboardingWindow className={className} step="integrations">
-      <OnboardingContent className="gap-7">
+      <OnboardingContent>
         <StepHeading
           description="Необязательно. С ними Grill прямо во время звонка находит нужное в документации, коде и задачах."
           title="Подключите рабочие сервисы"
@@ -78,7 +78,7 @@ export function IntegrationsScreen({
             />
           ))}
         </ServiceList>
-        <p className="text-muted-foreground -mt-3 text-sm">
+        <p className="text-muted-foreground text-sm">
           Всё можно подключить позже в настройках. Для каждого проекта потом
           выберете свои репозитории, коллекции и списки задач.
         </p>

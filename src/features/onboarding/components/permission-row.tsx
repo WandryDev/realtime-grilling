@@ -8,7 +8,7 @@ import { IconTile } from "./icon-tile";
 import { CheckIcon } from "./icons";
 
 /*
- * Permission list of the "Разрешения" step: rows between hairlines, each
+ * Permission list of the "Разрешения" step: rows 28px apart, no lines, each
  * with a 36px icon tile, a title over a muted line and a 132px right column
  * holding the action or the status.
  *
@@ -22,12 +22,7 @@ import { CheckIcon } from "./icons";
  *   </PermissionList>
  */
 export function PermissionList({ className, ...props }: ComponentProps<"ul">) {
-  return (
-    <ul
-      className={cn("border-border flex flex-col border-b", className)}
-      {...props}
-    />
-  );
+  return <ul className={cn("flex flex-col gap-7", className)} {...props} />;
 }
 
 export function PermissionRow({
@@ -45,13 +40,7 @@ export function PermissionRow({
   title: ReactNode;
 }) {
   return (
-    <li
-      className={cn(
-        "border-border flex items-center gap-3.5 border-t py-4",
-        className
-      )}
-      {...props}
-    >
+    <li className={cn("flex items-center gap-3.5", className)} {...props}>
       <IconTile>{icon}</IconTile>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="text-base font-semibold">{title}</p>

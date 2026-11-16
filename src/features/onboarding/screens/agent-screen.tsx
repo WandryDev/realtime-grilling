@@ -240,7 +240,7 @@ function InstallPlan({
   handlers: AgentHandlers;
 }) {
   return (
-    <AgentCardSection className="gap-1 pt-3.5 pb-4">
+    <AgentCardSection className="gap-1 pt-5 pb-4">
       <p className="text-muted-foreground pb-1.5 text-sm">
         Не нашли Claude Code на компьютере. Установим сами, за минуту:
       </p>
@@ -288,7 +288,7 @@ function InstallProgress({
   handlers: AgentHandlers;
 }) {
   return (
-    <AgentCardSection className="gap-1 pt-3.5 pb-4">
+    <AgentCardSection className="gap-1 pt-5 pb-4">
       <AgentCheckList className="gap-1">
         <AgentCheck
           className="py-1.5"
@@ -361,7 +361,7 @@ function AgentFailureSection({
   onCopyLog?: () => void;
 }) {
   return (
-    <AgentCardSection className="gap-3 py-4">
+    <AgentCardSection className="gap-3 pt-5 pb-4">
       <div className="flex items-start gap-3">
         <AgentCheckMarkIcon mark="failed" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">

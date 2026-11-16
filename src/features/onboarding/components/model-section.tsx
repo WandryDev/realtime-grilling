@@ -6,21 +6,18 @@ import { IconTile } from "./icon-tile";
 
 /*
  * Building blocks of the model part of the speech step, under the language
- * picker: a section above a hairline, a row with an icon tile, and a
+ * picker: a section set apart by space, a row with an icon tile, and a
  * progress bar on the hairline-gray track used by the onboarding.
  */
 
-/** Hairline on top, 20px below it. */
+/** 16px more above it than the step's 32px gap: a part of its own. */
 export function ModelSection({
   className,
   ...props
 }: ComponentProps<"section">) {
   return (
     <section
-      className={cn(
-        "border-border flex flex-col gap-3.5 border-t pt-5",
-        className
-      )}
+      className={cn("flex flex-col gap-3.5 pt-4", className)}
       {...props}
     />
   );

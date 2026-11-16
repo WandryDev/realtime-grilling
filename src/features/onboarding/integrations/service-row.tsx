@@ -20,7 +20,7 @@ import type { ServiceConnection } from "./mock";
 /*
  * Service row of the onboarding list (Paper "05 Интеграции"): 36px logo tile,
  * name and a line under it, and a 150px status column that doubles as the
- * action. Rows are separated by hairlines, the list is closed top and bottom.
+ * action. No lines: rows sit 28px apart.
  * - idle: gray "Подключить" pill
  * - connected: green check, "Подключено"
  * - waiting: spinner, "Ждём браузер"
@@ -30,7 +30,7 @@ import type { ServiceConnection } from "./mock";
  * status itself links there.
  */
 export function ServiceList({ className, ...props }: ComponentProps<"ul">) {
-  return <ul className={cn("flex flex-col", className)} {...props} />;
+  return <ul className={cn("flex flex-col gap-7", className)} {...props} />;
 }
 
 export function ServiceRow({
@@ -52,12 +52,7 @@ export function ServiceRow({
   status: ServiceConnection;
 }) {
   return (
-    <Item
-      className="border-t border-b-0 px-0 py-4 last:border-b"
-      data-status={status}
-      render={<li />}
-      variant="divided"
-    >
+    <Item className="px-0" data-status={status} render={<li />} variant="plain">
       <ItemMedia>{icon}</ItemMedia>
       <ItemContent className="gap-0.5">
         <ItemTitle

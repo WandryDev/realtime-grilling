@@ -89,7 +89,7 @@ export function ConnectedCard({
         ) : null}
         <ConnectedMark />
       </div>
-      <ul className="border-border flex flex-wrap items-center gap-1.5 border-t pt-3 pb-3.5">
+      <ul className="flex flex-wrap items-center gap-1.5 pb-3.5">
         {chips.map((chip) => (
           <li key={chip}>
             <Badge
