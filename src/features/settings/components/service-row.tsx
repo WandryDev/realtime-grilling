@@ -11,7 +11,7 @@ import { SmallCheckIcon } from "../icons";
  * Rows of Settings → Интеграции. Richer than the onboarding IntegrationRow:
  * a 36px logo tile, name and description, the status right, and an optional
  * second line (repositories, the broken key's details) with text actions in
- * a 240px column. Rows are separated by hairlines, the list is closed by one.
+ * a 240px column. No lines: rows sit 28px apart, groups further (the caller).
  */
 
 /** Titled list of services: muted 13px title like SettingsSection, a muted count right. */
@@ -28,11 +28,11 @@ export function ServiceGroup({
 }) {
   return (
     <section className={cn("flex flex-col", className)}>
-      <div className="flex items-center justify-between gap-4 pb-1">
+      <div className="flex items-center justify-between gap-4 pb-4">
         <h2 className="text-muted-foreground text-sm font-medium">{title}</h2>
         {meta ? <p className="text-muted-foreground text-sm">{meta}</p> : null}
       </div>
-      <div className="flex flex-col">{children}</div>
+      <div className="flex flex-col gap-7">{children}</div>
     </section>
   );
 }
@@ -66,13 +66,7 @@ export function ServiceRow({
 }) {
   const hasSecondLine = Boolean(details || actions);
   return (
-    <article
-      aria-label={name}
-      className={cn(
-        "border-border flex flex-col gap-3.5 border-t py-4.5 last:border-b",
-        className
-      )}
-    >
+    <article aria-label={name} className={cn("flex flex-col gap-3", className)}>
       <div className="flex items-center gap-3.5">
         <span className="bg-surface flex size-9 shrink-0 items-center justify-center rounded-xs [&_svg]:size-[18px]">
           {icon}

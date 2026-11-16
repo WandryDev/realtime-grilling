@@ -469,7 +469,7 @@ export function IntegrationsSettings({
           />
         ))}
       </ServiceGroup>
-      <ServiceGroup className="pt-8" title="Агент">
+      <ServiceGroup className="pt-12" title="Агент">
         <ServiceRow
           description={AGENT_MCP.description}
           icon={<ClaudeIcon />}
