@@ -151,10 +151,13 @@ async fn a_phrase_during_a_call_goes_to_the_next_one() {
 struct RealWait {
     wait: Duration,
     received: std::sync::Mutex<Vec<String>>,
+    /// The real time each call took, start to reply.
+    took: std::sync::Mutex<Vec<Duration>>,
 }
 
 impl Agent for RealWait {
     fn run(&self, request: AgentRequest, cancel: oneshot::Receiver<()>) -> AgentFuture<'_> {
+        let started = std::time::Instant::now();
         self.received.lock().unwrap().push(request.user_message);
         let (done, waited) = oneshot::channel();
         let wait = self.wait;
@@ -163,10 +166,12 @@ impl Agent for RealWait {
             let _ = done.send(());
         });
         Box::pin(async move {
-            tokio::select! {
+            let reply = tokio::select! {
                 _ = waited => Ok(AgentReply { patch: json!({ "ops": [] }), usage: Usage::default() }),
                 _ = cancel => Err(AgentError::Cancelled),
-            }
+            };
+            self.took.lock().unwrap().push(started.elapsed());
+            reply
         })
     }
 }
@@ -176,6 +181,7 @@ async fn the_clock_follows_a_call_that_waits_on_the_real_world() {
     let agent = Arc::new(RealWait {
         wait: Duration::from_millis(700),
         received: std::sync::Mutex::new(Vec::new()),
+        took: std::sync::Mutex::new(Vec::new()),
     });
     let corpus = corpus(vec![
         segment(1, OTHERS, 2_000, "Звонки идут на личные телефоны"),
@@ -188,7 +194,10 @@ async fn the_clock_follows_a_call_that_waits_on_the_real_world() {
 
     let outcomes: Vec<_> = report.calls.iter().map(|call| call.outcome).collect();
     assert_eq!(outcomes, [AgentCallOutcome::Empty; 3], "{report:#?}");
-    // The first call took ~0.7 s of the run's clock, not 0 and not 32.
+    // The first call took ~0.7 s of the run's clock, not 0 and not 32: the
+    // clock moved at least one step and at most the real time the call took
+    // (a loaded machine oversleeps the steps, so the clock may lag, never
+    // lead).
     let idle_after_first = report
         .log
         .iter()
@@ -198,9 +207,13 @@ async fn the_clock_follows_a_call_that_waits_on_the_real_world() {
         })
         .unwrap()
         .at_ms;
+    let first_call = report.calls[0].at_ms;
+    let real_ms = i64::try_from(agent.took.lock().unwrap()[0].as_millis()).unwrap();
+    let step_ms = i64::try_from(FOLLOW.step.as_millis()).unwrap();
+    let on_clock = idle_after_first - first_call;
     assert!(
-        (2_500..4_000).contains(&idle_after_first),
-        "{idle_after_first}"
+        (step_ms..=real_ms + step_ms).contains(&on_clock),
+        "{on_clock} ms on the run's clock, {real_ms} ms of real time"
     );
     // The phrase during the first call starts the next when the 5 s gap
     // passes, at 7 s.

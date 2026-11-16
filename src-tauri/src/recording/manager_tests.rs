@@ -470,7 +470,24 @@ fn start_and_stop_write_a_row_and_both_files() {
     assert_eq!(row.status, recordings::RecordingState::Recording);
     assert_eq!(row.call_id, None);
 
+    let recording = Instant::now();
     thread::sleep(Duration::from_millis(600));
+    // Levels come ~10 Hz from the recorder thread, which a loaded machine
+    // runs late: wait for a few of them (with "Остальные" heard) instead of
+    // counting on 600 ms to hold them.
+    let heard = |levels: &[RecordingLevels]| {
+        levels.len() >= 3 && levels.iter().any(|level| level.others > 0.5)
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !heard(&fx.seen.levels.lock().unwrap()) {
+        assert!(
+            Instant::now() < deadline,
+            "no levels: {:?}",
+            fx.seen.levels.lock().unwrap()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let recorded_ms = u64::try_from(recording.elapsed().as_millis()).unwrap();
     fx.manager.stop(&id).unwrap();
 
     assert!(!fx.manager.is_recording());
@@ -481,7 +498,10 @@ fn start_and_stop_write_a_row_and_both_files() {
     assert!(ended_at - row.started_at >= 600, "{row:?}");
     let me = opus_duration_ms(&fx.file(&id, ME_FILE));
     let others = opus_duration_ms(&fx.file(&id, OTHERS_FILE));
-    assert!((500..=900).contains(&me), "me {me} ms");
+    assert!(
+        (500..=recorded_ms + 300).contains(&me),
+        "me {me} ms of {recorded_ms} ms"
+    );
     assert!(me.abs_diff(others) <= 20, "me {me} ms, others {others} ms");
 
     let changes = fx.changes();

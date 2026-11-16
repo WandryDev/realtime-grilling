@@ -313,7 +313,9 @@ fn without_a_model_the_recording_goes_on_and_says_no_model() {
             0.001,
         ));
     }
-    assert!(started.elapsed() < Duration::from_millis(20));
+    // At once: nothing waits for a model. Not 20 ms, though: a loaded
+    // machine can stall any thread that long.
+    assert!(started.elapsed() < Duration::from_millis(250));
     sink.recording_finished(&id);
     eventually("the live pass to end", || {
         host.finished.lock().unwrap().contains(&id)

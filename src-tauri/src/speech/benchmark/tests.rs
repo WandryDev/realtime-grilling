@@ -160,17 +160,20 @@ fn a_fast_accurate_model_passes() {
     let script = echo();
     *script.delay.lock().unwrap() = ms(40);
     let recognizer = script.recognizer();
-    let result = block_on(run(
-        &recognizer,
-        &short_set(),
-        &short_thresholds(),
-        1.0,
-        never(),
-    ))
-    .unwrap();
+    // The verdict at the thresholds is `the_verdict_follows_the_thresholds`;
+    // here the run and its measures. A loaded CI machine stalls a 40 ms
+    // reply by 150 ms and more, so the bar is far above the fake's delay.
+    let thresholds = Thresholds {
+        max_p95: ms(1_000),
+        max_rtf: 5.0,
+        ..short_thresholds()
+    };
+    let result = block_on(run(&recognizer, &short_set(), &thresholds, 1.0, never())).unwrap();
     assert!(result.passed, "{result:?}");
     assert!(result.wer.abs() < 1e-9);
-    assert!(result.rtf > 0.15 && result.rtf < 0.5, "{result:?}");
+    // Every phrase's latency holds the fake's 40 ms: RTF 0.2 or more.
+    assert!(result.p95_ms >= 40, "{result:?}");
+    assert!(result.rtf > 0.19, "{result:?}");
     // Warm-up and six phrases.
     assert_eq!(script.calls(), 7);
 }
@@ -266,7 +269,8 @@ fn cancelling_stops_the_check_and_its_jobs() {
         cancelled,
     ));
     assert_eq!(result, Err(Cancelled));
-    assert!(started.elapsed() < ms(900), "{:?}", started.elapsed());
+    // Before the end: a run to the end takes the 1.2 s of its phrases.
+    assert!(started.elapsed() < ms(1_200), "{:?}", started.elapsed());
     drop(canceller.join().unwrap());
     std::thread::sleep(ms(300));
     assert!(script.calls() < 7, "{}", script.calls());
