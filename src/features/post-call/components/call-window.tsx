@@ -140,7 +140,6 @@ export function CallWindow({
   proposals?: number;
   taskCards?: number;
 }) {
-  const info = usePostCallInfo();
   return (
     <MainWindow
       aside={aside}
@@ -157,8 +156,6 @@ export function CallWindow({
           taskCards={taskCards}
         />
       }
-      subtitle={info.subtitle}
-      title={info.project}
     >
       {children}
     </MainWindow>

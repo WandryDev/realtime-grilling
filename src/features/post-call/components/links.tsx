@@ -68,8 +68,6 @@ export interface PostCallInfo {
    * still read) without it.
    */
   proposals?: number;
-  /** "звонок 19 октября" in the title bar. */
-  subtitle: string;
 }
 
 function Anchor(props: ComponentProps<"a"> & { href: string }) {
@@ -96,7 +94,6 @@ const PREVIEW_INFO: PostCallInfo = {
   duration: CALL.duration,
   participants: CALL.participants,
   project: CALL.project,
-  subtitle: CALL.subtitle,
 };
 
 const PostCallContext = createContext<{

@@ -147,7 +147,6 @@ export function HistoryWindow({
       sidebar={
         <HistorySidebar active={active} projects={projects} total={total} />
       }
-      title="Grill"
     >
       {children}
     </MainWindow>

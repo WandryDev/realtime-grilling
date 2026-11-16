@@ -6,8 +6,6 @@ import {
   AppWindowPanel,
 } from "@/components/ui/app-window";
 import {
-  WindowSubtitle,
-  WindowTitle,
   WindowTitlebar,
   WindowTitlebarEnd,
   WindowTitlebarStart,
@@ -21,7 +19,7 @@ import { WindowChromeEnd, WindowChromeStart } from "./window-chrome";
  * The main window: gray window with the title bar, an optional sidebar and
  * the white panel. The panel scrolls, the sidebar and title bar stay put.
  *
- *   <MainWindow title="Главная" actions={<TitlebarSearch />}
+ *   <MainWindow actions={<TitlebarSearch />}
  *     sidebar={<MainSidebar active="home" />}>
  *     <PageContent>…</PageContent>
  *   </MainWindow>
@@ -37,8 +35,6 @@ export function MainWindow({
   overlay,
   panelClassName,
   sidebar,
-  subtitle,
-  title,
 }: {
   /** Right side of the title bar. */
   actions?: ReactNode;
@@ -50,18 +46,12 @@ export function MainWindow({
   overlay?: ReactNode;
   panelClassName?: string;
   sidebar?: ReactNode;
-  subtitle?: ReactNode;
-  title: ReactNode;
 }) {
   return (
     <AppWindow className={cn("relative", className)}>
       <WindowTitlebar>
         <WindowTitlebarStart>
           <WindowChromeStart />
-          <WindowTitle>
-            {title}
-            {subtitle ? <WindowSubtitle>{subtitle}</WindowSubtitle> : null}
-          </WindowTitle>
         </WindowTitlebarStart>
         <WindowTitlebarEnd>
           {actions}

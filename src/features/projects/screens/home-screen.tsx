@@ -52,7 +52,6 @@ export function HomeScreen({
       sidebar={
         <MainSidebar active="home" projects={isFirstRun ? [] : undefined} />
       }
-      title="Главная"
     >
       {isFirstRun ? (
         <FirstRun />

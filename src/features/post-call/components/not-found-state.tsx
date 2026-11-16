@@ -22,7 +22,7 @@ export function NotFoundState({
   title: string;
 }) {
   return (
-    <MainWindow className={className} title="Grill">
+    <MainWindow className={className}>
       <CenteredState
         className="flex-1"
         description={description}

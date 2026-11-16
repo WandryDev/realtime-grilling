@@ -16,7 +16,6 @@ import {
   ProfileViewActions,
   ScaleCard,
 } from "../components/person-profile";
-import { BreadcrumbChevronIcon } from "../icons";
 import { PERSON, PROJECT } from "../mock";
 import type { PersonProfile } from "../project-data";
 
@@ -86,15 +85,6 @@ export function PersonScreen({
       actions={<TitlebarSearch />}
       className={className}
       sidebar={<MainSidebar active={project.id} />}
-      title={
-        <>
-          {project.name}
-          <BreadcrumbChevronIcon className="text-subtle size-3 shrink-0" />
-          <span className="text-muted-foreground font-normal">
-            {person.name}
-          </span>
-        </>
-      }
     >
       <main className="flex gap-12 px-12 pt-9 pb-12">
         <ProfileColumn formId={editing ? formId : undefined} onSave={onSave}>

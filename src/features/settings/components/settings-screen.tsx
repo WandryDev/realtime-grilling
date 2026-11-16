@@ -61,7 +61,6 @@ export function SettingsScreen({
       sidebar={
         <SettingsSidebar active={section} alerts={alerts} status={status} />
       }
-      title="Настройки"
     >
       <main className="flex flex-col items-center px-12 pt-12 pb-16">
         <div className="max-w-content flex w-full flex-col">

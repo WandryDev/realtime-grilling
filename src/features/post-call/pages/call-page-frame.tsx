@@ -122,7 +122,6 @@ function CallFrame({
       participants: call.participants,
       project: projectName,
       proposals: proposalCount,
-      subtitle: `звонок ${call.day}`,
     }),
     [call, projectName, proposalCount]
   );

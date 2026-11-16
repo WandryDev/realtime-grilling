@@ -15,7 +15,6 @@ export const CALL = {
   duration: "40:12",
   participants: "Ольга Демченко, Игорь Савчук",
   project: "Телемедиа",
-  subtitle: "звонок 19 октября",
   taskCards: 2,
 } as const;
 

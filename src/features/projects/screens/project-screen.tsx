@@ -124,7 +124,6 @@ export function ProjectScreen({
       className={className}
       overlay={<ProjectDialog dialog={dialog} project={project.name} />}
       sidebar={<MainSidebar active={project.id} />}
-      title={project.name}
     >
       <PageContent
         aria-hidden={dialog ? true : undefined}

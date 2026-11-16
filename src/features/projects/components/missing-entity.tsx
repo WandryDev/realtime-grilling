@@ -37,7 +37,6 @@ export function MissingEntity({
       className={className}
       panelClassName={cn("justify-center")}
       sidebar={<MainSidebar />}
-      title={title}
     >
       <Empty>
         <EmptyMedia variant="icon">

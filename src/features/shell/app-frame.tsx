@@ -132,11 +132,7 @@ export function StorageErrorScreen({
   }, []);
 
   return (
-    <MainWindow
-      className={className}
-      panelClassName="justify-center"
-      title="Grill"
-    >
+    <MainWindow className={className} panelClassName="justify-center">
       <Empty role="alert">
         <EmptyHeader>
           <EmptyTitle>

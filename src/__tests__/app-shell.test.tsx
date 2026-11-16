@@ -72,7 +72,7 @@ describe("windowChromeFor", () => {
 describe("window title bar", () => {
   function renderMainWindow() {
     return render(
-      <MainWindow title="Проекты">
+      <MainWindow>
         <p>Содержимое</p>
       </MainWindow>
     );

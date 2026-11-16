@@ -20,11 +20,7 @@ export function NoCallScreen({
   onStartCall: () => void;
 }) {
   return (
-    <MainWindow
-      className={className}
-      panelClassName="justify-center"
-      title="Звонок"
-    >
+    <MainWindow className={className} panelClassName="justify-center">
       <Empty>
         <EmptyHeader>
           <EmptyTitle>

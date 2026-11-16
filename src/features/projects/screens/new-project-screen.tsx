@@ -164,7 +164,6 @@ export function NewProjectScreen({
           />
         )
       }
-      title="Новый проект"
     >
       <WizardLayout
         footer={footer ?? <NewProjectFooter state={state} />}
