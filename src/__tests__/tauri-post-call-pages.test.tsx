@@ -15,6 +15,7 @@ import type {
   CallSummary,
   CallSummaryView,
   Proposal,
+  SummaryContent,
   SummaryProgress,
 } from "@/bindings";
 
@@ -389,6 +390,55 @@ describe("«Итоги звонка» in Tauri", () => {
     expect(screen.getByText("1 подтверждено, 6 пусто")).toBeTruthy();
   });
 
+  it("Пустой звонок: no proposals, cards, unasked questions or TL;DR — none of their blocks", async () => {
+    records({
+      cards: { cards: [], next: [], source: "summary" },
+      view: {
+        building: null,
+        summary: {
+          ...READY,
+          content: { ...(READY.content as SummaryContent), cards: [] },
+          tldr: "  ",
+        },
+      },
+    });
+    fake.answers.set("call_questions", () => []);
+    openSummary();
+
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Обмен валют" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Коротко" })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Не успели спросить" })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "Знания и карточки" })
+    ).toBeNull();
+    // No proposals ever: nothing was reviewed, no check.
+    const sections = screen.getByRole("navigation", { name: "Разделы звонка" });
+    await waitFor(() =>
+      expect(
+        within(sections).getByRole("link", { name: PROPOSALS_NAV }).textContent
+      ).toBe("Предложения")
+    );
+  });
+
+  it("drops the zero counts from the TL;DR chips", async () => {
+    records();
+    fake.answers.set("call_questions", () => [
+      question("q-answered", "answered", 1, "Сколько кассиров на смене?"),
+    ]);
+    openSummary();
+
+    const tldr = await screen.findByRole("region", { name: "Коротко" });
+    expect(
+      within(tldr)
+        .getAllByRole("listitem")
+        .map((chip) => chip.textContent)
+    ).toEqual(["1 тема", "1 вопрос закрыт"]);
+  });
+
   it("marks a summary built from the live transcript", async () => {
     records({
       view: { building: null, summary: { ...READY, transcriptPass: "mixed" } },
@@ -645,6 +695,24 @@ async function withBothPeople() {
 }
 
 describe("«Карточки задач» in Tauri", () => {
+  it("Карточек нет: a call without cards says so, without tabs and legend", async () => {
+    records({
+      cards: { cards: [], next: [], source: "summary" },
+      view: {
+        building: null,
+        summary: {
+          ...READY,
+          content: { ...(READY.content as SummaryContent), cards: [] },
+        },
+      },
+    });
+    openCards();
+
+    expect(await screen.findByText("Карточек нет")).toBeTruthy();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Статусы" })).toBeNull();
+  });
+
   it("Карточка после сборки: one card of the topic with its facts on seven lenses", async () => {
     records();
     openCards();

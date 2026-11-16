@@ -83,16 +83,21 @@ export function SummaryTldr({
         Коротко
       </h2>
       <p className="text-xl leading-[30px] font-medium">{tldr.text}</p>
-      <ul className="flex flex-wrap gap-2 pt-1">
-        {tldr.chips.map((chip) => (
-          <li key={chip.id}>
-            <Badge className="bg-background text-foreground" indicator={false}>
-              {"accent" in chip ? <StatusDot tone="accent" /> : null}
-              {chip.label}
-            </Badge>
-          </li>
-        ))}
-      </ul>
+      {tldr.chips.length > 0 ? (
+        <ul className="flex flex-wrap gap-2 pt-1">
+          {tldr.chips.map((chip) => (
+            <li key={chip.id}>
+              <Badge
+                className="bg-background text-foreground"
+                indicator={false}
+              >
+                {"accent" in chip ? <StatusDot tone="accent" /> : null}
+                {chip.label}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }

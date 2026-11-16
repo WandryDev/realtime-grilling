@@ -146,6 +146,8 @@ export function ProposalsReviewScreen({
     totalsProp ?? REVIEW_TOTALS[state === "done" ? "done" : "partial"];
   const reviewed = totals.accepted + totals.rejected;
   const total = reviewed + totals.pending;
+  // A call without proposals has no decisions to tally.
+  const noProposals = state === "empty" || (state !== "loading" && total === 0);
   const breadcrumb = [
     { href: links.project, label: info.project },
     { href: links.summary, label: info.callLabel },
@@ -155,22 +157,25 @@ export function ProposalsReviewScreen({
     <CallWindow
       active="proposals"
       aside={
-        <SideColumn label="Решения">
-          <SideHeading note="сохраняются сразу">Решения</SideHeading>
-          <ReviewTally totals={totals} />
-          {state === "partial" ? (
-            <>
-              <p className="text-muted-foreground px-2 pt-3.5 text-sm">
-                Бриф и профили хранятся на этом компьютере. Любое решение можно
-                отменить, пока открыт этот звонок.
-              </p>
-              <ShortcutList shortcuts={REVIEW_SHORTCUTS} />
-            </>
-          ) : null}
-        </SideColumn>
+        noProposals ? undefined : (
+          <SideColumn label="Решения">
+            <SideHeading note="сохраняются сразу">Решения</SideHeading>
+            <ReviewTally totals={totals} />
+            {state === "partial" ? (
+              <>
+                <p className="text-muted-foreground px-2 pt-3.5 text-sm">
+                  Бриф и профили хранятся на этом компьютере. Любое решение
+                  можно отменить, пока открыт этот звонок.
+                </p>
+                <ShortcutList shortcuts={REVIEW_SHORTCUTS} />
+              </>
+            ) : null}
+          </SideColumn>
+        )
       }
       className={className}
       pendingProposals={totals.pending}
+      proposals={noProposals ? 0 : undefined}
       taskCards={taskCards}
     >
       <PanelPage aria-busy={state === "loading"} className="flex-1">

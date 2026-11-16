@@ -121,6 +121,7 @@ function ProcessingContent({
   );
 }
 
+/** The proposals and the cards; nothing of what the call doesn't have. */
 function ReadyAside({
   cards,
   proposals,
@@ -132,8 +133,10 @@ function ReadyAside({
 }) {
   return (
     <SideColumn label="Знания и карточки">
-      <KnowledgeProposalsCard count={proposals} targets={targets} />
-      <TaskCardsOverviewList cards={cards} />
+      {proposals > 0 ? (
+        <KnowledgeProposalsCard count={proposals} targets={targets} />
+      ) : null}
+      {cards.length > 0 ? <TaskCardsOverviewList cards={cards} /> : null}
     </SideColumn>
   );
 }
@@ -221,17 +224,19 @@ function ReadyContent({
           <SummaryPoints points={topic.points} />
         </SummarySection>
       ))}
-      <SummarySection
-        className="gap-1"
-        count={unasked.length}
-        countTone="accent"
-        divided
-        id="unasked"
-        meta="открытые и без ответа"
-        title="Не успели спросить"
-      >
-        <UnaskedQuestions questions={unasked} />
-      </SummarySection>
+      {unasked.length > 0 ? (
+        <SummarySection
+          className="gap-1"
+          count={unasked.length}
+          countTone="accent"
+          divided
+          id="unasked"
+          meta="открытые и без ответа"
+          title="Не успели спросить"
+        >
+          <UnaskedQuestions questions={unasked} />
+        </SummarySection>
+      ) : null}
       {clickUpAnswers ? <ClickUpSection answers={clickUpAnswers} /> : null}
     </PanelPage>
   );
@@ -279,12 +284,12 @@ export function CallSummaryScreen({
   taskCardOverview?: TaskCardOverview[];
   /** The count of «Карточки задач» in the sidebar. */
   taskCards?: number;
-  /** «Коротко» and its chips; `null` without a summary. */
+  /** «Коротко» and its chips; `null` without a summary or its text. */
   tldr?: typeof SUMMARY_TLDR | null;
   /** "Итоги сохранены" over the window, ready state only. */
   toast?: boolean;
   topics?: SummaryTopic[];
-  /** «Не успели спросить». */
+  /** «Не успели спросить»; hidden when empty. */
   unasked?: UnaskedQuestion[];
 }) {
   if (state === "processing") {
@@ -309,11 +314,13 @@ export function CallSummaryScreen({
     <CallWindow
       active="summary"
       aside={
-        <ReadyAside
-          cards={taskCardOverview}
-          proposals={pendingProposals}
-          targets={knowledgeTargets}
-        />
+        pendingProposals > 0 || taskCardOverview.length > 0 ? (
+          <ReadyAside
+            cards={taskCardOverview}
+            proposals={pendingProposals}
+            targets={knowledgeTargets}
+          />
+        ) : undefined
       }
       className={className}
       overlay={

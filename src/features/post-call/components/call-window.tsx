@@ -10,7 +10,7 @@ import { NavMenu } from "@/components/ui/nav-item";
 import { MainWindow } from "@/features/shell/main-window";
 import { cn } from "@/lib/utils";
 
-import { ChevronRightIcon, LockIcon } from "../icons";
+import { ChevronRightIcon } from "../icons";
 import { CALL, CALL_FACTS, type CallFact } from "../mock";
 import { usePostCallInfo, usePostCallLinks } from "./links";
 import {
@@ -26,31 +26,17 @@ import {
 /*
  * The window of one finished call: call navigation on the left, the white
  * panel, a 320px column on the right. The title bar names the project and
- * the call and says that everything stays on this computer.
+ * the call.
  */
 
 export type CallSection = "summary" | "tasks" | "proposals" | "transcript";
-
-/** "Хранится только на этом компьютере" pill in the title bar. */
-export function LocalOnlyBadge({ className }: { className?: string }) {
-  return (
-    <p
-      className={cn(
-        "bg-background text-muted-foreground flex h-8 items-center gap-2 rounded-full px-3 text-sm",
-        className
-      )}
-    >
-      <LockIcon className="size-3.5 shrink-0" />
-      Хранится только на этом компьютере
-    </p>
-  );
-}
 
 export function CallSidebar({
   active,
   facts,
   pendingProposals,
   processing = false,
+  proposals,
   taskCards = CALL.taskCards,
 }: {
   active: CallSection;
@@ -58,14 +44,20 @@ export function CallSidebar({
   facts?: CallFact[];
   /** Proposals left to review; 0 shows a check. */
   pendingProposals: number;
+  /**
+   * All proposals of the call, decided or not; 0 (none ever) shows no
+   * mark. The call's count from the window info by default.
+   */
+  proposals?: number;
   /** Summary is still being built: the summary spins, cards wait. */
   processing?: boolean;
   taskCards?: number;
 }) {
   const links = usePostCallLinks();
   const info = usePostCallInfo();
+  const proposalsTotal = proposals ?? info.proposals;
   let proposalsMarker: ReactNode = <NavDone />;
-  if (processing) {
+  if (processing || proposalsTotal === 0) {
     proposalsMarker = null;
   } else if (pendingProposals > 0) {
     proposalsMarker = <NavPending count={pendingProposals} />;
@@ -131,6 +123,7 @@ export function CallWindow({
   panelClassName,
   pendingProposals = 7,
   processing = false,
+  proposals,
   taskCards,
 }: {
   active: CallSection;
@@ -143,12 +136,13 @@ export function CallWindow({
   panelClassName?: string;
   pendingProposals?: number;
   processing?: boolean;
+  /** All proposals of the call; see CallSidebar. */
+  proposals?: number;
   taskCards?: number;
 }) {
   const info = usePostCallInfo();
   return (
     <MainWindow
-      actions={<LocalOnlyBadge />}
       aside={aside}
       className={className}
       overlay={overlay}
@@ -159,6 +153,7 @@ export function CallWindow({
           facts={processing ? facts : undefined}
           pendingProposals={pendingProposals}
           processing={processing}
+          proposals={proposals}
           taskCards={taskCards}
         />
       }

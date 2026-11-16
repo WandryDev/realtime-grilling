@@ -11,6 +11,8 @@ import {
   SideColumn,
   SideHeading,
 } from "../components/call-window";
+import { CenteredState } from "../components/centered-state";
+import { LinkButton } from "../components/link-button";
 import { usePostCallInfo, usePostCallLinks } from "../components/links";
 import { NavMeta } from "../components/panel-nav";
 import {
@@ -20,6 +22,7 @@ import {
   TaskCardHeading,
   TaskFact,
 } from "../components/task-cards";
+import { DocumentIcon } from "../icons";
 import {
   NEXT_QUESTIONS,
   type NextQuestion,
@@ -34,6 +37,7 @@ import {
  * `expandedFactId` opens the source quote of one fact. The app stacks every
  * card of the call (`cards`), the topic pills scroll to them, and each card
  * gets its decisions (`renderActions`); a discarded card folds to its title.
+ * A call without cards says «Карточек нет».
  */
 
 function TaskCard({
@@ -95,6 +99,25 @@ function TaskCard({
   );
 }
 
+function NoTaskCards() {
+  const links = usePostCallLinks();
+  return (
+    <CenteredState
+      className="flex-1"
+      description="Агент не нашёл в звонке задач для карточек."
+      media={<DocumentIcon className="size-7" strokeWidth={0.75} />}
+      mediaClassName="bg-surface text-muted-foreground size-16 rounded-full"
+      title="Карточек нет"
+    >
+      <div className="flex items-center gap-2 pt-1">
+        <LinkButton href={links.summary} size="lg">
+          К итогам звонка
+        </LinkButton>
+      </div>
+    </CenteredState>
+  );
+}
+
 export function TaskCardsScreen({
   activeTopic,
   card = TASK_CARD,
@@ -102,6 +125,7 @@ export function TaskCardsScreen({
   className,
   expandedFactId = "queue",
   foldedCardIds,
+  loading = false,
   nextQuestions = NEXT_QUESTIONS,
   onListen,
   onToggleFact,
@@ -120,6 +144,8 @@ export function TaskCardsScreen({
   expandedFactId?: string | null;
   /** Discarded cards: only the title and the actions stay. */
   foldedCardIds?: string[];
+  /** The cards are still read: no «Карточек нет» yet. */
+  loading?: boolean;
   /** «Спросить в следующий раз». */
   nextQuestions?: NextQuestion[];
   onListen?: (fact: TaskFactData) => void;
@@ -134,6 +160,7 @@ export function TaskCardsScreen({
   const info = usePostCallInfo();
   const links = usePostCallLinks();
   const list = cards ?? [card];
+  const empty = list.length === 0;
   const changeTopic = useCallback(
     (value: unknown) => {
       if (typeof value === "string") {
@@ -170,7 +197,7 @@ export function TaskCardsScreen({
       pendingProposals={pendingProposals}
       taskCards={cards?.length}
     >
-      <PanelPage>
+      <PanelPage aria-busy={loading} className={empty ? "flex-1" : undefined}>
         <CallPageHeader
           breadcrumb={[
             { href: links.project, label: info.project },
@@ -178,23 +205,26 @@ export function TaskCardsScreen({
           ]}
           title="Карточки задач"
         />
-        <div className="border-border flex items-center justify-between gap-6 border-b pb-4">
-          <Tabs
-            defaultValue={controlled ? undefined : topics[0]?.id}
-            onValueChange={controlled ? changeTopic : undefined}
-            value={controlled ? activeTopic : undefined}
-          >
-            <TabsList aria-label="Темы">
-              {topics.map((topic) => (
-                <TabsTrigger key={topic.id} value={topic.id}>
-                  {topic.title}
-                  <TabsCount>{topic.count}</TabsCount>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <StatusLegend />
-        </div>
+        {empty ? null : (
+          <div className="border-border flex items-center justify-between gap-6 border-b pb-4">
+            <Tabs
+              defaultValue={controlled ? undefined : topics[0]?.id}
+              onValueChange={controlled ? changeTopic : undefined}
+              value={controlled ? activeTopic : undefined}
+            >
+              <TabsList aria-label="Темы">
+                {topics.map((topic) => (
+                  <TabsTrigger key={topic.id} value={topic.id}>
+                    {topic.title}
+                    <TabsCount>{topic.count}</TabsCount>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <StatusLegend />
+          </div>
+        )}
+        {empty && !loading ? <NoTaskCards /> : null}
         {list.map((item) => (
           <TaskCard
             actions={renderActions?.(item)}

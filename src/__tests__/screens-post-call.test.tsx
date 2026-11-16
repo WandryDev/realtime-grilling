@@ -38,6 +38,37 @@ describe("CallSummaryScreen", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("leaves out what a call doesn't have", () => {
+    render(
+      <CallSummaryScreen
+        pendingProposals={0}
+        taskCardOverview={[]}
+        tldr={{ chips: [], text: "Обсудили сроки." }}
+        unasked={[]}
+      />
+    );
+
+    expect(
+      screen.queryByRole("heading", { name: "Предложения обновить знания" })
+    ).toBeNull();
+    expect(screen.queryByRole("region", { name: "Карточки задач" })).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "Знания и карточки" })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Не успели спросить" })
+    ).toBeNull();
+    const tldr = screen.getByRole("region", { name: "Коротко" });
+    expect(within(tldr).getByText("Обсудили сроки.")).toBeTruthy();
+    expect(within(tldr).queryByRole("list")).toBeNull();
+  });
+
+  it("says nothing about the data staying local in the title bar", () => {
+    render(<CallSummaryScreen />);
+
+    expect(screen.queryByText("Хранится только на этом компьютере")).toBeNull();
+  });
+
   it("draws the saved toast", () => {
     render(<CallSummaryScreen toast />);
 
@@ -61,6 +92,24 @@ describe("TaskCardsScreen", () => {
   });
 });
 
+describe("TaskCardsScreen without cards", () => {
+  it("says «Карточек нет» without the topic tabs and the legend", () => {
+    render(<TaskCardsScreen cards={[]} topics={[]} />);
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Карточек нет" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("tablist", { name: "Темы" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Статусы" })).toBeNull();
+  });
+
+  it("waits for the cards before saying there are none", () => {
+    render(<TaskCardsScreen cards={[]} loading topics={[]} />);
+
+    expect(screen.queryByText("Карточек нет")).toBeNull();
+  });
+});
+
 describe("ProposalsReviewScreen", () => {
   it("lists pending, edited and decided proposals", () => {
     render(<ProposalsReviewScreen />);
@@ -79,6 +128,23 @@ describe("ProposalsReviewScreen", () => {
     render(<ProposalsReviewScreen state="done" />);
 
     expect(screen.getByRole("heading", { name: "Всё разобрано" })).toBeTruthy();
+  });
+});
+
+describe("ProposalsReviewScreen without proposals", () => {
+  it("drops the decisions column and the «разобрано» check", () => {
+    render(
+      <ProposalsReviewScreen
+        groups={[]}
+        state="empty"
+        totals={{ accepted: 0, pending: 0, rejected: 0 }}
+      />
+    );
+
+    expect(screen.getByText("Предложений нет")).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "Решения" })).toBeNull();
+    const nav = screen.getByRole("navigation", { name: "Разделы звонка" });
+    expect(within(nav).queryByText("всё разобрано")).toBeNull();
   });
 });
 
@@ -116,6 +182,26 @@ describe("CallDetailsScreen", () => {
     expect(screen.getByRole("region", { name: "Запись звонка" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Пауза" })).toBeTruthy();
     expect(screen.queryByLabelText(MOMENT_LABEL)).toBeNull();
+  });
+
+  it("drops the questions and the topic tabs a call doesn't have", () => {
+    render(
+      <CallDetailsScreen
+        questions={[]}
+        sections={[
+          {
+            topic: { id: "all", time: "00:00", title: "Звонок" },
+            turns: [],
+          },
+        ]}
+      />
+    );
+
+    expect(screen.queryByRole("region", { name: "Вопросы звонка" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Темы" })).toBeNull();
+    expect(
+      screen.getByRole("searchbox", { name: "Найти в расшифровке" })
+    ).toBeTruthy();
   });
 
   it("highlights the moment of a question", () => {

@@ -12,6 +12,7 @@ import {
 import { useCallTranscript } from "@/data/call-records";
 import { type CallRecord, NO_PROJECT_CALL } from "@/data/calls";
 import { useProject } from "@/data/projects";
+import { useCallProposals } from "@/data/proposals";
 import { inTauri } from "@/effect/runtime";
 import { showFloatingWindow, windowOfRoute } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
@@ -110,6 +111,9 @@ function CallFrame({
   const projectName =
     call.projectId === null ? NO_PROJECT_CALL : (project?.name ?? "Проект");
   const links = useCallLinks(call, projectName);
+  const proposals = useCallProposals(call.id);
+  const proposalCount =
+    proposals.status === "ready" ? proposals.data.length : undefined;
   const info = useMemo<PostCallInfo>(
     () => ({
       callLabel: `Звонок ${call.day}`,
@@ -117,9 +121,10 @@ function CallFrame({
       duration: call.duration,
       participants: call.participants,
       project: projectName,
+      proposals: proposalCount,
       subtitle: `звонок ${call.day}`,
     }),
-    [call, projectName]
+    [call, projectName, proposalCount]
   );
 
   return (

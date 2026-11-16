@@ -324,6 +324,24 @@ describe("call details in Tauri", () => {
     ).toBeTruthy();
   });
 
+  it("says «<0,1 МБ» of a tiny recording, not «0,0 МБ»", async () => {
+    recordings = [
+      {
+        ...(recordings[0] as CallRecording),
+        meBytes: 30_000,
+        othersBytes: 20_000,
+      },
+    ];
+    search = new URLSearchParams({ id: ownCall() });
+    render(<TranscriptPage />);
+
+    expect(
+      await screen.findByText(
+        "Opus, 2 канала, <0,1 МБ. В облако не выгружается."
+      )
+    ).toBeTruthy();
+  });
+
   it("plays a recording without the «Остальные» file from «Вы» alone", async () => {
     const user = userEvent.setup();
     recordings = [{ ...(recordings[0] as CallRecording), othersBytes: null }];

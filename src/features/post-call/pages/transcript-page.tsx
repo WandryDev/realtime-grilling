@@ -35,6 +35,7 @@ import {
   topicOfMoment,
 } from "../moment";
 import { usePlayer } from "../player";
+import { audioBytes, recordingSize } from "../recording-size";
 import {
   CallDetailsScreen,
   MOMENT_ELEMENT_ID,
@@ -64,26 +65,7 @@ import { APP_WINDOW, CallPageFrame } from "./call-page-frame";
 const DEMO_STATES = ["delete-recording"] as const;
 
 const HIGHLIGHT_MS = 4000;
-const BYTES_PER_MB = 1_000_000;
-const ROUND_MB_FROM = 10;
 const MS_PER_MINUTE = 60_000;
-
-/** «13 МБ», «0,6 МБ». */
-function formatSize(bytes: number) {
-  const mb = bytes / BYTES_PER_MB;
-  const shown =
-    mb >= ROUND_MB_FROM
-      ? String(Math.round(mb))
-      : mb.toFixed(1).replace(".", ",");
-  return `${shown} МБ`;
-}
-
-function audioBytes(recordings: CallRecording[]) {
-  return recordings.reduce(
-    (sum, item) => sum + (item.meBytes ?? 0) + (item.othersBytes ?? 0),
-    0
-  );
-}
 
 /** «Opus, 2 канала, 13 МБ. В облако не выгружается.» */
 function recordingDescription(playable: CallRecording[]) {
@@ -98,7 +80,7 @@ function recordingDescription(playable: CallRecording[]) {
     playable.length > 1
       ? `${playable.length} ${plural(playable.length, "часть", "части", "частей")}, `
       : "";
-  return `${parts}Opus, ${channels} ${plural(channels, "канал", "канала", "каналов")}, ${formatSize(audioBytes(playable))}. В облако не выгружается.`;
+  return `${parts}Opus, ${channels} ${plural(channels, "канал", "канала", "каналов")}, ${recordingSize(audioBytes(playable))}. В облако не выгружается.`;
 }
 
 /** «Аудио 19 октября, 40 минут, 13 МБ, удалится с этого компьютера. …» */
@@ -110,7 +92,7 @@ function deleteDescription(call: CallRecord, playable: CallRecording[]) {
         MS_PER_MINUTE
     )
   );
-  return `Аудио ${call.day}, ${minutes} ${plural(minutes, "минута", "минуты", "минут")}, ${formatSize(audioBytes(playable))}, удалится с этого компьютера. Вернуть его не получится.`;
+  return `Аудио ${call.day}, ${minutes} ${plural(minutes, "минута", "минуты", "минут")}, ${recordingSize(audioBytes(playable))}, удалится с этого компьютера. Вернуть его не получится.`;
 }
 
 /** The waveform of the channels the manager hears. */

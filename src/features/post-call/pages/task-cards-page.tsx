@@ -51,7 +51,7 @@ const DECISIONS = {
 
 function TaskCardsOfCall({ call }: { call: CallRecord }) {
   const router = useRouter();
-  const records = useCallCards(call.id).data;
+  const { data: records, status: cardsStatus } = useCallCards(call.id);
   const { summary } = useCallSummary(call.id);
   const recordings = useCallTranscript(call.id).data;
   const questions = useCallQuestions(call.id).data;
@@ -200,6 +200,7 @@ function TaskCardsOfCall({ call }: { call: CallRecord }) {
         className={APP_WINDOW}
         expandedFactId={expandedFactId}
         foldedCardIds={foldedCardIds}
+        loading={cardsStatus === "loading"}
         nextQuestions={askNext}
         onListen={listen}
         onToggleFact={toggleFact}

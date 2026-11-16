@@ -246,7 +246,10 @@ export function unaskedQuestions(
   });
 }
 
-/** The chips under the TL;DR, counted from the records. */
+/**
+ * The chips under the TL;DR, counted from the records; a count of zero
+ * says nothing and is left out.
+ */
 export function summaryChips({
   live,
   questions,
@@ -258,14 +261,23 @@ export function summaryChips({
 }) {
   const closed = questions.filter((item) => item.status === "answered").length;
   const missed = questions.filter(isUnasked).length;
-  const chips: { accent?: true; id: string; label: string }[] = [
-    { id: "topics", label: count(topics, TOPICS) },
-    {
+  const chips: { accent?: true; id: string; label: string }[] = [];
+  if (topics > 0) {
+    chips.push({ id: "topics", label: count(topics, TOPICS) });
+  }
+  if (closed > 0) {
+    chips.push({
       id: "closed",
       label: `${closed} ${plural(closed, "вопрос закрыт", "вопроса закрыто", "вопросов закрыто")}`,
-    },
-    { accent: true, id: "missed", label: `${missed} не успели спросить` },
-  ];
+    });
+  }
+  if (missed > 0) {
+    chips.push({
+      accent: true,
+      id: "missed",
+      label: `${missed} не успели спросить`,
+    });
+  }
   if (live) {
     chips.push({ id: "live", label: "по живой расшифровке" });
   }

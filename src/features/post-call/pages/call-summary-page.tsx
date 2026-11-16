@@ -32,6 +32,7 @@ import { plural } from "@/lib/plural";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
+import { audioBytes, recordingSize } from "../recording-size";
 import { CallSummaryScreen } from "../screens/call-summary-screen";
 import {
   cardsOverview,
@@ -61,8 +62,6 @@ import { knowledgeTargets } from "./proposal-data";
 
 const DEMO_STATES = ["processing"] as const;
 
-const MB = 1_000_000;
-
 function showSavedToast(callId: string, openHistory: (href: string) => void) {
   const projectId = getCall(callId)?.projectId;
   toast.add({
@@ -91,7 +90,7 @@ function recordingFact(recordings: readonly CallRecording[], bytes: number) {
         Number(item.meBytes !== null) + Number(item.othersBytes !== null)
     )
   );
-  return `Opus, ${channels} ${plural(channels, "канал", "канала", "каналов")}, ${Math.max(1, Math.round(bytes / MB))} МБ`;
+  return `Opus, ${channels} ${plural(channels, "канал", "канала", "каналов")}, ${recordingSize(bytes)}`;
 }
 
 /** «Звонок завершён в 12:41, длился 40:12». */
@@ -152,10 +151,7 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
     [building, call.projectId]
   );
   const facts = useMemo(() => {
-    const bytes = recordings.reduce(
-      (total, item) => total + (item.meBytes ?? 0) + (item.othersBytes ?? 0),
-      0
-    );
+    const bytes = audioBytes(recordings);
     const ended =
       call.endedAt === null ? "" : `–${clockTime(call.endedAt, false)}`;
     return [
@@ -178,9 +174,10 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
     () => (content ? summaryTopics(content, recordings) : []),
     [content, recordings]
   );
+  // «Коротко» stands on its text: a blank one hides the block.
   const tldr = useMemo(
     () =>
-      content && summary
+      content && summary?.tldr.trim()
         ? {
             chips: summaryChips({
               live: summary.transcriptPass !== "refined",

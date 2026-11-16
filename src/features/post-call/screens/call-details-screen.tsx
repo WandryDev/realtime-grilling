@@ -171,6 +171,42 @@ function SectionTurns({
   return blocks;
 }
 
+/** The questions of the call (when it had any) and its recording. */
+function DetailsAside({
+  activeQuestionId,
+  onDeleteRecording,
+  onSelectQuestion,
+  questions,
+  recordingDeleted,
+  recordingDescription,
+}: {
+  activeQuestionId?: string;
+  onDeleteRecording?: () => void;
+  onSelectQuestion?: (questionId: string) => void;
+  questions: CallQuestion[];
+  recordingDeleted: boolean;
+  recordingDescription?: string;
+}) {
+  const asked = questions.length > 0;
+  return (
+    <SideColumn label="Вопросы звонка">
+      {asked ? (
+        <CallQuestionList
+          activeId={activeQuestionId}
+          onSelect={onSelectQuestion}
+          questions={questions}
+        />
+      ) : null}
+      <RecordingCard
+        className={asked ? "mt-5" : undefined}
+        deleted={recordingDeleted}
+        description={recordingDescription}
+        onDelete={onDeleteRecording}
+      />
+    </SideColumn>
+  );
+}
+
 export function CallDetailsScreen({
   activeTopic,
   className,
@@ -235,19 +271,14 @@ export function CallDetailsScreen({
     <CallWindow
       active="transcript"
       aside={
-        <SideColumn label="Вопросы звонка">
-          <CallQuestionList
-            activeId={moment?.questionId}
-            onSelect={onSelectQuestion}
-            questions={questions}
-          />
-          <RecordingCard
-            className="mt-5"
-            deleted={recordingDeleted}
-            description={recordingDescription}
-            onDelete={onDeleteRecording}
-          />
-        </SideColumn>
+        <DetailsAside
+          activeQuestionId={moment?.questionId}
+          onDeleteRecording={onDeleteRecording}
+          onSelectQuestion={onSelectQuestion}
+          questions={questions}
+          recordingDeleted={recordingDeleted}
+          recordingDescription={recordingDescription}
+        />
       }
       className={className}
       overlay={dialog ? <DeleteRecordingDialog /> : null}
@@ -257,18 +288,21 @@ export function CallDetailsScreen({
     >
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-16">
         <div className="border-border bg-background sticky top-0 z-[1] flex shrink-0 items-center justify-between gap-6 border-b pt-4 pb-3.5">
-          <FilterTabs
-            label="Темы"
-            onValueChange={onTopicChange ? changeTopic : undefined}
-            options={topics.map((topic) => ({
-              count: topic.time,
-              id: topic.id,
-              label: topic.title,
-            }))}
-            value={selectedTopic}
-          />
+          {/* One topic (the whole call) has nothing to switch between. */}
+          {topics.length > 1 ? (
+            <FilterTabs
+              label="Темы"
+              onValueChange={onTopicChange ? changeTopic : undefined}
+              options={topics.map((topic) => ({
+                count: topic.time,
+                id: topic.id,
+                label: topic.title,
+              }))}
+              value={selectedTopic}
+            />
+          ) : null}
           <SearchField
-            className="h-8 w-[220px] text-sm"
+            className="ml-auto h-8 w-[220px] text-sm"
             label="Найти в расшифровке"
             onQueryChange={search?.onQueryChange}
             placeholder="Найти в расшифровке"

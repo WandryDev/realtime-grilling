@@ -63,6 +63,11 @@ export interface PostCallInfo {
   duration: string;
   participants: string;
   project: string;
+  /**
+   * How many proposals the call has, decided or not; unknown (previews,
+   * still read) without it.
+   */
+  proposals?: number;
   /** "звонок 19 октября" in the title bar. */
   subtitle: string;
 }
