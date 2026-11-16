@@ -273,7 +273,6 @@ function SpeechModelRow({
   return (
     <SettingsRadioRow
       align="center"
-      className="py-4.5"
       description={modelDescription(model)}
       disabled={disabled || model.state.status !== "ready"}
       title={model.name}
@@ -516,10 +515,10 @@ export function AudioSettings({
           <SoundCheckResult state={soundCheck} />
         </SettingsRow>
       </SettingsSection>
-      <SettingsSection className="pt-8" title="Модель распознавания">
+      <SettingsSection className="pt-12" title="Модель распознавания">
         <RadioGroup
           aria-label="Модель распознавания"
-          className="gap-0"
+          className="gap-7"
           onValueChange={pickModel}
           value={selected?.id ?? ""}
         >

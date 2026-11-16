@@ -55,7 +55,7 @@ export function GeneralSettings({
           title="Язык звонков"
         />
       </SettingsSection>
-      <SettingsSection className="pt-8" title="Запуск и вид">
+      <SettingsSection className="pt-12" title="Запуск и вид">
         <SettingsRow
           control={
             <SettingsSwitch
@@ -83,7 +83,7 @@ export function GeneralSettings({
           title="Тема"
         />
       </SettingsSection>
-      <SettingsSection className="pt-8" title="Записи">
+      <SettingsSection className="pt-12" title="Записи">
         <SettingsRow
           control={
             <Button

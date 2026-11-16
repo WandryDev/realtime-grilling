@@ -105,7 +105,7 @@ export function ShortcutRow({
   return (
     <div
       className={cn(
-        "border-border flex gap-6 border-b py-3 last:border-b-0",
+        "flex gap-6",
         recording ? "items-start" : "items-center",
         className
       )}

@@ -85,7 +85,7 @@ export function PrivacySettings({
   return (
     <>
       <DataPolicyCard />
-      <SettingsSection className="pt-8" title="Сколько хранить">
+      <SettingsSection className="pt-12" title="Сколько хранить">
         <SettingsRow
           control={
             <SettingsSelect
@@ -115,7 +115,7 @@ export function PrivacySettings({
           title="Расшифровки"
         />
       </SettingsSection>
-      <SettingsSection className="pt-8" title="Ваши данные">
+      <SettingsSection className="pt-12" title="Ваши данные">
         <SettingsRow
           control={
             <Button

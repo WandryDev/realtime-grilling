@@ -70,7 +70,10 @@ function useBoundValue<K extends StringSettingKey | BooleanSettingKey, V>({
  * and the controls the rows share (select, segments, level meter).
  */
 
-/** Group of rows under a muted 13px title, with an optional action right. */
+/*
+ * Group of rows under a muted 13px title, with an optional action right.
+ * No lines: rows sit 28px apart, sections further (pt-12, the caller).
+ */
 export function SettingsSection({
   action,
   children,
@@ -85,21 +88,21 @@ export function SettingsSection({
   return (
     <section className={cn("flex flex-col", className)}>
       {title ? (
-        <div className="flex items-center justify-between gap-4 pb-1">
+        <div className="flex items-center justify-between gap-4 pb-4">
           <h2 className="text-muted-foreground text-sm font-medium">{title}</h2>
           {action}
         </div>
       ) : null}
-      {children}
+      <div className="flex flex-col gap-7">{children}</div>
     </section>
   );
 }
 
 /*
- * Title and description left, the control right, hairline under every row
- * but the last. `align="start"` for tall controls (select with a meter under
- * it): the text lines up with the 40px field. `children` go under the row at
- * full width (the folder path).
+ * Title and description left, the control right; the section spaces the
+ * rows. `align="start"` for tall controls (select with a meter under it): the
+ * text lines up with the 40px field. `children` go under the row at full
+ * width (the folder path), 12px below.
  */
 export function SettingsRow({
   align = "center",
@@ -133,9 +136,7 @@ export function SettingsRow({
 
   if (children) {
     return (
-      <SettingRow
-        className={cn("flex-col items-stretch gap-3.5 py-4.5", className)}
-      >
+      <SettingRow className={cn("flex-col items-stretch gap-3", className)}>
         <div className="flex items-center gap-6">{content}</div>
         {children}
       </SettingRow>
@@ -144,11 +145,7 @@ export function SettingsRow({
 
   return (
     <SettingRow
-      className={cn(
-        "gap-6 py-4.5",
-        align === "start" && "items-start",
-        className
-      )}
+      className={cn("gap-6", align === "start" && "items-start", className)}
     >
       {content}
     </SettingRow>
@@ -354,7 +351,7 @@ export function SettingsSwitch({
   );
 }
 
-/** Radio list of a section: rows touch, hairline between them. */
+/** Radio list of a section: rows 28px apart, like the other rows. */
 export function SettingsRadioGroup({
   className,
   defaultValue,
@@ -373,7 +370,7 @@ export function SettingsRadioGroup({
   });
   return (
     <RadioGroup
-      className={cn("gap-0", className)}
+      className={cn("gap-7", className)}
       defaultValue={bound.value === undefined ? defaultValue : undefined}
       onValueChange={
         bound.onValueChange as ((value: unknown) => void) | undefined
@@ -411,10 +408,8 @@ export function SettingsRadioRow({
 }) {
   return (
     <div
-      className={cn(
-        "border-border flex items-center gap-3.5 border-b py-3.5 last:border-b-0",
-        className
-      )}
+      className={cn("flex items-center gap-3.5", className)}
+      data-slot="settings-radio-row"
     >
       <ChoiceField
         className={cn(

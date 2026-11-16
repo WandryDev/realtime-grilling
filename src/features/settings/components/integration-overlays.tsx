@@ -90,12 +90,9 @@ function DisconnectServiceBody({
         {title}
         {description}
       </div>
-      <ul className="bg-surface flex flex-col rounded-md px-4 py-1">
+      <ul className="bg-surface flex flex-col gap-3 rounded-md px-4 py-3.5">
         {consequences.map((item) => (
-          <li
-            className="border-border flex items-center gap-2.5 border-b py-2.5 text-base last:border-b-0"
-            key={item}
-          >
+          <li className="flex items-center gap-2.5 text-base" key={item}>
             <CheckIcon className="text-confirmed size-4 shrink-0" />
             {item}
           </li>

@@ -66,12 +66,7 @@ function AgentFact({
   trailing?: ReactNode;
 }) {
   return (
-    <div
-      className={cn(
-        "border-border flex items-center gap-6 border-b py-3.5 last:border-b-0",
-        className
-      )}
-    >
+    <div className={cn("flex items-center gap-6", className)}>
       <dt className="text-muted-foreground w-45 shrink-0 text-base">{label}</dt>
       <dd className="min-w-0 flex-1 text-base">{children}</dd>
       {trailing ? <dd className="shrink-0">{trailing}</dd> : null}
@@ -92,7 +87,7 @@ function AgentSummary({
   const ready = agent?.status === "ready";
   const unknown = agent === null;
   return (
-    <div className="border-border flex items-center gap-3.5 border-b py-4.5">
+    <div className="flex items-center gap-3.5">
       <span className="bg-surface flex size-10 shrink-0 items-center justify-center rounded-sm">
         <ClaudeIcon className="size-5" />
       </span>
@@ -241,9 +236,9 @@ export function AgentSettings({
       : null;
   return (
     <>
-      <section aria-label="Claude Code" className="flex flex-col pt-4">
+      <section aria-label="Claude Code" className="flex flex-col gap-7 pt-4">
         <AgentSummary agent={agent} checking={checking} onCheck={onCheck} />
-        <dl className="flex flex-col">
+        <dl className="flex flex-col gap-4">
           <AgentFact
             label="Путь"
             trailing={
@@ -279,7 +274,7 @@ export function AgentSettings({
           <UsageFact usage={usage} />
         </dl>
       </section>
-      <SettingsSection className="pt-8" title="Вопросы во время звонка">
+      <SettingsSection className="pt-12" title="Вопросы во время звонка">
         <SettingsRow
           control={
             <SettingsSegments

@@ -89,7 +89,7 @@ async function modelChanged(changed: SpeechModel) {
 /** The row of a model, by its name. */
 function row(name: string) {
   const title = screen.getByText(name);
-  const found = title.closest<HTMLElement>("div.border-b");
+  const found = title.closest<HTMLElement>('[data-slot="settings-radio-row"]');
   if (!found) {
     throw new Error(`Нет строки ${name}`);
   }

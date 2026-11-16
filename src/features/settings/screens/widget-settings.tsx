@@ -76,7 +76,7 @@ export function WidgetSettings({
           ))}
         </SettingsRadioGroup>
       </SettingsSection>
-      <SettingsSection className="pt-8" title="Во время звонка">
+      <SettingsSection className="pt-12" title="Во время звонка">
         <SettingsRow
           control={
             <SettingsSwitch
@@ -128,24 +128,26 @@ export function WidgetSettings({
             Сбросить все
           </Button>
         }
-        className="pt-8"
+        className="pt-12"
         title="Сочетания клавиш, работают из любого приложения"
       >
-        {shortcuts.map((shortcut) => {
-          const isRecording = shortcut.id === recording;
-          const keys = values.shortcuts[shortcut.id] ?? shortcut.keys;
-          return (
-            <ShortcutRow
-              error={shortcutErrors?.[shortcut.id]}
-              id={shortcut.id}
-              key={shortcut.id}
-              keys={isRecording ? heldKeys : keys}
-              label={shortcut.label}
-              onRecord={onRecord}
-              recording={isRecording}
-            />
-          );
-        })}
+        <div className="flex flex-col gap-4">
+          {shortcuts.map((shortcut) => {
+            const isRecording = shortcut.id === recording;
+            const keys = values.shortcuts[shortcut.id] ?? shortcut.keys;
+            return (
+              <ShortcutRow
+                error={shortcutErrors?.[shortcut.id]}
+                id={shortcut.id}
+                key={shortcut.id}
+                keys={isRecording ? heldKeys : keys}
+                label={shortcut.label}
+                onRecord={onRecord}
+                recording={isRecording}
+              />
+            );
+          })}
+        </div>
       </SettingsSection>
     </>
   );
