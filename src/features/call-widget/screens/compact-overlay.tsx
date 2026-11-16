@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 
+import { AppearScope } from "@/components/ui/appear";
 import {
   AgentStatus,
   type RecordingLevel,
@@ -41,6 +42,10 @@ import {
  *   question shows a card under it for 8 seconds
  *
  * With `onHide` every question offers "Скрыть вопрос" on hover.
+ *
+ * A main question, a row or the pill's card that arrives while the overlay
+ * is open plays its entrance; expanding or collapsing shows the new view as
+ * it is (each view is its own AppearScope).
  */
 export type CompactOverlayState = "default" | "final-check" | "collapsed";
 
@@ -135,21 +140,24 @@ export function CompactOverlay({
     const card = newQuestion === undefined ? mainQuestion : newQuestion;
     return (
       <div className={cn("flex w-fit flex-col items-end gap-2", className)}>
-        <OverlayPill
-          level={recording?.level}
-          onExpand={onExpand}
-          openQuestions={openQuestions}
-          time={callTime}
-          topic={topic}
-          warning={recording?.warning}
-        />
-        {card === null || card === undefined ? null : (
-          <NewQuestionCard
-            onClose={onDismissNewQuestion}
-            onOpen={onOpenNewQuestion}
-            question={card}
+        <AppearScope>
+          <OverlayPill
+            level={recording?.level}
+            onExpand={onExpand}
+            openQuestions={openQuestions}
+            time={callTime}
+            topic={topic}
+            warning={recording?.warning}
           />
-        )}
+          {card === null || card === undefined ? null : (
+            <NewQuestionCard
+              key={card}
+              onClose={onDismissNewQuestion}
+              onOpen={onOpenNewQuestion}
+              question={card}
+            />
+          )}
+        </AppearScope>
       </div>
     );
   }
@@ -159,53 +167,58 @@ export function CompactOverlay({
 
   return (
     <FloatingSurface className={cn("w-overlay gap-1 p-2", className)}>
-      <OverlayHeader
-        callHref={callHref}
-        level={recording?.level}
-        onCollapse={onCollapse}
-        project={project}
-        time={callTime}
-        warning={recording?.warning}
-      />
-      {finalCheck ? (
-        <OverlayHeading
-          description={OVERLAY.finalCheckDescription}
-          icon={<FlagIcon className="size-4 shrink-0" />}
-          title="Финальная проверка"
+      <AppearScope>
+        <OverlayHeader
+          callHref={callHref}
+          level={recording?.level}
+          onCollapse={onCollapse}
+          project={project}
+          time={callTime}
+          warning={recording?.warning}
         />
-      ) : (
-        <OverlayHeading
-          action={<PastTopicsButton count={pastTopics} href={callHref} />}
-          title={topic}
-        />
-      )}
-      {mainQuestion === null ? (
-        <OverlayListening />
-      ) : (
-        <OverlayMainQuestion
-          label={finalCheck ? topic : mainLabel}
-          onHide={onHide && mainQuestionId !== undefined ? hideMain : undefined}
-          title={mainQuestion}
-        />
-      )}
-      {rows.map((question) => (
-        <OverlayQuestion
-          key={question.id}
-          onHide={onHide}
-          question={question}
-        />
-      ))}
-      <OverlayFooter hiddenFromShare={hiddenFromShare}>
-        {finalCheck && finalCheckMore > 0 ? (
-          <span className="text-muted-foreground text-sm">
-            ещё {finalCheckMore} в окне
-          </span>
+        {finalCheck ? (
+          <OverlayHeading
+            description={OVERLAY.finalCheckDescription}
+            icon={<FlagIcon className="size-4 shrink-0" />}
+            title="Финальная проверка"
+          />
         ) : (
-          <AgentStatus state={agentState} tone={agentTone}>
-            {agentLabel}
-          </AgentStatus>
+          <OverlayHeading
+            action={<PastTopicsButton count={pastTopics} href={callHref} />}
+            title={topic}
+          />
         )}
-      </OverlayFooter>
+        {mainQuestion === null ? (
+          <OverlayListening />
+        ) : (
+          <OverlayMainQuestion
+            key={mainQuestionId ?? mainQuestion}
+            label={finalCheck ? topic : mainLabel}
+            onHide={
+              onHide && mainQuestionId !== undefined ? hideMain : undefined
+            }
+            title={mainQuestion}
+          />
+        )}
+        {rows.map((question) => (
+          <OverlayQuestion
+            key={question.id}
+            onHide={onHide}
+            question={question}
+          />
+        ))}
+        <OverlayFooter hiddenFromShare={hiddenFromShare}>
+          {finalCheck && finalCheckMore > 0 ? (
+            <span className="text-muted-foreground text-sm">
+              ещё {finalCheckMore} в окне
+            </span>
+          ) : (
+            <AgentStatus state={agentState} tone={agentTone}>
+              {agentLabel}
+            </AgentStatus>
+          )}
+        </OverlayFooter>
+      </AppearScope>
     </FloatingSurface>
   );
 }
