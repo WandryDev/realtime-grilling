@@ -114,7 +114,6 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
       // Key by demo so a forced state starts fresh when the navigator
       // switches states on the same route.
       key={`${section}:${demo ?? ""}`}
-      navigation={id === "integrations" ? "panel" : "sidebar"}
       section={id}
       status={micMissing ? <NoMicrophoneStatus /> : undefined}
     >

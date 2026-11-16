@@ -508,7 +508,6 @@ export function IntegrationsSettingsScreen({
     <SettingsScreen
       alerts={["integrations"]}
       className={className}
-      navigation="panel"
       overlay={overlay}
       section="integrations"
     >

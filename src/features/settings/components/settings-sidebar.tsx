@@ -49,7 +49,7 @@ export function SectionAlertDot({ className }: { className?: string }) {
 
 /*
  * Sidebar of the settings: "К проектам" back to the main sidebar, the
- * section list, the agent and recording status at the bottom. Sections in
+ * section list, the agent status at the bottom. Sections in
  * `alerts` get a red dot.
  */
 export function SettingsSidebar({

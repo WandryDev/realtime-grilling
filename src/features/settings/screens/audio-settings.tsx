@@ -9,7 +9,6 @@ import {
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert";
-import { ClaudeIcon } from "@/components/ui/brand-icons";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup } from "@/components/ui/radio-group";
@@ -22,7 +21,11 @@ import {
   type StoredBenchmark,
 } from "@/data/settings";
 import type { CaptureProblem } from "@/features/onboarding/api";
-import { SidebarStatus, SidebarStatusItem } from "@/features/shell/app-sidebar";
+import {
+  AgentSidebarStatusItem,
+  SidebarStatus,
+  SidebarStatusItem,
+} from "@/features/shell/app-sidebar";
 import { MicIcon } from "@/features/shell/icons";
 
 import {
@@ -314,6 +317,14 @@ export function benchmarkSummary(result: StoredBenchmark | undefined) {
   }
 }
 
+/** «Проверить» the first time, «Проверить снова» after a result. */
+function benchmarkLabel({ result, running }: BenchmarkState) {
+  if (running) {
+    return "Проверяю…";
+  }
+  return result ? "Проверить снова" : "Проверить";
+}
+
 export interface BenchmarkState {
   /** The last result of the selected model, if any. */
   result?: StoredBenchmark;
@@ -395,7 +406,7 @@ export function AudioSettings({
   /** Both speech models, as the backend reports them. */
   models?: readonly SpeechModel[];
   onChange?: SettingChange;
-  /** "Проверить снова": the hardware check of the selected model. */
+  /** «Проверить» / «Проверить снова»: the hardware check of the selected model. */
   onRecheck?: () => void;
   /** A ready model picked to recognize with. */
   onSelectModel?: (id: ModelId) => void;
@@ -409,8 +420,14 @@ export function AudioSettings({
 }) {
   const checking = soundCheck.status === "running";
   const selected = models.find((model) => model.selected);
-  const canRecheck =
-    !(inCall || benchmark.running) && selected?.state.status === "ready";
+  const modelReady = selected?.state.status === "ready";
+  const canRecheck = !(inCall || benchmark.running) && modelReady;
+  let benchmarkLine = benchmarkSummary(benchmark.result);
+  if (benchmark.running) {
+    benchmarkLine = "Расшифровываю проверочные фразы, это до двух минут";
+  } else if (!modelReady) {
+    benchmarkLine = "Сначала скачайте модель";
+  }
   const pickModel = useCallback(
     (value: unknown) => {
       const picked = models.find((model) => model.id === value);
@@ -525,14 +542,10 @@ export function AudioSettings({
               {benchmark.running ? (
                 <Spinner aria-hidden="true" className="size-3.5" />
               ) : null}
-              {benchmark.running ? "Проверяю…" : "Проверить снова"}
+              {benchmarkLabel(benchmark)}
             </Button>
           }
-          description={
-            benchmark.running
-              ? "Расшифровываю проверочные фразы, это до двух минут"
-              : benchmarkSummary(benchmark.result)
-          }
+          description={benchmarkLine}
           title="Успевает ли компьютер"
         />
       </SettingsSection>
@@ -544,12 +557,7 @@ export function AudioSettings({
 export function NoMicrophoneStatus() {
   return (
     <SidebarStatus>
-      <SidebarStatusItem
-        description="готов к звонку"
-        icon={<ClaudeIcon />}
-        title="Claude Code"
-        tone="ready"
-      />
+      <AgentSidebarStatusItem />
       <SidebarStatusItem
         description="пишу с микрофона по умолчанию"
         icon={<MicIcon />}

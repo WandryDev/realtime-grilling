@@ -73,16 +73,6 @@ export const SETTINGS_SECTIONS: SettingsSectionInfo[] = [
   },
 ];
 
-/** Section list of the in-panel menu on the integrations screens. */
-export const PANEL_NAV: { id: SettingsSectionId; label: string }[] = [
-  { id: "general", label: "Общие" },
-  { id: "audio", label: "Звук и распознавание" },
-  { id: "agent", label: "Агент" },
-  { id: "integrations", label: "Интеграции" },
-  { id: "widget", label: "Виджет и горячие клавиши" },
-  { id: "privacy", label: "Приватность и хранение" },
-];
-
 export interface SelectOption {
   label: string;
   value: string;

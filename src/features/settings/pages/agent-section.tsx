@@ -6,6 +6,7 @@ import type { AgentState, AgentUsage } from "@/bindings";
 import { toast } from "@/components/ui/toast";
 import { updateSetting, useSettings } from "@/data/settings";
 
+import { publishAgentState } from "../agent-status";
 import { checkAgent, isAbortError, readAgentUsage } from "../api";
 import { AgentLoginDialog, AgentPathDialog } from "../dialogs/agent-dialogs";
 import { AGENT_UTILIZATION_LOW } from "../mock";
@@ -23,11 +24,17 @@ import { useAbortSignal } from "../use-abort-signal";
 export function AgentSection({ limitLow = false }: { limitLow?: boolean }) {
   const values = useSettings();
   const nextSignal = useAbortSignal();
-  const [agent, setAgent] = useState<AgentState | null>(null);
+  const [agent, setShownAgent] = useState<AgentState | null>(null);
   const [usage, setUsage] = useState<AgentUsage | null>(null);
   const [checking, setChecking] = useState(false);
   const [pathOpen, setPathOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+
+  // What the sidebar status shows follows every answer of this section.
+  const setAgent = useCallback((next: AgentState) => {
+    setShownAgent(next);
+    publishAgentState(next);
+  }, []);
 
   const openPathDialog = useCallback(() => setPathOpen(true), []);
   const openLoginDialog = useCallback(() => setLoginOpen(true), []);
@@ -48,7 +55,7 @@ export function AgentSection({ limitLow = false }: { limitLow?: boolean }) {
         status: "error",
       });
     }
-  }, [nextSignal]);
+  }, [nextSignal, setAgent]);
 
   useEffect(() => {
     readAgent();

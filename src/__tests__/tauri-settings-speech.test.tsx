@@ -182,9 +182,11 @@ describe("Звук и распознавание in Tauri", () => {
     expect(
       row("Whisper small").getByRole("button", { name: "Удалить" })
     ).toHaveProperty("disabled", false);
-    expect(
-      screen.getByRole("button", { name: "Проверить снова" })
-    ).toHaveProperty("disabled", true);
+    // Never checked: «Проверить», not «снова».
+    expect(screen.getByRole("button", { name: "Проверить" })).toHaveProperty(
+      "disabled",
+      true
+    );
   });
 
   it("says why the backend refused to remove the model", async () => {
@@ -212,6 +214,22 @@ describe("Звук и распознавание in Tauri", () => {
     expect(
       row("Whisper large-v3-turbo").getByRole("button", { name: "Удалить" })
     ).toBeTruthy();
+  });
+
+  it("«Проверить» before the first check; without the model it says to download it", async () => {
+    fake.answers.set("speech_models_list", () => [
+      model("turbo", { status: "notDownloaded" }),
+      model("small", { status: "notDownloaded" }),
+    ]);
+    render(<AudioSection />);
+    await screen.findByText("Whisper small");
+
+    const check = screen.getByRole("button", { name: "Проверить" });
+    expect(check).toHaveProperty("disabled", true);
+    expect(screen.getByText("Сначала скачайте модель")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Проверить снова" })
+    ).toBeNull();
   });
 
   it("shows the hardware check in a line and runs it again", async () => {

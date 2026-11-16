@@ -11,6 +11,8 @@ import { WidgetSettingsScreen } from "@/features/settings/screens/widget-setting
 const SETTINGS_NAV = "Разделы настроек";
 const NEEDS_ATTENTION = /требует внимания/u;
 const OVERLAY_SHORTCUT = /Показать или скрыть оверлей/u;
+const CLAUDE_READY = /Claude Code\s*готов к звонку/u;
+const INTEGRATIONS = /Интеграции/u;
 
 describe("settings screens", () => {
   it("renders the general section with the settings sidebar", () => {
@@ -124,11 +126,44 @@ describe("settings screens", () => {
     ).toBeTruthy();
     dialog.unmount();
 
-    render(<IntegrationsSettingsScreen state="github-disconnected" />);
+    const disconnected = render(
+      <IntegrationsSettingsScreen state="github-disconnected" />
+    );
     expect(screen.getByText("1 из 3 работает")).toBeTruthy();
     expect(
       within(screen.getByRole("status")).getByText("GitHub отключён")
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Подключить" })).toBeTruthy();
+    disconnected.unmount();
+  });
+
+  it("puts the integrations into the settings sidebar like the other sections", () => {
+    render(<IntegrationsSettingsScreen />);
+
+    const navs = screen.getAllByRole("navigation", { name: SETTINGS_NAV });
+    expect(navs).toHaveLength(1);
+    expect(
+      within(navs[0] as HTMLElement)
+        .getByRole("link", { name: INTEGRATIONS })
+        .getAttribute("aria-current")
+    ).toBe("page");
+    expect(screen.queryByRole("link", { name: "К проектам" })).toBeTruthy();
+  });
+
+  it("shows Claude Code's state in the sidebar, as a link to «Агент»", async () => {
+    render(<GeneralSettingsScreen />);
+
+    const row = await screen.findByRole("link", { name: CLAUDE_READY });
+    expect(row.getAttribute("href")).toBe("/settings/agent");
+    expect(screen.queryByText("Запись не идёт")).toBeNull();
+  });
+
+  it("keeps the agent row next to «Нет микрофона»", async () => {
+    render(<AudioSettingsScreen microphone="disabled" />);
+
+    expect(screen.getByText("Нет микрофона")).toBeTruthy();
+    expect(
+      await screen.findByRole("link", { name: CLAUDE_READY })
+    ).toBeTruthy();
   });
 });

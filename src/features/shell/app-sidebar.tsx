@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
-
+import type { AgentState } from "@/bindings";
 import { ClaudeIcon } from "@/components/ui/brand-icons";
 import {
   NavItem,
@@ -12,20 +12,15 @@ import {
 } from "@/components/ui/nav-item";
 import { useProjects } from "@/data/projects";
 import type { MockProject } from "@/features/mock/projects";
+import { useAgentState } from "@/features/settings/agent-status";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
-import {
-  HistoryIcon,
-  HomeIcon,
-  MicIcon,
-  PlusIcon,
-  SettingsIcon,
-} from "./icons";
+import { HistoryIcon, HomeIcon, PlusIcon, SettingsIcon } from "./icons";
 
 /*
  * Sidebar of the main window, on the surface gray left of the white panel.
- * 240 wide: navigation on top, settings and the agent/recording status at
+ * 240 wide: navigation on top, settings and the agent status at
  * the bottom. The parts compose into the sidebars of the different sections
  * (MainSidebar for home and projects, settings and history build their own).
  */
@@ -153,9 +148,10 @@ export function ProjectNavItem({
   );
 }
 
-type StatusTone = "ready" | "idle" | "recording" | "error";
+type StatusTone = "ready" | "idle" | "recording" | "attention" | "error";
 
 const STATUS_DOT: Record<StatusTone, string> = {
+  attention: "bg-accent",
   error: "bg-destructive",
   idle: "bg-border-strong",
   ready: "bg-confirmed",
@@ -176,17 +172,20 @@ export function SidebarStatus({ className, ...props }: ComponentProps<"div">) {
 
 export function SidebarStatusItem({
   description,
+  href,
   icon,
   title,
   tone,
 }: {
   description: string;
+  /** Makes the row a link, e.g. to the settings of what it reports. */
+  href?: string;
   icon: ReactNode;
   title: string;
   tone: StatusTone;
 }) {
-  return (
-    <div className="flex items-center gap-2.5">
+  const content = (
+    <>
       <span className="bg-background text-muted-foreground flex size-6 shrink-0 items-center justify-center rounded-xs [&_svg]:size-3.5">
         {icon}
       </span>
@@ -198,26 +197,56 @@ export function SidebarStatusItem({
         aria-hidden="true"
         className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[tone])}
       />
-    </div>
+    </>
+  );
+  if (href) {
+    return (
+      <Link
+        className="hover:bg-background/60 focus-visible:focus-ring -m-1.5 flex items-center gap-2.5 rounded-xs p-1.5 transition-colors"
+        href={href}
+      >
+        {content}
+      </Link>
+    );
+  }
+  return <div className="flex items-center gap-2.5">{content}</div>;
+}
+
+const AGENT_STATUS: Record<
+  AgentState["status"],
+  { description: string; tone: StatusTone }
+> = {
+  error: { description: "не отвечает", tone: "error" },
+  needsLogin: { description: "нужен вход", tone: "attention" },
+  notInstalled: { description: "не установлен", tone: "error" },
+  ready: { description: "готов к звонку", tone: "ready" },
+};
+
+/**
+ * Claude Code as Settings → Агент sees it (`agent_status`); the row opens
+ * that section.
+ */
+export function AgentSidebarStatusItem() {
+  const agent = useAgentState();
+  const { description, tone } = agent
+    ? AGENT_STATUS[agent.status]
+    : { description: "проверяю…", tone: "idle" as const };
+  return (
+    <SidebarStatusItem
+      description={description}
+      href={routes.settings("agent")}
+      icon={<ClaudeIcon />}
+      title="Claude Code"
+      tone={tone}
+    />
   );
 }
 
-/** Agent and recording status, the default state between calls. */
+/** The agent's status, the default state between calls. */
 export function DefaultSidebarStatus() {
   return (
     <SidebarStatus>
-      <SidebarStatusItem
-        description="готов к звонку"
-        icon={<ClaudeIcon />}
-        title="Claude Code"
-        tone="ready"
-      />
-      <SidebarStatusItem
-        description="жду начала звонка"
-        icon={<MicIcon />}
-        title="Запись не идёт"
-        tone="idle"
-      />
+      <AgentSidebarStatusItem />
     </SidebarStatus>
   );
 }

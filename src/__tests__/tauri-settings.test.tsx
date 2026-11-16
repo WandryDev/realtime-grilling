@@ -86,6 +86,8 @@ const { IntegrationsSection } = await import(
 const { WidgetSection } = await import(
   "@/features/settings/pages/widget-section"
 );
+const { DefaultSidebarStatus } = await import("@/features/shell/app-sidebar");
+const { publishAgentState } = await import("@/features/settings/agent-status");
 const { IDLE_SESSION } = await import("./helpers/fake-tauri");
 const { settingProblem } = await import("@/data/services/setting-checks");
 const { getSettings, refreshSettings, resetSettings } = await import(
@@ -175,6 +177,9 @@ async function microphoneOptions() {
 }
 
 const MICROPHONE = /Микрофон, канал «Вы»/u;
+const CLAUDE_NOT_INSTALLED = /Claude Code\s*не установлен/u;
+const CLAUDE_NEEDS_LOGIN = /Claude Code\s*нужен вход/u;
+const CLAUDE_READY = /Claude Code\s*готов к звонку/u;
 const MIC_LEVEL = "Уровень микрофона";
 
 /** The caption next to a level meter. */
@@ -577,6 +582,35 @@ describe("«Агент» in Tauri", () => {
     expect(invokedWith("agent_login_submit")).toEqual([
       { code: "code-12345678" },
     ]);
+  });
+
+  it("Claude Code in the sidebar: what agent_status says, a link to «Агент»", async () => {
+    let agent: AgentState = { status: "notInstalled" };
+    fake.answers.set("agent_status", () => agent);
+    // Forget what the earlier tests read: a state that is not ready is
+    // read again by the next row.
+    act(() => publishAgentState({ message: "", status: "error" }));
+    const sidebar = render(<DefaultSidebarStatus />);
+
+    const row = await screen.findByRole("link", {
+      name: CLAUDE_NOT_INSTALLED,
+    });
+    expect(row.getAttribute("href")).toBe("/settings/agent");
+    expect(screen.queryByText("Запись не идёт")).toBeNull();
+    sidebar.unmount();
+
+    agent = { status: "needsLogin", version: "2.1.20" };
+    render(<DefaultSidebarStatus />);
+    expect(
+      await screen.findByRole("link", { name: CLAUDE_NEEDS_LOGIN })
+    ).toBeTruthy();
+
+    // «Проверить снова» of the section updates the row.
+    agent = { status: "ready", subscriptionType: "max", version: "2.1.20" };
+    render(<AgentSection />);
+    expect(
+      await screen.findByRole("link", { name: CLAUDE_READY })
+    ).toBeTruthy();
   });
 
   it("Лимит: the last share with its time, or «нет данных»", async () => {
