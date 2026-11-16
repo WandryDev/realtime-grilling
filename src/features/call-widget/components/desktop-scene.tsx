@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
  * floating widgets: the /dev previews and, in the browser, the /widget and
  * /overlay routes (in Tauri those are transparent windows over the real
  * desktop). The gray stand-in colors come from Paper and are not design
- * tokens.
+ * tokens; the dark theme gets a dark desktop of the same kind.
  */
 
 function AppleLogo() {
@@ -27,7 +27,7 @@ function AppleLogo() {
 
 function MenuBar({ clock, micInUse }: { clock: string; micInUse: boolean }) {
   return (
-    <div className="flex h-7 shrink-0 items-center justify-between bg-white/45 px-4 text-sm">
+    <div className="flex h-7 shrink-0 items-center justify-between bg-white/45 px-4 text-sm dark:bg-black/35">
       <div className="flex items-center gap-[18px]">
         <AppleLogo />
         <span className="font-semibold">zoom.us</span>
@@ -51,8 +51,8 @@ const PEOPLE = [
 
 function VideoTile({ initials, name }: { initials: string; name: string }) {
   return (
-    <div className="relative flex flex-1 basis-0 flex-col items-center justify-center rounded-[10px] bg-[#C6C6C3]">
-      <span className="flex size-14 items-center justify-center rounded-full bg-[#B5B5B2] text-xl font-medium text-white">
+    <div className="relative flex flex-1 basis-0 flex-col items-center justify-center rounded-[10px] bg-[#C6C6C3] dark:bg-[#34322f]">
+      <span className="flex size-14 items-center justify-center rounded-full bg-[#B5B5B2] text-xl font-medium text-white dark:bg-[#4a4743]">
         {initials}
       </span>
       <span className="absolute bottom-2 left-2.5 text-xs text-white">
@@ -64,7 +64,7 @@ function VideoTile({ initials, name }: { initials: string; name: string }) {
 
 function MeetingEnded() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-[10px] bg-[#C6C6C3]">
+    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-[10px] bg-[#C6C6C3] dark:bg-[#34322f]">
       <span className="text-lg font-medium text-white">Встреча завершена</span>
       <span className="text-sm text-white/80">
         Организатор завершил встречу для всех
@@ -102,12 +102,12 @@ function ZoomWindow({
   return (
     <div
       className={cn(
-        "absolute top-16 left-10 flex h-[400px] flex-col overflow-clip rounded-[14px] bg-[#D4D4D1] shadow-[0_0_0_1px_rgb(17_17_17/5%),0_12px_40px_rgb(17_17_17/8%)]",
+        "absolute top-16 left-10 flex h-[400px] flex-col overflow-clip rounded-[14px] bg-[#D4D4D1] shadow-[0_0_0_1px_rgb(17_17_17/5%),0_12px_40px_rgb(17_17_17/8%)] dark:bg-[#262422] dark:shadow-[0_0_0_1px_rgb(255_255_255/8%),0_12px_40px_rgb(0_0_0/40%)]",
         sharing ? "w-[500px]" : "w-[540px]"
       )}
     >
       <div className="flex h-9 shrink-0 items-center justify-between px-3.5">
-        <div className="flex gap-[7px] *:size-[11px] *:rounded-full *:bg-[#C2C2BF]">
+        <div className="flex gap-[7px] *:size-[11px] *:rounded-full *:bg-[#C2C2BF] dark:*:bg-[#4a4743]">
           <span />
           <span />
           <span />
@@ -162,7 +162,7 @@ export function DesktopScene({
   return (
     <div
       className={cn(
-        "text-foreground relative flex flex-col overflow-clip bg-[#E4E4E1]",
+        "text-foreground relative flex flex-col overflow-clip bg-[#E4E4E1] dark:bg-[#0f0e0d]",
         className
       )}
     >

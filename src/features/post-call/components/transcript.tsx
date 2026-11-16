@@ -698,7 +698,7 @@ export function DeleteRecordingDialog({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "bg-foreground/24 absolute inset-0 z-10 flex items-center justify-center",
+        "bg-foreground/24 dark:bg-scrim absolute inset-0 z-10 flex items-center justify-center",
         className
       )}
     >
