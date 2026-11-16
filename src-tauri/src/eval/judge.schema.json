@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["labels", "managerQuestions"],
+  "properties": {
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["questionId", "label", "reason", "segmentId"],
+        "properties": {
+          "questionId": { "type": "string" },
+          "label": {
+            "type": "string",
+            "enum": [
+              "would_ask",
+              "off_topic",
+              "already_answered",
+              "fabricated",
+              "duplicate"
+            ]
+          },
+          "reason": { "type": "string", "maxLength": 300 },
+          "segmentId": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "managerQuestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["segmentId", "coveredBy"],
+        "properties": {
+          "segmentId": { "type": "string" },
+          "coveredBy": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

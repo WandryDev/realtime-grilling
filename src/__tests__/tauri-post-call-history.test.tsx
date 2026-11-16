@@ -1,0 +1,335 @@
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { CallOverview, CallSearch } from "@/bindings";
+
+/*
+ * «История звонков» in Tauri, over the fake IPC (./helpers/fake-tauri.ts)
+ * (`call-history`): the calls by month, newest first by their start, each
+ * with what one `calls_overview` reads of every call: its title (or the
+ * summary's), the questions not closed, the pending proposals and
+ * «аудио удалено»; the filter by a person goes by id; the search is
+ * `calls_search`; a project without calls shows its readiness from its
+ * data.
+ */
+
+const fake = await vi.hoisted(async () => {
+  (globalThis as { isTauri?: boolean }).isTauri = true;
+  const { createFakeTauri } = await import("./helpers/fake-tauri");
+  return createFakeTauri();
+});
+
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
+  invoke: fake.invoke,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  emitTo: vi.fn(() => Promise.resolve()),
+  listen: fake.listen,
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main", listen: fake.listen }),
+}));
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => "macos" }));
+
+let search = new URLSearchParams();
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/history",
+  useRouter: () => ({
+    back: vi.fn(),
+    prefetch: vi.fn(),
+    push: vi.fn(),
+    replace: vi.fn(),
+  }),
+  useSearchParams: () => search,
+}));
+
+const { fakeCall, fakePerson, fakeProject } = await import(
+  "./helpers/fake-tauri"
+);
+const { HistoryPage } = await import("@/features/post-call/pages/history-page");
+const { updatePerson } = await import("@/data/people");
+const { momentParam } = await import("@/features/post-call/moment");
+const { routes } = await import("@/lib/routes");
+
+const PROJECT = "019a0000-0000-7000-8000-000000000001";
+const NEW_PROJECT = "019a0000-0000-7000-8000-000000000002";
+const IGOR = "019a0000-0000-7000-8000-0000000000e1";
+const OLGA = "019a0000-0000-7000-8000-0000000000e2";
+const FIRST = "019a0000-0000-7000-8000-0000000000c1";
+const LAST = "019a0000-0000-7000-8000-0000000000c2";
+const LOOSE = "019a0000-0000-7000-8000-0000000000c3";
+const LAST_RECORDING = "019a0000-0000-7000-8000-0000000000a2";
+
+const NOV_3 = new Date(2026, 10, 3, 11, 0).getTime();
+const NOV_5 = new Date(2026, 10, 5, 15, 30).getTime();
+const OCT_20 = new Date(2026, 9, 20, 10, 0).getTime();
+const NEWEST_FIRST = /5 ноя.*3 ноя/su;
+const LAST_TITLE = /Онлайн-запись и бронь/u;
+const LOOSE_TOPIC = /Тарифы связи/u;
+const FIRST_TITLE = /Старт проекта/u;
+const LAST_SHORT = /Онлайн-запись/u;
+const OPEN_FILTER = /С открытыми вопросами/u;
+const BRON_META = /Клиент, 15:51, и ещё 1/u;
+const ALL_PROJECTS = /^Все проекты/u;
+
+fake.db.projects.push(
+  fakeProject(PROJECT, "Телемедиа"),
+  // A new project: a brief and a person, no documents, no calls.
+  {
+    ...fakeProject(NEW_PROJECT, "Школа Ритм"),
+    briefBuiltAt: NOV_3,
+    briefState: "fresh",
+  }
+);
+fake.db.people.push(
+  fakePerson(IGOR, PROJECT, "Игорь"),
+  fakePerson(OLGA, PROJECT, "Ольга"),
+  fakePerson("019a0000-0000-7000-8000-0000000000e3", NEW_PROJECT, "Марина")
+);
+fake.db.calls.push(
+  {
+    ...fakeCall(FIRST, PROJECT, "Старт проекта"),
+    endedAt: NOV_3 + 600_000,
+    participantIds: [IGOR],
+    startedAt: NOV_3,
+  },
+  {
+    // Not named yet: the summary's title stands in.
+    ...fakeCall(LAST, PROJECT, ""),
+    endedAt: NOV_5 + 900_000,
+    openQuestions: 1,
+    participantIds: [OLGA],
+    startedAt: NOV_5,
+  },
+  {
+    ...fakeCall(LOOSE, null, ""),
+    endedAt: OCT_20 + 300_000,
+    startedAt: OCT_20,
+  }
+);
+
+/** What Rust's `calls_overview` reads of the calls above. */
+const OVERVIEW: CallOverview[] = [
+  {
+    audioDeleted: true,
+    callId: LAST,
+    // Not named yet: the summary's title stands in.
+    openQuestions: 2,
+    pendingProposals: 2,
+    projectId: PROJECT,
+    title: "Онлайн-запись и бронь",
+  },
+  {
+    audioDeleted: false,
+    callId: FIRST,
+    openQuestions: 0,
+    pendingProposals: 0,
+    projectId: PROJECT,
+    title: "Старт проекта",
+  },
+  {
+    audioDeleted: false,
+    callId: LOOSE,
+    // No title and no summary title: the summary's first topic.
+    openQuestions: 0,
+    pendingProposals: 0,
+    projectId: null,
+    title: "Тарифы связи",
+  },
+];
+
+/** Reads of one call each, which the history does not make. */
+const PER_CALL = [
+  "summary_get",
+  "call_transcript",
+  "call_questions",
+  "proposals_list",
+];
+
+const BRON: CallSearch = {
+  matches: [
+    {
+      after: " на субботу, если врач свободен",
+      at: NOV_5 + 1_260_000,
+      before: "Можно поставить ",
+      callId: LAST,
+      channel: "others",
+      moment: {
+        recordingId: LAST_RECORDING,
+        segmentId: "s-bron",
+        startMs: 1_260_000,
+      },
+      projectId: PROJECT,
+      source: "segment",
+      text: "бронь",
+    },
+    {
+      after: " отменяют за сутки",
+      at: null,
+      before: "Брони ",
+      callId: LAST,
+      channel: null,
+      moment: null,
+      projectId: PROJECT,
+      source: "point",
+      text: "Брони",
+    },
+  ],
+  projects: [{ calls: 1, matches: 2, projectId: PROJECT }],
+  total: 2,
+};
+
+beforeEach(() => {
+  fake.invoked.length = 0;
+  fake.answers.clear();
+  fake.answers.set("calls_overview", ({ projectId }) =>
+    OVERVIEW.filter((row) => !projectId || row.projectId === projectId)
+  );
+  fake.answers.set("calls_search", () => BRON);
+});
+
+function open(query: Record<string, string> = {}) {
+  search = new URLSearchParams(query);
+  return render(<HistoryPage />);
+}
+
+const rowOf = (name: string | RegExp) => screen.getByRole("link", { name });
+
+const invokedWith = (command: string) =>
+  fake.invoked
+    .filter((item) => item.command === command)
+    .map((item) => item.args);
+
+const searches = () => invokedWith("calls_search");
+
+describe("call history in Tauri", () => {
+  // First, so the overview's first read is this test's.
+  it("reads one overview of every call, and again once per change", async () => {
+    open();
+
+    await screen.findByRole("link", { name: LAST_TITLE });
+    expect(rowOf(LOOSE_TOPIC)).toBeTruthy();
+    expect(invokedWith("calls_overview")).toEqual([{ projectId: null }]);
+    for (const command of PER_CALL) {
+      expect(invokedWith(command)).toEqual([]);
+    }
+
+    // A decision on one call: one overview again, nothing per call.
+    fake.invoked.length = 0;
+    act(() =>
+      fake.dataChanged({
+        change: "updated",
+        entity: "call",
+        id: LAST,
+        projectId: PROJECT,
+      })
+    );
+    await waitFor(() => expect(invokedWith("calls_overview")).toHaveLength(1));
+    for (const command of PER_CALL) {
+      expect(invokedWith(command)).toEqual([]);
+    }
+  });
+
+  it("«Два звонка проекта»: by month, newest first, each with its title", async () => {
+    open({ project: PROJECT });
+
+    const november = await screen.findByRole("region", { name: "Ноябрь" });
+    expect(within(november).getAllByRole("link")).toHaveLength(2);
+    expect(november.textContent).toMatch(NEWEST_FIRST);
+    const last = await within(november).findByRole("link", {
+      name: LAST_TITLE,
+    });
+    // Open and asked are not closed; two proposals wait; no audio.
+    expect(within(last).getByText("2 открытых")).toBeTruthy();
+    expect(within(last).getByText("2 предложения")).toBeTruthy();
+    expect(within(last).getByText("Ольга, аудио удалено")).toBeTruthy();
+    expect(within(november).getByText("Старт проекта")).toBeTruthy();
+  });
+
+  it("lists a call without a project in the general history", async () => {
+    open();
+
+    // No title and no summary title: the summary's first topic.
+    const row = await screen.findByRole("link", { name: LOOSE_TOPIC });
+    expect(within(row).getByText("Звонок без проекта")).toBeTruthy();
+  });
+
+  it("«Фильтр по Игорю»: his calls, also after he was renamed", async () => {
+    const user = userEvent.setup();
+    open({ project: PROJECT });
+    await screen.findByRole("tab", { name: "Игорь" });
+
+    await act(async () => {
+      await updatePerson(PROJECT, IGOR, { name: "Игорь Савчук" });
+    });
+    await user.click(await screen.findByRole("tab", { name: "Игорь Савчук" }));
+
+    expect(rowOf(FIRST_TITLE)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: LAST_SHORT })).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: OPEN_FILTER }));
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: FIRST_TITLE })).toBeNull()
+    );
+    expect(rowOf(LAST_TITLE)).toBeTruthy();
+  });
+
+  it("«Найти термин»: a client's phrase, opened at it", async () => {
+    const user = userEvent.setup();
+    open({ project: PROJECT });
+    await screen.findByRole("region", { name: "Ноябрь" });
+
+    await user.type(
+      screen.getByRole("searchbox", { name: "Поиск по звонкам" }),
+      "бронь"
+    );
+
+    const result = await screen.findByRole("link", {
+      name: BRON_META,
+    });
+    expect(result.getAttribute("href")).toBe(
+      routes.callTranscript(
+        LAST,
+        momentParam({
+          recordingId: LAST_RECORDING,
+          segmentId: "s-bron",
+          startMs: 1_260_000,
+        })
+      )
+    );
+    expect(
+      within(result).getByText("бронь", { selector: "mark" })
+    ).toBeTruthy();
+    expect(screen.getByText("1 звонок, 2 совпадения")).toBeTruthy();
+    // One search once typing paused, in the calls of this project.
+    expect(searches()).toEqual([{ projectId: PROJECT, query: "бронь" }]);
+
+    // «Все проекты» widens it; the results stay while Rust searches.
+    await user.click(screen.getByRole("tab", { name: ALL_PROJECTS }));
+    expect(screen.getByRole("link", { name: BRON_META })).toBeTruthy();
+    await waitFor(() =>
+      expect(searches().at(-1)).toEqual({ projectId: null, query: "бронь" })
+    );
+    expect(searches()).toHaveLength(2);
+  });
+
+  it("«Новый проект»: the brief and the people done, no documents", async () => {
+    open({ project: NEW_PROJECT });
+
+    const readiness = await screen.findByRole("list", {
+      name: "Готовность проекта",
+    });
+    expect(
+      screen.getByRole("heading", { name: "Звонков пока не было" })
+    ).toBeTruthy();
+    const rows = within(readiness).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Бриф проекта собран3 ноября",
+      "Документы не добавленыДобавить",
+      "Люди клиента добавлены1 человек",
+    ]);
+  });
+});

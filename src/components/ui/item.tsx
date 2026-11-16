@@ -16,8 +16,10 @@ import { Separator } from "@/components/ui/separator"
  * - default: 12px radius, gray on hover. Selected adds the gray fill and a
  *   2px black bar on the left (`selected`). Render it as a link or button with
  *   `render` when the whole row is clickable.
- * - divided: hairline under each row, no hover (integrations, checks). Drop
- *   the line on the last row with `border-b-0`.
+ * - divided: hairline under each row, no hover, for dense lists. Drop the
+ *   line on the last row with `border-b-0`.
+ * - plain: no line, no hover, no vertical padding: the list spaces the rows
+ *   with its gap (integrations, documents, people).
  * Inside a gray row, gray parts (tiles, avatars) turn white.
  */
 const itemVariants = cva(
@@ -28,6 +30,7 @@ const itemVariants = cva(
         default:
           "rounded-sm py-3 hover:bg-muted focus-visible:focus-ring data-selected:bg-muted data-selected:before:absolute data-selected:before:inset-y-3 data-selected:before:left-0 data-selected:before:w-0.5 data-selected:before:rounded-full data-selected:before:bg-foreground",
         divided: "border-b border-border py-3.5",
+        plain: "",
       },
     },
     defaultVariants: {

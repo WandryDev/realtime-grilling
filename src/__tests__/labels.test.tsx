@@ -75,6 +75,58 @@ describe("RecordingIndicator", () => {
     ).toBeDefined();
     expect(screen.getByText("пауза")).toBeDefined();
   });
+
+  it("draws the levels of both channels, hidden from screen readers", () => {
+    const { container } = render(
+      <RecordingIndicator level={{ me: 0.5, others: 0 }} time="24:18" />
+    );
+
+    const meter = container.querySelector(
+      '[data-slot="recording-indicator-level"]'
+    );
+    expect(meter?.getAttribute("aria-hidden")).toBe("true");
+    const fills = [
+      ...container.querySelectorAll(
+        '[data-slot="recording-indicator-level-bar"] > span'
+      ),
+    ].map((fill) => (fill as HTMLElement).style.height);
+    // Half of 12px for "Я", the 2px stub for silent "Остальные".
+    expect(fills).toEqual(["6px", "2px"]);
+    expect(
+      screen.getByRole("timer", { name: "Идёт запись, 24:18" })
+    ).toBeDefined();
+  });
+
+  it("draws no levels without them or while paused", () => {
+    const { container } = render(
+      <>
+        <RecordingIndicator time="24:18" />
+        <RecordingIndicator level={{ me: 1, others: 1 }} paused time="1:00" />
+      </>
+    );
+
+    expect(
+      container.querySelector('[data-slot="recording-indicator-level"]')
+    ).toBeNull();
+  });
+
+  it("names a channel's trouble for screen readers", () => {
+    const { container } = render(
+      <RecordingIndicator
+        time="24:18"
+        warning="Нет доступа к звуку собеседников"
+      />
+    );
+
+    expect(
+      screen.getByRole("timer", {
+        name: "Идёт запись, 24:18. Нет доступа к звуку собеседников",
+      })
+    ).toBeDefined();
+    expect(
+      container.querySelector('[data-slot="recording-indicator-warning"]')
+    ).not.toBeNull();
+  });
 });
 
 describe("AgentStatus", () => {

@@ -1,0 +1,42 @@
+{
+  "title": "SlowLoopReply",
+  "description": "Findings in the candidate chunks of the project's sources that help the conversation now, and queries for the next search. Empty lists are a valid reply.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "queries"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidate", "quote", "note"],
+        "properties": {
+          "candidate": {
+            "description": "The candidate's id: C1…Cn.",
+            "type": "string"
+          },
+          "quote": {
+            "description": "Verbatim from the candidate's text, 3–25 words.",
+            "type": "string"
+          },
+          "note": {
+            "description": "One line, up to 140 characters: «Подтверждает / Дополняет / Противоречит: …».",
+            "type": "string"
+          },
+          "questionId": {
+            "description": "The open question it is about, if any.",
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "queries": {
+      "description": "Up to 3 queries for the next search, each up to 8 words: terms and names from the conversation.",
+      "type": "array",
+      "maxItems": 3,
+      "items": { "type": "string" }
+    }
+  }
+}

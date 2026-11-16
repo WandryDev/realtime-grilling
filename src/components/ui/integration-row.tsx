@@ -13,7 +13,8 @@ import { Spinner } from "@/components/ui/spinner"
 
 /*
  * Paper "08 Строки списков", "Интеграция": logo tile, name and description,
- * a 180px status column and a 150px action column, hairline between rows.
+ * a 180px status column and a 150px action column. A hairline between rows
+ * by default; `variant="plain"` drops it for lists spaced by their gap.
  * - connected: green dot, "подключено"; action "Настроить" (ghost)
  * - disconnected: no mark, "не подключено"; action "Подключить" (secondary)
  * - connecting: spinner, "жду подтверждения"; the description carries the
@@ -73,6 +74,8 @@ type IntegrationRowProps = Omit<React.ComponentProps<"div">, "title"> & {
   statusLabel?: React.ReactNode
   /** Button for the 150px action column. */
   action?: React.ReactNode
+  /** "divided" (default): hairline under the row; "plain": none. */
+  variant?: "divided" | "plain"
 }
 
 function IntegrationRow({
@@ -83,11 +86,12 @@ function IntegrationRow({
   description,
   statusLabel,
   action,
+  variant = "divided",
   ...props
 }: IntegrationRowProps) {
   return (
     <Item
-      variant="divided"
+      variant={variant}
       data-status={status}
       className={className}
       {...props}

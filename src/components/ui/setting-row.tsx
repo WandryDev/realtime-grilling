@@ -5,8 +5,8 @@ import { cn } from "cn"
 
 /*
  * Paper "03 Выбор", "В контексте настроек": title and description on the
- * left, the control on the right, rows separated by a hairline. The row is a
- * group labelled by its title and described by its description.
+ * left, the control on the right. Rows are grouped by space, no lines. The
+ * row is a group labelled by its title and described by its description.
  */
 const SettingRowContext = React.createContext<{
   titleId: string
@@ -21,12 +21,12 @@ function useSettingRowIds() {
   return context
 }
 
-/** Stack of rows. Only the last row has no divider. */
+/** Stack of rows, 28px apart. */
 function SettingList({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="setting-list"
-      className={cn("flex flex-col", className)}
+      className={cn("flex flex-col gap-7", className)}
       {...props}
     />
   )
@@ -47,7 +47,7 @@ function SettingRow({ className, ...props }: React.ComponentProps<"div">) {
         aria-describedby={ids.descriptionId}
         data-slot="setting-row"
         className={cn(
-          "flex items-center gap-4 border-b border-border py-3.5 last:border-b-0",
+          "flex items-center gap-4",
           className
         )}
         {...props}

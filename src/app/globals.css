@@ -45,9 +45,11 @@
 
 /*
  * Grill design system, Paper file "Grill — Call Assistant", page "Design System".
- * Ink on paper, one orange accent. Light only.
+ * Ink on paper, one orange accent. Light by default, with a dark theme
+ * (`.dark` on <html>, set by next-themes from the «Тема» setting).
  *
- * Raw values live in :root, Tailwind reads them through @theme inline.
+ * Raw values live in :root (light) and .dark, Tailwind reads them through
+ * @theme inline.
  * shadcn names (background, foreground, muted, …) point at the same values,
  * so shadcn components and design tokens stay in sync.
  */
@@ -113,6 +115,10 @@
   --color-destructive-active: var(--destructive-active);
   --color-toggle-hover: var(--toggle-hover);
   --color-traffic-light: var(--traffic-light);
+  /* Backdrop under dialogs and in-panel overlays */
+  --color-scrim: var(--scrim);
+  /* Hairline around a floating card where its shadow can't be drawn */
+  --color-edge: var(--edge);
 
   /* Radius by role */
   --radius-xs: 8px; /* logo tiles, code blocks, tooltip */
@@ -122,11 +128,11 @@
   --radius-lg: 26px; /* windows, floating panels, dialogs, main question */
   --radius-xl: 26px;
 
-  /* Depth: four levels, no other shadows */
-  --shadow-touch: 0 1px 2px rgb(17 17 17 / 5%);
-  --shadow-card-sm: 0 1px 2px rgb(17 17 17 / 4%), 0 4px 14px rgb(17 17 17 / 4%);
-  --shadow-card: 0 1px 2px rgb(17 17 17 / 4%), 0 8px 24px rgb(17 17 17 / 5%);
-  --shadow-float: 0 0 0 1px rgb(17 17 17 / 6%), 0 12px 40px rgb(17 17 17 / 10%);
+  /* Depth: four levels, no other shadows. Values per theme in :root/.dark */
+  --shadow-touch: var(--depth-touch);
+  --shadow-card-sm: var(--depth-card-sm);
+  --shadow-card: var(--depth-card);
+  --shadow-float: var(--depth-float);
 }
 
 @theme {
@@ -151,6 +157,14 @@
   --container-widget: 320px;
   --container-overlay: 380px;
   --container-content: 720px;
+
+  /*
+   * Motion curves (`ease-enter`, `ease-exit`). Enter is ease-out-quint, the
+   * message scroller's: a fast start reads as an instant response. Exit is
+   * a plain ease-in, paired with shorter durations.
+   */
+  --ease-enter: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 :root {
@@ -182,6 +196,14 @@
   --destructive-active: #a42222;
   --toggle-hover: #bdbdba;
   --traffic-light: #dcdcda;
+  --scrim: rgb(17 17 17 / 16%);
+  --edge: rgb(17 17 17 / 8%);
+  --field-halo: rgb(17 17 17 / 6%);
+
+  --depth-touch: 0 1px 2px rgb(17 17 17 / 5%);
+  --depth-card-sm: 0 1px 2px rgb(17 17 17 / 4%), 0 4px 14px rgb(17 17 17 / 4%);
+  --depth-card: 0 1px 2px rgb(17 17 17 / 4%), 0 8px 24px rgb(17 17 17 / 5%);
+  --depth-float: 0 0 0 1px rgb(17 17 17 / 6%), 0 12px 40px rgb(17 17 17 / 10%);
 
   /* shadcn names mapped onto Paper tokens */
   --background: var(--bg);
@@ -219,6 +241,58 @@
   --sidebar-ring: var(--ring);
 }
 
+/*
+ * Dark theme: the same product at night, not an inversion. Warm near-black
+ * (hue of the light grays), surfaces get lighter as they rise: the window
+ * (surface) < the panel and cards (bg) < popovers and floating cards.
+ * Shadows don't read on black, so depth is a faint light hairline instead;
+ * floating cards keep a dark drop shadow for the real desktop. Ink turns
+ * into light: primary buttons are light with dark text. The orange stays,
+ * a touch softer; status colors are lifted to read as text on dark.
+ */
+.dark {
+  --bg: #1c1b19;
+  --surface: #131211;
+  --border-hairline: #2f2d2a;
+  --border-strong: #45423e;
+  --text: #edebe7;
+  --text-muted: #a6a39d;
+  --text-subtle: #8a8781;
+  --on-ink: #161514;
+  --accent: #ec8a3a;
+  --accent-foreground: #161514;
+  --accent-soft: #33241a;
+  --accent-ink: #f4ab6e;
+  --confirmed: #5bbb8b;
+  --confirmed-soft: #19291f;
+  --assumption: #82a8e0;
+  --assumption-soft: #1b2433;
+  --contradiction: #ef6e66;
+  --contradiction-soft: #36201e;
+  --empty: #8a8781;
+  --recording: #f0604b;
+
+  --ink-hover: #d4d1cc;
+  --ink-active: #ffffff;
+  --destructive-hover: #e35f57;
+  --destructive-active: #d5544c;
+  --toggle-hover: #57534e;
+  --traffic-light: #3b3936;
+  --scrim: rgb(0 0 0 / 55%);
+  --edge: rgb(255 255 255 / 10%);
+  --field-halo: rgb(255 255 255 / 8%);
+
+  --depth-touch: inset 0 0 0 1px rgb(255 255 255 / 5%);
+  --depth-card-sm: inset 0 0 0 1px rgb(255 255 255 / 5%);
+  --depth-card: inset 0 0 0 1px rgb(255 255 255 / 6%);
+  --depth-float: 0 0 0 1px rgb(255 255 255 / 9%), 0 16px 48px rgb(0 0 0 / 45%);
+
+  /* Raised, not recessed: a secondary button sits above the panel */
+  --secondary: #2a2826;
+  --popover: #252321;
+  --ring: #8f8b85;
+}
+
 /* Buttons, checkboxes, navigation: 2px gap and 2px neutral ring */
 @utility focus-ring {
   outline: none;
@@ -231,7 +305,7 @@
 @utility field-focus {
   outline: none;
   border-color: var(--color-foreground);
-  box-shadow: 0 0 0 3px rgb(17 17 17 / 6%);
+  box-shadow: 0 0 0 3px var(--field-halo);
 }
 
 @layer base {
@@ -244,5 +318,32 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Widget and overlay: transparent windows, only the card is drawn. */
+  :root:has([data-window="floating"]),
+  :root:has([data-window="floating"]) body {
+    background: transparent;
+  }
+}
+
+/*
+ * «Уменьшить движение»: tw-animate entrances and exits (dialogs, menus,
+ * questions and findings of the call) keep their fade and lose their travel,
+ * scale and blur. Unlayered, so it wins over every utility.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-enter-scale: 1;
+    --tw-enter-rotate: 0;
+    --tw-enter-blur: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+    --tw-exit-scale: 1;
+    --tw-exit-rotate: 0;
+    --tw-exit-blur: 0;
   }
 }

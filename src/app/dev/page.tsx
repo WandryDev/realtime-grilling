@@ -58,6 +58,12 @@ export default function DevPage() {
               </a>
             ))}
           </nav>
+          <a
+            className="bg-primary text-primary-foreground hover:bg-ink-hover focus-visible:focus-ring ml-auto shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors"
+            href="/dev/screens"
+          >
+            Экраны
+          </a>
         </div>
       </header>
       <main className="mx-auto max-w-[1440px] px-16 py-16">

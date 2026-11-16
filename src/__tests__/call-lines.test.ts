@@ -1,0 +1,118 @@
+import { describe, expect, it } from "vitest";
+
+import type { CallRecord } from "@/data/calls";
+import {
+  callLineOf,
+  callsSummaryOf,
+  callWhen,
+} from "@/features/projects/call-lines";
+import { routes } from "@/lib/routes";
+
+/* The call rows of home and the project page: when, and the line under «Звонки». */
+
+const NOW = new Date(2026, 10, 6, 15, 0).getTime();
+
+function record(startedAt: number, openCount = 0): CallRecord {
+  const start = new Date(startedAt);
+  return {
+    date: `${start.getDate()} ноя`,
+    dateLabel: "",
+    day: "",
+    duration: "10:00",
+    endedAt: startedAt + 600_000,
+    id: String(startedAt),
+    month: "Ноябрь",
+    openCount,
+    participantIds: [],
+    participants: "",
+    projectId: "p",
+    startedAt,
+    time: "12:00",
+    title: "",
+  };
+}
+
+describe("callWhen", () => {
+  it("names today and yesterday, the date otherwise, the year of another year", () => {
+    expect(callWhen(record(new Date(2026, 10, 6, 0, 5).getTime()), NOW)).toBe(
+      "сегодня 12:00"
+    );
+    expect(callWhen(record(new Date(2026, 10, 5, 23, 0).getTime()), NOW)).toBe(
+      "вчера 12:00"
+    );
+    expect(callWhen(record(new Date(2026, 10, 4, 12, 0).getTime()), NOW)).toBe(
+      "4 ноя 12:00"
+    );
+    expect(callWhen(record(new Date(2025, 10, 4, 12, 0).getTime()), NOW)).toBe(
+      "4 ноя 2025"
+    );
+  });
+});
+
+describe("callsSummaryOf", () => {
+  it("counts the calls and their open questions", () => {
+    expect(callsSummaryOf([], 3)).toEqual({ hidden: 0, summary: "пока пусто" });
+    expect(callsSummaryOf([{ call: record(NOW) }], 3)).toEqual({
+      hidden: 0,
+      summary: "1 звонок",
+    });
+    const eleven = Array.from({ length: 11 }, (_, index) => ({
+      call: record(NOW - index, 1),
+    }));
+    expect(callsSummaryOf(eleven, 3)).toEqual({
+      hidden: 8,
+      summary: "11 звонков, 11 открытых вопросов",
+    });
+  });
+});
+
+describe("callLineOf", () => {
+  const overview = (pendingProposals: number, openQuestions: number) => ({
+    audioDeleted: false,
+    callId: "c",
+    openQuestions,
+    pendingProposals,
+    projectId: "p",
+    title: "",
+  });
+
+  it("agrees the verb with the count", () => {
+    const call = record(NOW);
+    expect(
+      callLineOf({ call, overview: overview(1, 0) }, "П").status.label
+    ).toBe("1 предложение ждёт");
+    expect(
+      callLineOf({ call, overview: overview(21, 0) }, "П").status.label
+    ).toBe("21 предложение ждёт");
+    expect(
+      callLineOf({ call, overview: overview(0, 21) }, "П").status.label
+    ).toBe("21 вопрос открыт");
+    expect(
+      callLineOf({ call, overview: overview(0, 11) }, "П").status.label
+    ).toBe("11 вопросов открыты");
+  });
+
+  it("counts the record's open questions before the overview is read", () => {
+    expect(callLineOf({ call: record(NOW, 2) }, "П").status.label).toBe(
+      "2 вопроса открыты"
+    );
+  });
+
+  it("sends a live call to its screen, never to the review", () => {
+    const line = callLineOf(
+      { call: { ...record(NOW), endedAt: null }, overview: overview(2, 0) },
+      "П"
+    );
+    expect(line.status.label).toBe("идёт");
+    expect(line.highlighted).toBe(false);
+    expect(line.href).toBe(routes.call());
+  });
+
+  it("names an untitled call after the project, «Без названия» beside it", () => {
+    const call = record(NOW);
+    expect(callLineOf({ call }, "Обменник").topic).toBe("Обменник");
+    const home = callLineOf({ call }, "Обменник", { withProject: true });
+    expect(home.project).toBe("Обменник");
+    expect(home.topic).toBe("Без названия");
+  });
+});

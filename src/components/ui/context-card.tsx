@@ -2,7 +2,7 @@ import * as React from "react"
 import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
-import { ArrowRightIcon, ArrowUpRightIcon } from "lucide-react"
+import { ArrowRightIcon, ArrowUpRightIcon, FileTextIcon } from "lucide-react"
 import { cn } from "cn"
 
 import {
@@ -63,10 +63,26 @@ function ContextCardHeader({
   )
 }
 
+/** A file of the project: a line mark in muted ink next to the brand marks. */
+function FileSourceIcon({
+  className,
+  ...props
+}: React.ComponentProps<typeof FileTextIcon>) {
+  return (
+    <FileTextIcon
+      aria-hidden
+      strokeWidth={1.75}
+      className={cn("text-muted-foreground", className)}
+      {...props}
+    />
+  )
+}
+
 const SOURCE_ICONS = {
   github: GitHubIcon,
   outline: OutlineIcon,
   clickup: ClickUpIcon,
+  file: FileSourceIcon,
 } as const
 
 type ContextSource = keyof typeof SOURCE_ICONS
@@ -588,5 +604,6 @@ export {
   ContextColumnHeader,
   ContextColumnTitle,
   contextCardSourceVariants,
+  FileSourceIcon,
 }
 export type { ContextSource }

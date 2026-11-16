@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "post-call",
+  "description": "Main window only (not onboarding): a finished call's records. Its summary built again and stopped (summary_build, summary_cancel); its proposals and their review (proposals_list, proposals_for_person, proposal_decide, proposal_undo); its task cards (call_cards, call_card_update); its recordings with the transcript and its questions with their moments (call_transcript, call_questions); the search over the calls and the history's rows (calls_search, calls_overview); and its audio: the waveform (recording_peaks; the files play through the grill-audio scheme, main window only) and «Удалить запись» (call_audio_delete).",
+  "windows": ["main"],
+  "permissions": [
+    "allow-summary-build",
+    "allow-summary-cancel",
+    "allow-proposals-list",
+    "allow-proposals-for-person",
+    "allow-proposal-decide",
+    "allow-proposal-undo",
+    "allow-call-cards",
+    "allow-call-card-update",
+    "allow-call-transcript",
+    "allow-call-questions",
+    "allow-calls-search",
+    "allow-calls-overview",
+    "allow-recording-peaks",
+    "allow-call-audio-delete"
+  ]
+}

@@ -1,10 +1,19 @@
+import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/toast";
+import { AppFrame } from "@/features/shell/app-frame";
 import { cn } from "@/lib/utils";
 
+export const metadata: Metadata = {
+  title: "Grill",
+};
+
+// Optical size axis: Paper sets Inter with opsz, large headings are tighter.
 const inter = Inter({
+  axes: ["opsz"],
   subsets: ["latin", "cyrillic"],
   variable: "--font-inter",
 });
@@ -31,7 +40,12 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          {/* Toasts from anywhere: `toast.add(…)` from @/components/ui/toast */}
+          <Toaster>
+            <AppFrame>{children}</AppFrame>
+          </Toaster>
+        </ThemeProvider>
       </body>
     </html>
   );

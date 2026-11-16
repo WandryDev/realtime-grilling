@@ -24,6 +24,7 @@ bun run check         # ultracite check
 bun run fix           # ultracite fix
 bun run typecheck
 bun run test          # vitest (bun run test:watch — в watch-режиме)
+bun run e2e           # Playwright по static export (один раз: bun run e2e:install)
 bun run changeset     # описать изменение для следующего релиза
 
 # Rust (из src-tauri/)
@@ -32,7 +33,40 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Компоненты shadcn: `bunx --bun shadcn@latest add <component>`.
+Компоненты shadcn. Файлы в `src/components/ui` — наш код: их перестилизовали под дизайн Grill, обновлять из registry их нельзя.
+
+- Сначала посмотрите, что изменится: `bunx --bun shadcn@latest add <component> --dry-run` (или `--diff`). Существующий файл, который отличается от registry, dry-run помечает `~ overwrite`. Это то, что *изменилось бы*, а не то, что сделает `add` без `-o`.
+- `add` без `-o` не перезаписывает существующий файл: спрашивает «overwrite?» (по умолчанию «нет»). Отвечайте «нет»; нужные правки из `--diff` переносите руками.
+- Никогда не запускайте `add` с `-o` / `--overwrite` и `--all`.
+- Если файл всё-таки затёрт, верните его через git: `git restore src/components/ui/<file>`.
+
+## Микрофон, системный звук и подпись для разработки (macOS)
+
+macOS (TCC) запоминает доступ к микрофону и к записи системного звука по подписи приложения. Ad-hoc подпись (`signingIdentity: "-"`) меняется с каждой сборкой, поэтому после пересборки macOS спрашивает доступ заново. В `bun run tauri dev` бинарь запускается без бандла, и доступ достаётся терминалу или IDE, а не Grill. Проверять шаг «Разрешения» нужно на бандле со стабильной подписью.
+
+Один раз создайте самоподписанный сертификат «Grill Dev»:
+
+1. «Связка ключей» → меню «Связка ключей» → «Ассистент сертификации» → «Создать сертификат…».
+2. Имя — `Grill Dev`, тип идентификации — «Самоподписанный корневой», тип сертификата — «Подпись кода». «Создать».
+3. Проверка: `security find-identity -p codesigning` показывает `"Grill Dev"`.
+
+Сборка и запуск с этой подписью:
+
+```bash
+bun run tauri build --debug --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Grill Dev"}}}'
+open src-tauri/target/debug/bundle/macos/realtime-grilling.app
+```
+
+Подпись одна и та же между сборками, и выданный доступ сохраняется. Начать с чистого листа (снова увидеть системные запросы):
+
+```bash
+tccutil reset Microphone com.dev-wandry.realtime-grilling
+tccutil reset AudioCapture com.dev-wandry.realtime-grilling
+```
+
+Тексты запросов лежат в `src-tauri/Info.plist`, entitlement микрофона — в `src-tauri/Entitlements.plist`. Запись системного звука требует macOS 14.2 или новее (`minimumSystemVersion` в `tauri.macos.conf.json`).
+
+Windows: доступ к микрофону читается из параметров конфиденциальности, системный звук разрешения не требует. Этот путь пока только компилируется и не проверен на реальной машине.
 
 ## OpenSpec
 
@@ -50,6 +84,7 @@ CLI: `bunx openspec list`, `bunx openspec validate`, `bunx openspec view`. Ко�
 ## CI и релизы
 
 - **CI** (`.github/workflows/ci.yml`, на PR; для `main` вызывается из release.yml): Ultracite, typecheck, Vitest, `next build`; `cargo fmt --check`; `clippy -D warnings` и `cargo test` на macOS и Windows.
+- **E2E** (джоба `E2E` в том же CI, пока не обязательная в ruleset): Playwright собирает static export, отдаёт `out/` через `scripts/serve-out.ts` и проходит сценарии из `e2e/` в Chromium (как WebView2) и WebKit (как WKWebView), в браузерном mock-режиме. При падении отчёт лежит в артефакте `playwright-report`. Локально: `bun run e2e:install` один раз, затем `bun run e2e` (`E2E_SKIP_BUILD=1` берёт готовый `out/`).
 - **Release** (`.github/workflows/release.yml`, на push в `main`):
   1. В PR с пользовательским изменением добавляем changeset (`bun run changeset`).
   2. После мержа в `main` бот открывает/обновляет PR «chore: release» с поднятой версией и `CHANGELOG.md`.

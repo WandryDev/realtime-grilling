@@ -30,3 +30,24 @@ pnpm-debug.log*
 *.suo
 *.sw?
 *.pem
+
+# spikes: build output, downloaded models, generated audio and raw run logs
+spikes/**/target/
+spikes/**/models/
+spikes/**/data/
+spikes/**/runs/
+spikes/**/.venv/
+spikes/**/__pycache__/
+
+# grill-eval: corpora, imported audio and replay reports hold clients' calls
+.grill-eval/
+
+# playwright
+test-results/
+playwright-report/
+blob-report/
+
+# oh-my-claudecode state created in subdirectories
+src-tauri/**/.omc/
+src/**/.omc/
+**/.omc/
