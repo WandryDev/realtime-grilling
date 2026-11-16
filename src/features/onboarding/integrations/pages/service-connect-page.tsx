@@ -18,7 +18,7 @@ import {
 /*
  * /onboarding/integrations/[service] — steps 05a–05c. `?from=done` returns
  * to the summary instead of the list. Each flow is keyed by its demo state
- * so jumping between states in the dev navigator starts it fresh.
+ * so jumping between `?demo=` states starts it fresh.
  */
 export function ServiceConnectPage({
   service,

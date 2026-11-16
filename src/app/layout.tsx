@@ -4,7 +4,6 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/toast";
-import { DevNavigator } from "@/features/dev/dev-navigator";
 import { AppFrame } from "@/features/shell/app-frame";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +45,6 @@ export default function RootLayout({
           <Toaster>
             <AppFrame>{children}</AppFrame>
           </Toaster>
-          {process.env.NODE_ENV === "production" ? null : <DevNavigator />}
         </ThemeProvider>
       </body>
     </html>

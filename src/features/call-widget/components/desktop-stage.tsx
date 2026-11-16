@@ -23,7 +23,7 @@ function formatMenuBarClock(seconds: number) {
 /*
  * The root of the floating windows, /widget and /overlay. It is marked
  * `data-window="floating"`: the page background turns transparent
- * (globals.css) and the dev navigator stays out.
+ * (globals.css).
  *
  * In the browser it draws a stand-in for the user's desktop: the Paper
  * desktop scene filling the viewport with a live menu bar clock. In Tauri

@@ -98,7 +98,7 @@ import type {
  * call of Телемедиа.
  */
 
-/** States the dev navigator can force with `?demo=`. */
+/** States `?demo=` can force (the /dev screens use it). */
 export const CALL_DEMO_STATES = [
   "starting",
   "reference",

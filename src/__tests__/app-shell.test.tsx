@@ -22,15 +22,11 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const { DevNavigator } = await import("@/features/dev/dev-navigator");
 const { OverlayPage } = await import(
   "@/features/call-widget/pages/overlay-page"
 );
 const { StartWidgetPage } = await import(
   "@/features/call-widget/pages/start-widget-page"
-);
-const { NewProjectPage } = await import(
-  "@/features/projects/pages/new-project-page"
 );
 const { MainWindow } = await import("@/features/shell/main-window");
 const { windowChromeFor } = await import("@/lib/platform");
@@ -140,36 +136,5 @@ describe("floating windows", () => {
     const root = container.querySelector('[data-window="floating"]');
     expect(root?.getAttribute("data-tauri-drag-region")).toBe("deep");
     expect(screen.queryByText("zoom.us")).toBeNull();
-  });
-});
-
-describe("DevNavigator", () => {
-  it("sits bottom left, clear of the wizard's «Далее»", () => {
-    render(
-      <>
-        <NewProjectPage />
-        <DevNavigator />
-      </>
-    );
-    expect(screen.getByRole("button", { name: "Далее" })).toBeTruthy();
-    const navigator = screen
-      .getByRole("button", { name: "Экраны" })
-      .closest("[data-slot=dev-navigator]");
-    expect(navigator?.className).toContain("left-4");
-    expect(navigator?.className).toContain("bottom-4");
-    expect(navigator?.className).not.toContain("right-4");
-  });
-
-  it.each([
-    ["/widget", StartWidgetPage],
-    ["/overlay", OverlayPage],
-  ])("is not rendered in %s", (_route, Page) => {
-    render(
-      <>
-        <Page />
-        <DevNavigator />
-      </>
-    );
-    expect(screen.queryByRole("button", { name: "Экраны" })).toBeNull();
   });
 });
