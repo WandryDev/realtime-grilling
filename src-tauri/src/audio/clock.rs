@@ -18,6 +18,7 @@ const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
 /// Mach ticks → nanoseconds with the timebase `numer / denom`, the way
 /// `cpal` converts `mHostTime` (so both land on the same nanosecond).
+#[cfg(any(target_os = "macos", test))]
 pub fn mach_ticks_to_ns(ticks: u64, numer: u32, denom: u32) -> u64 {
     if denom == 0 {
         return ticks;

@@ -34,6 +34,10 @@ pub const FLAG: &str = "--extract-text";
 pub const MEMORY_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 /// What the app reads of the child's output: the text at its cap as JSON
 /// (up to 4 bytes a character, escapes), with room for a parser's noise.
+#[cfg_attr(
+    all(test, not(unix)),
+    allow(dead_code, reason = "the app's path; its tests run a shell script")
+)]
 pub const MAX_OUTPUT_BYTES: u64 = 8 * 1024 * 1024;
 /// The child's exit code when the arguments are wrong.
 const EXIT_USAGE: i32 = 2;
@@ -41,6 +45,10 @@ const EXIT_USAGE: i32 = 2;
 #[cfg(target_os = "macos")]
 const EXIT_OUT_OF_MEMORY: i32 = 3;
 
+#[cfg_attr(
+    all(test, not(unix)),
+    allow(dead_code, reason = "the app's path; its tests run a shell script")
+)]
 const BROKEN: &str = "Не удалось прочитать файл: он повреждён или слишком сложный";
 
 /// What the child prints.
@@ -228,6 +236,10 @@ pub async fn extract(kind: FileKind, path: &Path) -> Extraction {
 
 /// `program --extract-text <path> <ext>`, without a window, in a process
 /// group (Unix) or a Job Object (Windows) of its own so a kill ends it all.
+#[cfg_attr(
+    all(test, not(unix)),
+    allow(dead_code, reason = "the app's path; its tests run a shell script")
+)]
 pub fn command(program: &Path, kind: FileKind, path: &Path) -> Command {
     let mut command = process::command(program);
     command
@@ -241,6 +253,10 @@ pub fn command(program: &Path, kind: FileKind, path: &Path) -> Command {
 /// Runs the reader `command` for at most `limit` and reads its [`Reply`]:
 /// `failed` when it is killed for taking longer, prints more than
 /// [`MAX_OUTPUT_BYTES`], dies (its memory limit) or prints no reply.
+#[cfg_attr(
+    all(test, not(unix)),
+    allow(dead_code, reason = "the app's path; its tests run a shell script")
+)]
 pub async fn run(mut command: Command, limit: Duration) -> Extraction {
     let (mut child, tree) = match process::spawn(&mut command) {
         Ok(spawned) => spawned,

@@ -1,0 +1,3 @@
+# LF in every checkout, Windows included: prompts and schemas are compiled in
+# with include_str!, and tests compare text and hashes of the fixtures.
+* text=auto eol=lf

@@ -309,6 +309,7 @@ impl MicWatch {
 /// What the watcher thread waits for between scans.
 enum Signal {
     /// A HAL listener fired: scan now.
+    #[cfg(target_os = "macos")]
     Wake,
     Stop,
 }
@@ -329,6 +330,7 @@ impl Worker {
     fn spawn(watch: MicWatch, run: fn(&Driver)) -> Self {
         let (signals, receiver) = mpsc::channel();
         let (done_sender, done) = mpsc::channel();
+        #[cfg(target_os = "macos")]
         let wake = signals.clone();
         let thread = std::thread::Builder::new()
             .name("grill-mic-watch".to_owned())
@@ -336,6 +338,7 @@ impl Worker {
                 run(&Driver {
                     watch,
                     signals: receiver,
+                    #[cfg(target_os = "macos")]
                     wake,
                     clock: Clock::new(),
                 });
@@ -368,6 +371,7 @@ struct Driver {
     watch: MicWatch,
     signals: Receiver<Signal>,
     /// For HAL listeners to wake the thread.
+    #[cfg(target_os = "macos")]
     wake: Sender<Signal>,
     clock: Clock,
 }
@@ -378,6 +382,7 @@ enum Woken {
     /// The next scan is due.
     Poll,
     /// A listener fired.
+    #[cfg(target_os = "macos")]
     Wake,
     Stop,
 }
@@ -399,6 +404,7 @@ impl Driver {
             });
             let timeout = until_deadline.map_or(until_scan, |until| until.min(until_scan));
             match self.signals.recv_timeout(timeout) {
+                #[cfg(target_os = "macos")]
                 Ok(Signal::Wake) => {
                     // A burst of notifications is one scan.
                     loop {

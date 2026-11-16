@@ -1,8 +1,6 @@
 //! Hand-built corpora and reports for the tests of the judge, the metrics
 //! and `compare`.
 
-use std::future::Future;
-
 use serde_json::{Value, json};
 
 use super::{
@@ -19,7 +17,9 @@ pub const MINUTE: i64 = 60_000;
 pub const ME: TranscriptChannel = TranscriptChannel::Me;
 pub const OTHERS: TranscriptChannel = TranscriptChannel::Others;
 
-/// A segment `id` of 2 s starting at `start_ms`.
+/// A segment `id` of 2 s starting at `start_ms` (for the judge's tests,
+/// which run a fake `claude` script: Unix only).
+#[cfg(unix)]
 pub fn segment(id: &str, channel: TranscriptChannel, start_ms: i64, text: &str) -> Segment {
     Segment {
         id: id.to_owned(),
@@ -182,7 +182,8 @@ pub fn report_with(
     report
 }
 
-/// `future` on a current-thread runtime.
+/// `future` on a current-thread runtime (for the fake `claude` below).
+#[cfg(unix)]
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -4,15 +4,18 @@
 //! the source tree, and a mono recording is labeled by a fake `claude`
 //! script (in the manner of `summary/fake_cli_tests.rs`).
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     collections::HashMap,
     fs,
-    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use serde_json::{Value, json};
+#[cfg(unix)]
+use serde_json::Value;
+use serde_json::json;
 
 use super::{
     decode::{Decoder, Pick},
@@ -21,7 +24,7 @@ use super::{
     *,
 };
 use crate::{
-    agent::claude_cli::{Agent, ClaudeCodeCli},
+    agent::claude_cli::Agent,
     speech::{
         recognizer::Decode,
         testing::{Script, segment},
@@ -462,6 +465,7 @@ fn a_failed_save_leaves_no_audio() {
 
 /// A mono transcript over the judge's limit can't be labeled in one call:
 /// a clear error before the call.
+#[cfg(unix)]
 #[test]
 fn a_mono_transcript_over_the_limit_fails_before_the_call() {
     let cli = FakeCli::replying(&json!({ "labels": [] }));
@@ -540,9 +544,10 @@ fn a_mono_recording_is_mixed_before_labeling() {
     );
 }
 
-/* Mono labeling against a fake `claude` */
+/* Mono labeling against a fake `claude` (a shell script: Unix only) */
 
 /// Records its arguments and stdin, then plays `events.jsonl`.
+#[cfg(unix)]
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 STATE='@STATE@'
 for arg in "$@"; do printf '%s\0' "$arg"; done > "$STATE/args"
@@ -552,6 +557,7 @@ cat "$STATE/events.jsonl"
 
 /// The CLI's output of a call that wrote `output` through
 /// `StructuredOutput`.
+#[cfg(unix)]
 fn events(output: &Value) -> String {
     [
         json!({ "type": "system", "subtype": "init", "model": "claude-sonnet-5-5" }),
@@ -567,10 +573,12 @@ fn events(output: &Value) -> String {
     .collect()
 }
 
+#[cfg(unix)]
 struct FakeCli {
     dir: tempfile::TempDir,
 }
 
+#[cfg(unix)]
 impl FakeCli {
     fn replying(output: &Value) -> Self {
         let dir = tempfile::tempdir().unwrap();
@@ -584,7 +592,10 @@ impl FakeCli {
         let body = FAKE_CLAUDE.replace("@STATE@", &self.dir.path().display().to_string());
         fs::write(&cli, body).unwrap();
         fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
-        Arc::new(ClaudeCodeCli::new(cli, self.dir.path().join("work")))
+        Arc::new(crate::agent::claude_cli::ClaudeCodeCli::new(
+            cli,
+            self.dir.path().join("work"),
+        ))
     }
 
     fn read(&self, name: &str) -> String {
@@ -610,6 +621,7 @@ fn phone(setup: &Setup) -> (Options, FakeDecoder) {
 
 /// «Моно-запись телефона»: every phrase is «Я» or «Остальные» by one call
 /// with the schema, and the corpus is split approximately.
+#[cfg(unix)]
 #[test]
 fn a_mono_phone_recording_is_labeled_by_its_text() {
     let setup = Setup::new();
@@ -667,6 +679,7 @@ fn a_mono_phone_recording_is_labeled_by_its_text() {
 
 /// A reply off the schema, or one that misses a phrase, fails the import:
 /// no corpus, no audio.
+#[cfg(unix)]
 #[test]
 fn a_labeling_reply_off_the_schema_fails_the_import() {
     for reply in [
