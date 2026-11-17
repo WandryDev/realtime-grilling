@@ -12,6 +12,7 @@
     "e2e:install": "playwright install chromium webkit",
     "eval": "cargo run -q --release --manifest-path src-tauri/Cargo.toml --example grill-eval --features eval --",
     "fix": "ultracite fix",
+    "icons": "tauri icon src-tauri/app-icon.svg && rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/64x64.png",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",

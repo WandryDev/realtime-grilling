@@ -32,17 +32,6 @@ function Icon({
   );
 }
 
-/** Speech bubble with a question mark: the Grill app icon, 28px. */
-export function GrillMarkIcon(props: IconProps) {
-  return (
-    <Icon strokeWidth={1.6} viewBox="0 0 28 28" {...props}>
-      <path d="M6 8.5C6 7.12 7.12 6 8.5 6h11C20.88 6 22 7.12 22 8.5v7c0 1.38-1.12 2.5-2.5 2.5H13l-4.5 4v-4h0C7.12 18 6 16.88 6 15.5v-7Z" />
-      <path d="M12 10.5c0-1.1.9-1.8 2-1.8s2 .7 2 1.7c0 1.2-2 1.3-2 2.6" />
-      <circle cx="14" cy="15.4" fill="currentColor" r="0.9" stroke="none" />
-    </Icon>
-  );
-}
-
 export function MicrophoneIcon(props: IconProps) {
   return (
     <Icon {...props}>
