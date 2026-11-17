@@ -141,6 +141,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # v1: see the same key in ci.yml.
+          prefix-key: v1-rust
 
       - run: bun install --frozen-lockfile
 
