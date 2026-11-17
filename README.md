@@ -26,6 +26,7 @@ bun run typecheck
 bun run test          # vitest (bun run test:watch — в watch-режиме)
 bun run e2e           # Playwright по static export (один раз: bun run e2e:install)
 bun run changeset     # описать изменение для следующего релиза
+bun run icons         # пересобрать src-tauri/icons из мастера src-tauri/app-icon.svg
 
 # Rust (из src-tauri/)
 cargo fmt
