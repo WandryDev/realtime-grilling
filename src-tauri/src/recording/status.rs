@@ -1,7 +1,10 @@
 //! What the windows learn about the recording (audio-capture design.md,
 //! decision 14; `specs/call-recording`, "Состояние и уровни записи").
 
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU32, Ordering},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -120,23 +123,61 @@ pub const SILENT_LEVEL: f32 = 0.02;
 pub struct SilenceWatch {
     after: Duration,
     since: Option<Duration>,
+    suspicious: bool,
 }
 
 impl SilenceWatch {
     pub const fn new(after: Duration) -> Self {
-        Self { after, since: None }
+        Self {
+            after,
+            since: None,
+            suspicious: false,
+        }
     }
 
     /// One look at `now` (any monotonic time): whether something plays and
-    /// the loudest level since the last look. Returns whether the silence
-    /// is suspicious.
-    pub fn observe(&mut self, now: Duration, playing: bool, peak: f32) -> bool {
-        if !playing || peak > SILENT_LEVEL {
+    /// the loudest level since the last look, `None` when the recorder
+    /// reported no level in between. A recorder that runs late has not
+    /// heard silence, so such a look keeps the verdict as it was. Returns
+    /// whether the silence is suspicious.
+    pub fn observe(&mut self, now: Duration, playing: bool, peak: Option<f32>) -> bool {
+        let silent = match peak {
+            _ if !playing => false,
+            Some(peak) => peak <= SILENT_LEVEL,
+            None => return self.suspicious,
+        };
+        if silent {
+            let since = *self.since.get_or_insert(now);
+            self.suspicious = now.saturating_sub(since) >= self.after;
+        } else {
             self.since = None;
-            return false;
+            self.suspicious = false;
         }
-        let since = *self.since.get_or_insert(now);
-        now.saturating_sub(since) >= self.after
+        self.suspicious
+    }
+}
+
+/// The loudest level of "Остальные" the recorder reported since the
+/// supervisor last looked, for [`SilenceWatch`]; nothing when it reported
+/// none.
+#[derive(Debug, Default)]
+pub struct PeakLevel(AtomicU32);
+
+impl PeakLevel {
+    /// One level from the recorder.
+    pub fn report(&self, level: f32) {
+        // Levels are ≥ 0, where the bits of an f32 order as its value; one
+        // more leaves zero for "no level".
+        self.0
+            .fetch_max(level.to_bits().saturating_add(1), Ordering::Relaxed);
+    }
+
+    /// The loudest level since the last look, if the recorder reported any.
+    pub fn take(&self) -> Option<f32> {
+        self.0
+            .swap(0, Ordering::Relaxed)
+            .checked_sub(1)
+            .map(f32::from_bits)
     }
 }
 
@@ -218,21 +259,63 @@ mod tests {
     fn silence_while_playing_is_suspicious_after_a_while() {
         let second = Duration::from_secs(1);
         let mut watch = SilenceWatch::new(3 * second);
-        assert!(!watch.observe(Duration::ZERO, true, 0.0));
-        assert!(!watch.observe(2 * second, true, 0.01));
-        assert!(watch.observe(3 * second, true, 0.0));
-        assert!(watch.observe(4 * second, true, 0.0), "stays");
+        assert!(!watch.observe(Duration::ZERO, true, Some(0.0)));
+        assert!(!watch.observe(2 * second, true, Some(0.01)));
+        assert!(watch.observe(3 * second, true, Some(0.0)));
+        assert!(watch.observe(4 * second, true, Some(0.0)), "stays");
 
         // Sound starts over.
-        assert!(!watch.observe(5 * second, true, 0.3));
-        assert!(!watch.observe(7 * second, true, 0.0));
-        assert!(watch.observe(10 * second, true, 0.0));
+        assert!(!watch.observe(5 * second, true, Some(0.3)));
+        assert!(!watch.observe(7 * second, true, Some(0.0)));
+        assert!(watch.observe(10 * second, true, Some(0.0)));
 
         // Nothing plays: silence is just silence.
-        assert!(!watch.observe(11 * second, false, 0.0));
-        assert!(!watch.observe(20 * second, false, 0.0));
-        assert!(!watch.observe(21 * second, true, 0.0));
-        assert!(!watch.observe(23 * second, true, 0.0));
-        assert!(watch.observe(24 * second, true, 0.0));
+        assert!(!watch.observe(11 * second, false, Some(0.0)));
+        assert!(!watch.observe(20 * second, false, Some(0.0)));
+        assert!(!watch.observe(21 * second, true, Some(0.0)));
+        assert!(!watch.observe(23 * second, true, Some(0.0)));
+        assert!(watch.observe(24 * second, true, Some(0.0)));
+    }
+
+    /// A recorder that runs late reports no level for a while. That is not
+    /// silence: the watch waits for the next level instead of counting the
+    /// gap (which flagged sound on a loaded machine).
+    #[test]
+    fn a_look_without_a_level_keeps_the_verdict() {
+        let second = Duration::from_secs(1);
+        let mut watch = SilenceWatch::new(3 * second);
+        assert!(!watch.observe(Duration::ZERO, true, None), "nothing yet");
+        assert!(!watch.observe(5 * second, true, None), "still nothing");
+        assert!(!watch.observe(6 * second, true, Some(0.3)));
+        assert!(!watch.observe(10 * second, true, None), "late, not silent");
+        assert!(!watch.observe(11 * second, true, Some(0.3)));
+
+        // Silence counts from the first silent level to the next one.
+        assert!(!watch.observe(12 * second, true, Some(0.0)));
+        assert!(
+            !watch.observe(16 * second, true, None),
+            "no level, no verdict"
+        );
+        assert!(watch.observe(17 * second, true, Some(0.0)));
+        assert!(watch.observe(18 * second, true, None), "stays");
+        assert!(!watch.observe(19 * second, true, Some(0.3)));
+
+        // The end of playback needs no level.
+        assert!(!watch.observe(20 * second, true, Some(0.0)));
+        assert!(watch.observe(23 * second, true, Some(0.0)));
+        assert!(!watch.observe(24 * second, false, None));
+    }
+
+    #[test]
+    fn a_peak_is_the_loudest_level_since_the_last_look() {
+        let peak = PeakLevel::default();
+        assert_eq!(peak.take(), None, "the recorder reported nothing yet");
+        peak.report(0.0);
+        assert_eq!(peak.take(), Some(0.0), "silence is a level");
+        peak.report(0.2);
+        peak.report(0.7);
+        peak.report(0.4);
+        assert_eq!(peak.take(), Some(0.7));
+        assert_eq!(peak.take(), None, "taken");
     }
 }

@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     thread::{self, JoinHandle},
@@ -35,7 +35,9 @@ use super::{
     FRAME,
     aec::Aec,
     ogg_opus::OggOpusWriter,
-    status::{ChannelState, RecordingChannels, RecordingLevels, RecordingStatus, SilenceWatch},
+    status::{
+        ChannelState, PeakLevel, RecordingChannels, RecordingLevels, RecordingStatus, SilenceWatch,
+    },
     store::{ChannelSink, RecordingStore},
     timeline::{InputBlock, Timeline, TimelineStats},
 };
@@ -363,7 +365,7 @@ impl Shared {
         let (rings, ring_handoffs) = mpsc::channel();
         let (stop_devices, stopped) = mpsc::channel::<()>();
         let finish = Arc::new(Finish::default());
-        let others_peak = Arc::new(AtomicU32::new(0));
+        let others_peak = Arc::new(PeakLevel::default());
         let aec = Aec::for_recording(system_allowed);
         if !aec.is_active() {
             eprintln!("grill: recording {id} without echo cancellation");
@@ -779,7 +781,7 @@ struct Recorder {
     rings: Receiver<(Channel, RingSource)>,
     finish: Arc<Finish>,
     /// The loudest "Остальные" level since the supervisor last looked.
-    others_peak: Arc<AtomicU32>,
+    others_peak: Arc<PeakLevel>,
     buffer: Vec<f32>,
     jump: ClockJump,
 }
@@ -859,9 +861,7 @@ impl Recorder {
             me: self.me.level.take_level(),
             others: self.others.level.take_level(),
         };
-        // Levels are ≥ 0, where the bits of an f32 order as its value.
-        self.others_peak
-            .fetch_max(levels.others.to_bits(), Ordering::Relaxed);
+        self.others_peak.report(levels.others);
         if !self.finish.quiet.load(Ordering::SeqCst) {
             self.shared.host.levels(&levels);
         }
@@ -897,7 +897,7 @@ struct Supervisor {
     others_allowed: bool,
     others_unknown: bool,
     silence: SilenceWatch,
-    others_peak: Arc<AtomicU32>,
+    others_peak: Arc<PeakLevel>,
     started: Instant,
 }
 
@@ -959,7 +959,7 @@ impl Supervisor {
         let Some(opened) = self.others.opened.as_ref() else {
             return;
         };
-        let peak = f32::from_bits(self.others_peak.swap(0, Ordering::Relaxed));
+        let peak = self.others_peak.take();
         if !self.others_unknown {
             return;
         }
