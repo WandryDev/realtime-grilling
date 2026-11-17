@@ -874,7 +874,10 @@ fn sound_with_unknown_access_is_fine() {
     assert!(
         fx.changes()
             .iter()
-            .all(|status| status.channels.others != ChannelState::SilentUnknownAccess)
+            .all(|status| status.channels.others != ChannelState::SilentUnknownAccess),
+        "{:?}\nlevels: {:?}",
+        fx.changes(),
+        fx.seen.levels.lock().unwrap()
     );
     fx.manager.stop(&id).unwrap();
 }
