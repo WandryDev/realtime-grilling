@@ -1,0 +1,9 @@
+[env]
+# whisper.cpp tunes its build to the CPU of the machine that compiles it
+# unless told otherwise: `/arch:AVX512` on a Windows runner that has it,
+# `-mcpu=native` on a Mac. The result then dies with an illegal instruction
+# on a CPU without those instructions: a build made on an M3 on an M1, a
+# cached CI build on a runner of another model. `OFF` builds for the
+# baseline instead: AVX2 on x86_64, Apple M1 on arm64. whisper-rs-sys hands
+# `GGML_*` variables to CMake. A value set in the shell still wins.
+GGML_NATIVE = "OFF"
