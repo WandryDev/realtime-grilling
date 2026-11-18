@@ -274,7 +274,8 @@ fn status_follows_the_cli() {
         block_on(status(&cli, cwd, Duration::from_secs(10))),
         AgentState::Ready {
             version: "2.1.316".into(),
-            subscription_type: Some("max".into())
+            subscription_type: Some("max".into()),
+            email: Some("a@b.c".into())
         }
     );
     assert_eq!(
@@ -330,7 +331,8 @@ fn login_with_the_right_code_is_ready() {
         state,
         AgentState::Ready {
             version: "2.1.316".into(),
-            subscription_type: Some("max".into())
+            subscription_type: Some("max".into()),
+            email: Some("a@b.c".into())
         }
     );
 }

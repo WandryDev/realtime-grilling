@@ -557,7 +557,12 @@ describe("«Агент» in Tauri", () => {
     fake.answers.set("agent_status", () => agent);
     fake.answers.set("agent_login_start", () => "https://claude.ai/oauth");
     fake.answers.set("agent_login_submit", () => {
-      agent = { status: "ready", subscriptionType: "pro", version: "2.1.20" };
+      agent = {
+        email: null,
+        status: "ready",
+        subscriptionType: "pro",
+        version: "2.1.20",
+      };
       return agent;
     });
     const user = userEvent.setup();
@@ -606,7 +611,12 @@ describe("«Агент» in Tauri", () => {
     ).toBeTruthy();
 
     // «Проверить снова» of the section updates the row.
-    agent = { status: "ready", subscriptionType: "max", version: "2.1.20" };
+    agent = {
+      email: null,
+      status: "ready",
+      subscriptionType: "max",
+      version: "2.1.20",
+    };
     render(<AgentSection />);
     expect(
       await screen.findByRole("link", { name: CLAUDE_READY })
@@ -632,7 +642,12 @@ describe("«Агент» in Tauri", () => {
   it("checks another path and saves only a CLI that answers", async () => {
     fake.answers.set("agent_check_path", (args) =>
       String(args.path).endsWith("/claude")
-        ? { status: "ready", subscriptionType: "max", version: "2.2.0" }
+        ? {
+            email: null,
+            status: "ready",
+            subscriptionType: "max",
+            version: "2.2.0",
+          }
         : { status: "notInstalled" }
     );
     const user = userEvent.setup();

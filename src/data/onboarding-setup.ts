@@ -139,6 +139,8 @@ export interface SpeechSetup {
 }
 
 export interface AgentSetup {
+  /** The account Claude Code is logged in with, once logged in. */
+  account: string | null;
   /** What failed last, for the screen and "Скопировать для поддержки". */
   error: AgentFailure | null;
   /** The agent that thinks up questions. Only Claude Code for now. */
@@ -175,6 +177,7 @@ const NO_LOGIN = {
 const INITIAL: OnboardingSetup = {
   agent: {
     ...NO_LOGIN,
+    account: null,
     error: null,
     id: "claude-code",
     installPercent: 0,
@@ -1070,6 +1073,13 @@ function fromAccess(access: ScreenAudioAccess): PermissionState {
   return "notDetermined";
 }
 
+/** No account or plan of an earlier login stays on the screen. */
+const LOGGED_OUT = {
+  account: null,
+  error: null,
+  plan: null,
+} as const satisfies Partial<AgentSetup>;
+
 /** `subscriptionType` → "Claude Max". */
 function planName(subscription: string | null): string | null {
   if (!subscription) {
@@ -1081,11 +1091,12 @@ function planName(subscription: string | null): string | null {
 function fromAgentState(agent: BackendAgentState): Partial<AgentSetup> {
   switch (agent.status) {
     case "notInstalled":
-      return { error: null, status: "not-installed", version: null };
+      return { ...LOGGED_OUT, status: "not-installed", version: null };
     case "needsLogin":
-      return { error: null, status: "needs-login", version: agent.version };
+      return { ...LOGGED_OUT, status: "needs-login", version: agent.version };
     case "ready":
       return {
+        account: agent.email,
         error: null,
         plan: planName(agent.subscription),
         status: "ready",

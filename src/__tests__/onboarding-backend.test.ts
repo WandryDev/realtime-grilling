@@ -116,6 +116,7 @@ describe("OnboardingBackend.layerMock, the mock computer", () => {
       const submit = yield* Effect.forkChild(backend.loginSubmit("aB3dE5gH"));
       yield* TestClock.adjust(MOCK_DELAY_MS.loginSubmit);
       assert.deepStrictEqual(yield* Fiber.join(submit), {
+        email: "dima@pixel.agency",
         status: "ready",
         subscription: "max",
         version: "2.1.4",

@@ -83,6 +83,8 @@ export type AgentState =
       readonly version: string;
       /** `subscriptionType` of `claude auth status`, e.g. "max". */
       readonly subscription: string | null;
+      /** The account the CLI is logged in with; only shown, never kept. */
+      readonly email: string | null;
     }
   /** The CLI failed or hung; `message` is for the support log. */
   | { readonly status: "error"; readonly message: string };
@@ -409,6 +411,7 @@ function fromBindingsStatus(
 function fromBindingsAgent(agent: BindingsAgentState): AgentState {
   if (agent.status === "ready") {
     return {
+      email: agent.email,
       status: "ready",
       subscription: agent.subscriptionType,
       version: agent.version,
@@ -449,6 +452,7 @@ export const MOCK_LOGIN_URL =
 
 const MOCK_AGENT_VERSION = "2.1.4";
 const MOCK_SUBSCRIPTION = "max";
+const MOCK_EMAIL = "dima@pixel.agency";
 
 /** Percents from `from` up to 100, one per `tick` ms. */
 function mockDownload(from: number, tick: number, step: number) {
@@ -581,6 +585,7 @@ export const mockComputer = {
         break;
       case "ready":
         computer.agent = {
+          email: MOCK_EMAIL,
           status,
           subscription: MOCK_SUBSCRIPTION,
           version: MOCK_AGENT_VERSION,
@@ -618,6 +623,7 @@ export const mockComputer = {
       );
     }
     computer.agent = {
+      email: MOCK_EMAIL,
       status: "ready",
       subscription: MOCK_SUBSCRIPTION,
       version: MOCK_AGENT_VERSION,

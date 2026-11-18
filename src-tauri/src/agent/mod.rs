@@ -54,6 +54,10 @@ pub enum AgentState {
         /// `pro`, `max`, `team`…; `null` when the CLI doesn't say.
         #[serde(rename = "subscriptionType")]
         subscription_type: Option<String>,
+        /// The account the CLI is logged in with, for the onboarding
+        /// screen only: never stored or logged. `null` when the CLI
+        /// doesn't say (an API key login).
+        email: Option<String>,
     },
     /// The text for "Скопировать для поддержки".
     Error {
@@ -69,14 +73,16 @@ impl AgentState {
     }
 }
 
-/// What we read from `claude auth status --json`; other fields (email,
-/// organization…) are ignored and never leave this function.
+/// What we read from `claude auth status --json`; other fields
+/// (organization, config paths…) are ignored and never leave this function.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatus {
     pub logged_in: bool,
     #[serde(default)]
     pub subscription_type: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 /// `2.1.316 (Claude Code)` → `2.1.316`.
@@ -147,9 +153,11 @@ pub async fn status(cli: &Path, cwd: &Path, timeout: Duration) -> AgentState {
         Some(AuthStatus {
             logged_in: true,
             subscription_type,
+            email,
         }) => AgentState::Ready {
             version,
             subscription_type,
+            email: email.filter(|email| !email.trim().is_empty()),
         },
         Some(_) => AgentState::NeedsLogin { version },
         None => AgentState::error(failure(
@@ -365,12 +373,14 @@ mod tests {
         .unwrap();
         assert!(ready.logged_in);
         assert_eq!(ready.subscription_type.as_deref(), Some("max"));
+        assert_eq!(ready.email.as_deref(), Some("a@b.c"));
         let out = parse_auth_status(
             "warning: x\n{\n  \"loggedIn\": false,\n  \"authMethod\": \"none\"\n}\n",
         )
         .unwrap();
         assert!(!out.logged_in);
         assert_eq!(out.subscription_type, None);
+        assert_eq!(out.email, None);
         assert!(parse_auth_status("Not logged in").is_none());
         assert!(parse_auth_status(r#"{"loggedIn": "yes"}"#).is_none());
     }
@@ -391,9 +401,10 @@ mod tests {
         assert_eq!(
             json(AgentState::Ready {
                 version: "2.1.316".into(),
-                subscription_type: Some("max".into())
+                subscription_type: Some("max".into()),
+                email: Some("a@b.c".into())
             }),
-            serde_json::json!({ "status": "ready", "version": "2.1.316", "subscriptionType": "max" })
+            serde_json::json!({ "status": "ready", "version": "2.1.316", "subscriptionType": "max", "email": "a@b.c" })
         );
         assert_eq!(
             json(AgentState::error("x")),

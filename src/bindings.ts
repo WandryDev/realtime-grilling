@@ -621,7 +621,13 @@ export type AgentLoopState =
 
 export type AgentState = { status: "notInstalled" } | { status: "needsLogin"; version: string } | { status: "ready"; version: string; 
 /**  `pro`, `max`, `team`…; `null` when the CLI doesn't say. */
-subscriptionType: string | null } | 
+subscriptionType: string | null; 
+/**
+ *  The account the CLI is logged in with, for the onboarding
+ *  screen only: never stored or logged. `null` when the CLI
+ *  doesn't say (an API key login).
+ */
+email: string | null } | 
 /**  The text for "Скопировать для поддержки". */
 { status: "error"; message: string };
 

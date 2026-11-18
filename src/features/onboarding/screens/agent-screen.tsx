@@ -174,13 +174,19 @@ function AgentChecks({
       </AgentCheck>
       <AgentCheck
         mark={<AgentCheckMarkIcon mark="done" />}
-        trailing={<AgentCheckMeta>{agent.account}</AgentCheckMeta>}
+        trailing={
+          agent.account ? (
+            <AgentCheckMeta>{agent.account}</AgentCheckMeta>
+          ) : null
+        }
       >
         Вход выполнен
       </AgentCheck>
       <AgentCheck
         mark={<AgentCheckMarkIcon mark="done" />}
-        trailing={<AgentCheckMeta>{agent.plan}</AgentCheckMeta>}
+        trailing={
+          agent.plan ? <AgentCheckMeta>{agent.plan}</AgentCheckMeta> : null
+        }
       >
         Подписка активна
       </AgentCheck>
