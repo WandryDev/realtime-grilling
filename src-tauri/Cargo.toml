@@ -83,6 +83,8 @@ rust-stemmers = "1.2.0"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+# Updates from the GitHub releases (`latest.json`, see `src/updates.rs`).
+tauri-plugin-updater = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

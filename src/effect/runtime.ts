@@ -13,6 +13,7 @@ import { RecordingBackend } from "@/features/recording/backend";
 import { SettingsBackend } from "@/features/settings/backend";
 import { ShellBackend } from "@/features/shell/backend";
 import { SpeechBackend } from "@/features/speech/backend";
+import { UpdatesBackend } from "@/features/updates/backend";
 
 /*
  * Composition root of the Effect services. Every area adds its backend
@@ -39,7 +40,8 @@ export const MockLayer = Layer.mergeAll(
   RecordingBackend.layerMock,
   SettingsBackend.layerMock,
   ShellBackend.layerMock,
-  SpeechBackend.layerMock
+  SpeechBackend.layerMock,
+  UpdatesBackend.layerMock
 );
 
 /** What the Tauri layers built on other services read. */
@@ -59,7 +61,8 @@ export const TauriLayer = Layer.mergeAll(
   RecordingBackend.layerTauri,
   SettingsBackend.layerTauri,
   ShellBackend.layerTauri,
-  SpeechBackend.layerTauri
+  SpeechBackend.layerTauri,
+  UpdatesBackend.layerTauri
 );
 
 /** The layer set for the current environment. */

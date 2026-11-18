@@ -410,6 +410,19 @@ export const commands = {
 	 *  during a recording sees it at once.
 	 */
 	recordingStatus: () => typedError<RecordingStatus, CommandError>(__TAURI_INVOKE("recording_status")),
+	/**  This build's version and what the updater does now. */
+	updatesGet: () => typedError<UpdateStatus, CommandError>(__TAURI_INVOKE("updates_get")),
+	/**
+	 *  «Проверить обновления»: looks for an update and downloads it; the
+	 *  status after. A failure is in the status (`failed`), not an error.
+	 */
+	updatesCheck: () => typedError<UpdateStatus, CommandError>(__TAURI_INVOKE("updates_check")),
+	/**
+	 *  «Перезапустить»: installs the downloaded update and restarts the app.
+	 *  `Invalid` during a call or before the update is downloaded, `External`
+	 *  when the install failed.
+	 */
+	updatesInstall: () => typedError<null, CommandError>(__TAURI_INVOKE("updates_install")),
 	/**
 	 *  Both models (turbo, then small) with their download size, state and
 	 *  whether `speechModel` names them. Files deleted by hand are noticed here.
@@ -574,6 +587,7 @@ export const events = {
 	transcriptPhrase: makeEvent<TranscriptPhrase, TranscriptPhrase>("transcript-phrase"),
 	transcriptRefine: makeEvent<TranscriptRefine, TranscriptRefine>("transcript-refine"),
 	transcriptSkipped: makeEvent<TranscriptSkipped, TranscriptSkipped>("transcript-skipped"),
+	updateStatus: makeEvent<UpdateStatus, UpdateStatus>("update-status"),
 };
 
 /* Types */
@@ -2433,6 +2447,34 @@ export type TranscriptionStatus = {
 	state: TranscriptionState,
 	/**  The model the live pass runs (or failed to run) with. */
 	model?: ModelId | null,
+};
+
+/**  What the updater is doing. */
+export type UpdateState = 
+/**  A debug build: it never updates itself. */
+{ status: "disabled" } | 
+/**  No check yet. */
+{ status: "idle" } | { status: "checking" } | 
+/**  The last check found nothing newer. */
+{ status: "upToDate"; 
+/**  Milliseconds since the Unix epoch. */
+checkedAt: number } | { status: "downloading"; version: string; 
+/**  `null` while the server hasn't said the size. */
+percent: number | null } | 
+/**  Downloaded and verified: a restart installs it. */
+{ status: "ready"; version: string; 
+/**  The release notes (the CHANGELOG entry), if any. */
+notes: string | null } | { status: "installing"; version: string } | 
+/**  The last check, download or install failed. */
+{ status: "failed"; message: string };
+
+/**
+ *  This build's version and what the updater does. Sent to every window on
+ *  each change.
+ */
+export type UpdateStatus = {
+	current: string,
+	state: UpdateState,
 };
 
 export type Value = null | boolean | number | string | Value[] | { [key in string]: Value };

@@ -17,6 +17,7 @@ import {
   useCallSessionLoaded,
 } from "@/data/call-session";
 import { retryDataLoad, useDataLoad } from "@/data/status";
+import { UpdateToast } from "@/features/updates/update-toast";
 import { routes } from "@/lib/routes";
 import { useHydrated } from "@/lib/use-hydrated";
 import { currentWindowLabel, MAIN_WINDOW } from "@/lib/window-label";
@@ -61,6 +62,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
     <>
       <ThemeSync />
       {mainWindow ? <NavigateListener /> : null}
+      {mainWindow ? <UpdateToast /> : null}
       {isMainWindowRoute(pathname) ? (
         <MainWindowFrame>{children}</MainWindowFrame>
       ) : (

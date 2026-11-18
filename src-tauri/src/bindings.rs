@@ -30,6 +30,7 @@ use crate::{
         models::SpeechModelChanged,
     },
     summary::SummaryProgress,
+    updates::UpdateStatus,
 };
 
 pub fn builder() -> Builder<tauri::Wry> {
@@ -122,6 +123,9 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::recording_start,
             commands::recording_stop,
             commands::recording_status,
+            commands::updates_get,
+            commands::updates_check,
+            commands::updates_install,
             commands::speech_models_list,
             commands::speech_model_download,
             commands::speech_model_pause,
@@ -148,6 +152,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         .events(collect_events![
             AgentInstallProgress,
             AgentStatus,
+            UpdateStatus,
             AudioInputsChanged,
             AudioInputsStopped,
             AudioLevel,

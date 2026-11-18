@@ -96,6 +96,8 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
         }
     });
     app.manage(QuitRequested::default());
+    app.manage(crate::updates::Updates::default());
+    crate::updates::start(app.handle());
     app.manage(shortcuts::Registered::default());
     app.manage(SettingsLock::default());
     // The microphones and the chosen one: every capture of «Я» opens it.
@@ -298,34 +300,36 @@ fn forget_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     }
 }
 
+/// What the app stops on its way out: on `RunEvent::Exit`, and before the
+/// Windows update installer ends the process without one.
+pub fn shutdown<R: Runtime>(app: &AppHandle<R>) {
+    // First: the agent's CLI runs in its own process group and would
+    // outlive the app.
+    if let Some(fast_loop) = app.try_state::<crate::agent::fast_loop::scheduler::FastLoop>() {
+        fast_loop.shutdown();
+    }
+    if let Some(slow_loop) = app.try_state::<crate::agent::slow_loop::scheduler::SlowLoop>() {
+        slow_loop.shutdown();
+    }
+    if let Some(builds) = app.try_state::<crate::projects::builds::BriefBuilds>() {
+        builds.shutdown();
+    }
+    if let Some(builds) = app.try_state::<crate::summary::builds::SummaryBuilds>() {
+        builds.shutdown();
+    }
+    crate::recording::stop_on_exit(app);
+    crate::audio::mic_watch::stop(app);
+    if let Some(cache) = app.try_state::<crate::records::audio::AudioCache>() {
+        cache.clear();
+    }
+}
+
 /// Keeps the app alive when the last window goes away; only "Выйти" exits.
 /// On exit stops the agent's calls (killing its CLI), closes a running
 /// recording and stops the microphone watcher.
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     match event {
-        RunEvent::Exit => {
-            // First: the agent's CLI runs in its own process group and would
-            // outlive the app.
-            if let Some(fast_loop) = app.try_state::<crate::agent::fast_loop::scheduler::FastLoop>()
-            {
-                fast_loop.shutdown();
-            }
-            if let Some(slow_loop) = app.try_state::<crate::agent::slow_loop::scheduler::SlowLoop>()
-            {
-                slow_loop.shutdown();
-            }
-            if let Some(builds) = app.try_state::<crate::projects::builds::BriefBuilds>() {
-                builds.shutdown();
-            }
-            if let Some(builds) = app.try_state::<crate::summary::builds::SummaryBuilds>() {
-                builds.shutdown();
-            }
-            crate::recording::stop_on_exit(app);
-            crate::audio::mic_watch::stop(app);
-            if let Some(cache) = app.try_state::<crate::records::audio::AudioCache>() {
-                cache.clear();
-            }
-        }
+        RunEvent::Exit => shutdown(app),
         RunEvent::ExitRequested { api, .. }
             if !app.state::<QuitRequested>().0.load(Ordering::SeqCst) =>
         {

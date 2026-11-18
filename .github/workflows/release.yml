@@ -178,9 +178,14 @@ jobs:
       # On macOS tauri-cli imports the certificate into a temporary keychain, signs
       # with the hardened runtime (APPLE_SIGNING_IDENTITY overrides the ad-hoc "-" in
       # tauri.conf.json), notarizes the app and staples the ticket.
+      # With TAURI_SIGNING_* it also signs the update archives (the notarized .app as
+      # .app.tar.gz, the NSIS installer) for the updater: their .sig files go up with
+      # them, and `publish` lists them in latest.json.
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -190,6 +195,7 @@ jobs:
           releaseId: ${{ needs.prepare.outputs.release-id }}
           tauriScript: bun run tauri
           args: ${{ matrix.args }}
+          # Written once by `publish`: two jobs updating one file would race.
           uploadUpdaterJson: false
           retryAttempts: 1
 
@@ -225,6 +231,57 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The installed apps read latest.json of the latest release
+      # (plugins.updater in tauri.conf.json): the version, the notes and, per
+      # platform, the update's URL and its signature. The universal macOS
+      # archive serves both Mac architectures; Windows updates with NSIS.
+      - name: Updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+        run: |
+          tag="v$VERSION"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
+          sigs=$(mktemp -d)
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$sigs" \
+            --pattern '*.app.tar.gz.sig' --pattern '*-setup.exe.sig'
+
+          # The one signature matching the pattern; the step fails otherwise.
+          one() {
+            local found
+            found=$(find "$sigs" -type f -name "$1")
+            if [ -z "$found" ] || [ "$(wc -l <<< "$found")" -ne 1 ]; then
+              echo "::error::Expected one $1 in $tag, found: ${found:-none}"
+              return 1
+            fi
+            echo "$found"
+          }
+          mac=$(one '*.app.tar.gz.sig')
+          win=$(one '*-setup.exe.sig')
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .body > notes.md
+          jq -n \
+            --arg version "$VERSION" \
+            --rawfile notes notes.md \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg mac_url "$base/$(basename "$mac" .sig)" \
+            --rawfile mac_sig "$mac" \
+            --arg win_url "$base/$(basename "$win" .sig)" \
+            --rawfile win_sig "$win" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $date,
+              platforms: {
+                "darwin-aarch64": { url: $mac_url, signature: $mac_sig },
+                "darwin-x86_64": { url: $mac_url, signature: $mac_sig },
+                "windows-x86_64": { url: $win_url, signature: $win_sig }
+              }
+            }' > latest.json
+          jq '.platforms | map_values(.url)' latest.json
+          gh release upload "$tag" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

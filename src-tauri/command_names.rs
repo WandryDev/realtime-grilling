@@ -85,6 +85,10 @@ pub const APP_COMMANDS: &[&str] = &[
     "recording_start",
     "recording_stop",
     "recording_status",
+    // Updates (updates.rs): the main window's «Обновления» and its toast.
+    "updates_get",
+    "updates_check",
+    "updates_install",
     "speech_models_list",
     "speech_model_download",
     "speech_model_pause",

@@ -948,6 +948,8 @@ export function createFakeTauri(): FakeTauri {
         };
       case "agent_usage":
         return null;
+      case "updates_get":
+        return { current: "0.3.0", state: { status: "disabled" } };
       case "calls_delete": {
         const index = db.calls.findIndex((item) => item.id === args.id);
         const [removed] = db.calls.splice(index, 1);
