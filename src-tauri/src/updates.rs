@@ -34,6 +34,13 @@ const ENABLED: bool = !cfg!(debug_assertions);
 /// The first check waits for the start to settle.
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(30);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// One request for `latest.json`.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// The whole check with the download: a connection that stays open but
+/// stops sending would otherwise hold `busy` until the app quits. The
+/// plugin gives the download no timeout of its own (`Update::timeout` is
+/// `None` in updater 2.14).
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 const PERCENT: u64 = 100;
 
@@ -170,7 +177,10 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>, manual: bool) -> UpdateStatus
         inner.state.clone()
     };
     set_state(app, UpdateState::Checking);
-    let outcome = find_and_download(app).await;
+    let outcome = match tokio::time::timeout(ATTEMPT_TIMEOUT, find_and_download(app)).await {
+        Ok(found) => found.map_err(|error| error.to_string()),
+        Err(_) => Err("сервер обновлений не ответил вовремя".to_owned()),
+    };
     updates.lock().busy = false;
     match outcome {
         Ok(state) => set_state(app, state),
@@ -195,6 +205,7 @@ async fn find_and_download<R: Runtime>(
     let exiting = app.clone();
     let updater = app
         .updater_builder()
+        .timeout(CHECK_TIMEOUT)
         // Windows: the installer is started and the app exits right away,
         // without `RunEvent::Exit`: stop the agent's CLI and the recorder here.
         .on_before_exit(move || {

@@ -54,7 +54,7 @@ macOS (TCC) запоминает доступ к микрофону и к зап
 Сборка и запуск с этой подписью:
 
 ```bash
-bun run tauri build --debug --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Grill Dev"}}}'
+bun run tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"Grill Dev"}}}'
 open src-tauri/target/debug/bundle/macos/realtime-grilling.app
 ```
 
@@ -129,7 +129,7 @@ Windows пока не подписан: при первом запуске Smart
 
 Шаг «Updater manifest» в `release.yml` собирает `latest.json` из подписей обоих архивов и выкладывает в релиз до публикации. Без ключа сборка падает: `bundle.createUpdaterArtifacts` требует его.
 
-Если потерять закрытый ключ, уже установленные копии не примут ни одно обновление: их придётся переустановить вручную. Храните резервную копию ключа и пароля вне этого компьютера. Для локальной релизной сборки передайте `TAURI_SIGNING_PRIVATE_KEY` (путь к файлу ключа или его содержимое) и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+Если потерять закрытый ключ, уже установленные копии не примут ни одно обновление: их придётся переустановить вручную. Храните резервную копию ключа и пароля вне этого компьютера. Для локальной релизной сборки передайте `TAURI_SIGNING_PRIVATE_KEY` (путь к файлу ключа или его содержимое) и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Сборке без ключа, как отладочной выше, нужен `"createUpdaterArtifacts": false` в `--config`. tauri-cli только предупреждает, если закрытый ключ не пара `plugins.updater.pubkey`, поэтому шаг «Updater manifest» проверяет подписи обоих архивов публичным ключом (`minisign`) и не публикует релиз с чужой подписью.
 
 ## Правила для `main`
 
