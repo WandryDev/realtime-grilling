@@ -149,6 +149,7 @@ export const SPEECH_BENCHMARK: StoredBenchmark = {
 
 /** Claude Code of the demo: found, signed in. */
 export const AGENT: AgentState = {
+  email: "dima@pixel.agency",
   status: "ready",
   subscriptionType: "max",
   version: "2.1.14",

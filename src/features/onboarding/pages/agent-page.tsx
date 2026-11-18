@@ -134,8 +134,9 @@ export function AgentPage() {
     <AgentScreen
       agent={{
         ...CLAUDE_CODE,
+        account: agent.account,
         installPercent: agent.installPercent,
-        plan: agent.plan ?? CLAUDE_CODE.plan,
+        plan: agent.plan,
         version: agent.version ?? CLAUDE_CODE.version,
       }}
       backHref={routes.onboarding("speech")}

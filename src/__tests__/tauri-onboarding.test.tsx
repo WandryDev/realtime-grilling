@@ -136,7 +136,9 @@ function setPermissions(microphone: string, systemAudio: string) {
 }
 
 const NEEDS_LOGIN: AgentState = { status: "needsLogin", version: "2.1.316" };
+const AN_EMAIL = /@/u;
 const READY: AgentState = {
+  email: "manager@example.com",
   status: "ready",
   subscriptionType: "pro",
   version: "2.1.316",
@@ -389,6 +391,17 @@ describe("AgentPage in Tauri", () => {
     expect(await screen.findByText("Подписка активна")).toBeTruthy();
     expect(screen.getByText("версия 2.1.316")).toBeTruthy();
     expect(screen.getByText("Claude Pro")).toBeTruthy();
+    expect(screen.getByText("manager@example.com")).toBeTruthy();
+  });
+
+  it("shows no account or plan the CLI didn't give", async () => {
+    answer("agent_status", { ...READY, email: null, subscriptionType: null });
+    render(<AgentPage />);
+
+    expect(await screen.findByText("Подписка активна")).toBeTruthy();
+    expect(screen.queryByText(AN_EMAIL)).toBeNull();
+    expect(screen.queryByText("Claude Max")).toBeNull();
+    expect(screen.queryByText("Claude Pro")).toBeNull();
   });
 
   it("re-reads the status on focus, but not over a running login", async () => {

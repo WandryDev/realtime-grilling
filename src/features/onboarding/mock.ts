@@ -123,7 +123,8 @@ export const SPEECH_MODEL: SpeechModelInfo = {
 };
 
 export interface AgentInfo {
-  account: string;
+  /** `null`: the CLI didn't say. */
+  account: string | null;
   downloadedSize: string;
   /** Install steps while the agent isn't installed. */
   downloadSize: string;
@@ -131,7 +132,8 @@ export interface AgentInfo {
   errorLog: string[];
   installPercent: number;
   name: string;
-  plan: string;
+  /** `null`: the CLI didn't say. */
+  plan: string | null;
   vendor: string;
   version: string;
 }

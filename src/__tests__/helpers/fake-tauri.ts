@@ -940,7 +940,12 @@ export function createFakeTauri(): FakeTauri {
       case "data_summary":
         return { bytes: 0, calls: 0, projects: db.projects.length };
       case "agent_status":
-        return { status: "ready", subscriptionType: "max", version: "2.1.14" };
+        return {
+          email: "a@b.c",
+          status: "ready",
+          subscriptionType: "max",
+          version: "2.1.14",
+        };
       case "agent_usage":
         return null;
       case "calls_delete": {
