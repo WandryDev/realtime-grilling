@@ -588,14 +588,23 @@ fn without_system_audio_only_me_is_live() {
     assert_eq!(fx.rig.opened(AudioSource::System), 0, "never opened");
     thread::sleep(Duration::from_millis(400));
     assert_eq!(fx.manager.status().channels.others, ChannelState::NoAccess);
-    let stats = fx.manager.stop_with_stats(&id).unwrap().unwrap();
-    let levels = fx.seen.levels.lock().unwrap().clone();
-    assert!(
+    // Levels come ~10 Hz from the recorder thread, which a loaded machine runs
+    // late: wait for "Я" heard alone instead of counting on 400 ms to hold one.
+    let me_alone = |levels: &[RecordingLevels]| {
         levels
             .iter()
-            .any(|level| level.me > 0.5 && level.others == 0.0),
-        "no AEC without system audio: {levels:?}"
-    );
+            .any(|level| level.me > 0.5 && level.others == 0.0)
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !me_alone(&fx.seen.levels.lock().unwrap()) {
+        assert!(
+            Instant::now() < deadline,
+            "no AEC without system audio: {:?}",
+            fx.seen.levels.lock().unwrap()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let stats = fx.manager.stop_with_stats(&id).unwrap().unwrap();
 
     // Both files exist and are as long: "Остальные" is silence.
     let me = opus_duration_ms(&fx.file(&id, ME_FILE));

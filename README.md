@@ -95,7 +95,26 @@ PR «chore: release» открывается от имени Fine-grained PAT и
 
 Версия хранится в `package.json`: `tauri.conf.json` читает её оттуда, а `scripts/sync-version.ts` синхронизирует `Cargo.toml`/`Cargo.lock`.
 
-Сборки пока не подписаны: macOS — ad-hoc подпись (первый запуск через «Открыть» в контекстном меню), Windows — предупреждение SmartScreen.
+### Подпись macOS
+
+Релизная сборка macOS подписана Developer ID (hardened runtime) и нотаризована: и приложение, и `.dmg` со степлированным тикетом. Подписывает и нотаризует tauri-cli из переменных `APPLE_*`, `.dmg` нотаризует отдельный шаг в `release.yml`. Перед публикацией Gatekeeper (`spctl`) проверяет оба файла. Если секретов нет, релиз падает, а не выходит без подписи.
+
+Секреты лежат в environment `release` (Settings → Environments). В него можно деплоить только из `main`, поэтому workflow из PR их не получит:
+
+| Секрет | Что это |
+|---|---|
+| `APPLE_CERTIFICATE` | `.p12` сертификата «Developer ID Application» с закрытым ключом, в base64 |
+| `APPLE_CERTIFICATE_PASSWORD` | пароль `.p12` |
+| `APPLE_SIGNING_IDENTITY` | имя сертификата: `Developer ID Application: <имя> (<Team ID>)` |
+| `APPLE_API_KEY` | Key ID ключа App Store Connect API (роль Developer) |
+| `APPLE_API_ISSUER` | Issuer ID того же ключа |
+| `APPLE_API_KEY_P8` | содержимое `AuthKey_<Key ID>.p8` |
+
+Сертификат Developer ID действует до 1 февраля 2027 года. После выпуска нового обновите `APPLE_CERTIFICATE` и `APPLE_CERTIFICATE_PASSWORD`.
+
+`signingIdentity: "-"` в `tauri.conf.json` остаётся для локальных сборок: `APPLE_SIGNING_IDENTITY` в CI его перекрывает.
+
+Windows пока не подписан: при первом запуске SmartScreen показывает предупреждение.
 
 ## Правила для `main`
 
