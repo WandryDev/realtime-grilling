@@ -214,8 +214,10 @@ impl SlowLoop {
         self.0.gate.close();
         let calls: Vec<InFlight> = lock(&self.0.in_flight).drain().map(|(_, c)| c).collect();
         for call in calls {
-            call.process.kill();
+            // `stop` before the kill: the call sees its CLI die only once it
+            // is cancelled, and is recorded so (see `ask`).
             let _ = call.stop.send(());
+            call.process.kill();
         }
         for (_, sender) in lock(&self.0.sessions).drain() {
             let _ = sender.send(Message::Stop);
@@ -566,10 +568,13 @@ async fn ask(
     let (cancel, cancelled) = oneshot::channel();
     let running = agent.run(request, cancelled);
     tokio::pin!(running);
+    // `stop` first: the app's exit sends it and then kills the CLI, so a reply
+    // that ended with the process is a cancellation, not an error.
     let interrupted = tokio::select! {
+        biased;
+        _ = &mut *stop => Err(AgentError::Cancelled),
         reply = &mut running => Ok(reply),
         () = tokio::time::sleep(config.call_timeout) => Err(AgentError::Timeout),
-        _ = &mut *stop => Err(AgentError::Cancelled),
     };
     match interrupted {
         Ok(reply) => reply,
