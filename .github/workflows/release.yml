@@ -228,7 +228,14 @@ jobs:
           xcrun stapler staple "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
-          gh release upload "v$VERSION" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
+          # Upload under the name the release already has for it: tauri-action turns
+          # the space of "Realtime Grilling" into a dot, and --clobber matches names
+          # exactly (GitHub refuses a second file with the same name).
+          asset=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '
+            [.assets[].name | select(endswith(".dmg"))]
+            | if length == 1 then .[0] else error("expected one .dmg, found \(length)") end')
+          cp "$dmg" "$RUNNER_TEMP/$asset"
+          gh release upload "v$VERSION" "$RUNNER_TEMP/$asset" --clobber --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish release

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "realtime-grilling",
+  "productName": "Realtime Grilling",
   "version": "../package.json",
   "identifier": "com.dev-wandry.realtime-grilling",
   "build": {

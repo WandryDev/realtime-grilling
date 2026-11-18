@@ -55,7 +55,7 @@ macOS (TCC) запоминает доступ к микрофону и к зап
 
 ```bash
 bun run tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"Grill Dev"}}}'
-open src-tauri/target/debug/bundle/macos/realtime-grilling.app
+open "src-tauri/target/debug/bundle/macos/Realtime Grilling.app"
 ```
 
 Подпись одна и та же между сборками, и выданный доступ сохраняется. Начать с чистого листа (снова увидеть системные запросы):
