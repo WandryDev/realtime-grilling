@@ -112,6 +112,8 @@ jobs:
     name: Build (${{ matrix.name }})
     needs: prepare
     if: needs.prepare.outputs.release-id != ''
+    # Holds the Apple signing secrets; only `main` may deploy to it (README, «Подпись macOS»).
+    environment: release
     permissions:
       contents: write
     strategy:
@@ -146,15 +148,75 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # A release must not ship unsigned: without Developer ID and notarization
+      # Gatekeeper refuses to open the app on another Mac.
+      - name: Apple signing setup
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_P8; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Secrets missing in the release environment: ${missing[*]}"
+            exit 1
+          fi
+
+          # notarytool reads the App Store Connect key from a file.
+          key_path="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key_path"
+          echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      # On macOS tauri-cli imports the certificate into a temporary keychain, signs
+      # with the hardened runtime (APPLE_SIGNING_IDENTITY overrides the ad-hoc "-" in
+      # tauri.conf.json), notarizes the app and staples the ticket.
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
         with:
           releaseId: ${{ needs.prepare.outputs.release-id }}
           tauriScript: bun run tauri
           args: ${{ matrix.args }}
           uploadUpdaterJson: false
           retryAttempts: 1
+
+      # Tauri notarizes the app but not the disk image it ships in: notarize and
+      # staple the .dmg too, so it opens offline without a warning, check both with
+      # Gatekeeper and replace the asset tauri-action uploaded.
+      - name: Notarize the disk image
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          bundle=src-tauri/target/universal-apple-darwin/release/bundle
+          app=$(ls -d "$bundle"/macos/*.app)
+          dmg=$(ls "$bundle"/dmg/*.dmg)
+
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+          xcrun notarytool submit "$dmg" --wait \
+            --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER"
+          xcrun stapler staple "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+
+          gh release upload "v$VERSION" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish release
