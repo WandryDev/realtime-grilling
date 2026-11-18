@@ -97,6 +97,12 @@ jobs:
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
               -f target_commitish="$GITHUB_SHA" \
               -F body=@notes.md > /dev/null
+            # Its files go: a file the new build names differently would stay, and
+            # latest.json must list this build's signatures only.
+            gh api "repos/$GITHUB_REPOSITORY/releases/$id/assets" --paginate --jq '.[].id' |
+              while read -r asset; do
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
+              done
           else
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
               -f tag_name="$tag" \
@@ -178,9 +184,14 @@ jobs:
       # On macOS tauri-cli imports the certificate into a temporary keychain, signs
       # with the hardened runtime (APPLE_SIGNING_IDENTITY overrides the ad-hoc "-" in
       # tauri.conf.json), notarizes the app and staples the ticket.
+      # With TAURI_SIGNING_* it also signs the update archives (the notarized .app as
+      # .app.tar.gz, the NSIS installer) for the updater: their .sig files go up with
+      # them, and `publish` lists them in latest.json.
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -190,6 +201,7 @@ jobs:
           releaseId: ${{ needs.prepare.outputs.release-id }}
           tauriScript: bun run tauri
           args: ${{ matrix.args }}
+          # Written once by `publish`: two jobs updating one file would race.
           uploadUpdaterJson: false
           retryAttempts: 1
 
@@ -216,7 +228,14 @@ jobs:
           xcrun stapler staple "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
-          gh release upload "v$VERSION" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
+          # Upload under the name the release already has for it: tauri-action turns
+          # the space of "Realtime Grilling" into a dot, and --clobber matches names
+          # exactly (GitHub refuses a second file with the same name).
+          asset=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '
+            [.assets[].name | select(endswith(".dmg"))]
+            | if length == 1 then .[0] else error("expected one .dmg, found \(length)") end')
+          cp "$dmg" "$RUNNER_TEMP/$asset"
+          gh release upload "v$VERSION" "$RUNNER_TEMP/$asset" --clobber --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish release
@@ -225,6 +244,79 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The updater's public key (plugins.updater.pubkey) for the check below.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+
+      # The installed apps read latest.json of the latest release
+      # (plugins.updater in tauri.conf.json): the version, the notes and, per
+      # platform, the update's URL and its signature. The universal macOS
+      # archive serves both Mac architectures; Windows updates with NSIS.
+      - name: Updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+        run: |
+          tag="v$VERSION"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
+          sigs=$(mktemp -d)
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$sigs" \
+            --pattern '*.app.tar.gz.sig' --pattern '*-setup.exe.sig'
+
+          # The one signature matching the pattern; the step fails otherwise.
+          one() {
+            local found
+            found=$(find "$sigs" -type f -name "$1")
+            if [ -z "$found" ] || [ "$(wc -l <<< "$found")" -ne 1 ]; then
+              echo "::error::Expected one $1 in $tag, found: ${found:-none}"
+              return 1
+            fi
+            echo "$found"
+          }
+          mac=$(one '*.app.tar.gz.sig')
+          win=$(one '*-setup.exe.sig')
+
+          # tauri-cli only warns when TAURI_SIGNING_PRIVATE_KEY is not the pair of
+          # plugins.updater.pubkey, and every installed app would then refuse the
+          # update. Check both archives with the public key the apps have.
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign > /dev/null
+          jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json | base64 -d > "$RUNNER_TEMP/updater.pub"
+          archives=$(mktemp -d)
+          for sig in "$mac" "$win"; do
+            archive=$(basename "$sig" .sig)
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$archives" --pattern "$archive"
+            base64 -d < "$sig" > "$RUNNER_TEMP/update.minisig"
+            if ! minisign -Vq -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/update.minisig" -m "$archives/$archive"; then
+              echo "::error::$archive is not signed by the key of plugins.updater.pubkey: check TAURI_SIGNING_PRIVATE_KEY"
+              exit 1
+            fi
+          done
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .body > notes.md
+          jq -n \
+            --arg version "$VERSION" \
+            --rawfile notes notes.md \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg mac_url "$base/$(basename "$mac" .sig)" \
+            --rawfile mac_sig "$mac" \
+            --arg win_url "$base/$(basename "$win" .sig)" \
+            --rawfile win_sig "$win" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $date,
+              platforms: {
+                "darwin-aarch64": { url: $mac_url, signature: $mac_sig },
+                "darwin-x86_64": { url: $mac_url, signature: $mac_sig },
+                "windows-x86_64": { url: $win_url, signature: $win_sig }
+              }
+            }' > latest.json
+          jq '.platforms | map_values(.url)' latest.json
+          gh release upload "$tag" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

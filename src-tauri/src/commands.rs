@@ -1691,3 +1691,29 @@ pub async fn speech_mic_check(
     .await??;
     mic_check::recognize(&speech.recognizer(), audio, language).await
 }
+
+/* Updates (updates.rs) */
+
+/// This build's version and what the updater does now.
+#[tauri::command]
+#[specta::specta]
+pub fn updates_get(app: AppHandle) -> CommandResult<crate::updates::UpdateStatus> {
+    Ok(crate::updates::status(&app))
+}
+
+/// «Проверить обновления»: looks for an update and downloads it; the
+/// status after. A failure is in the status (`failed`), not an error.
+#[tauri::command]
+#[specta::specta]
+pub async fn updates_check(app: AppHandle) -> CommandResult<crate::updates::UpdateStatus> {
+    Ok(crate::updates::check(&app, true).await)
+}
+
+/// «Перезапустить»: installs the downloaded update and restarts the app.
+/// `Invalid` during a call or before the update is downloaded, `External`
+/// when the install failed.
+#[tauri::command]
+#[specta::specta]
+pub async fn updates_install(app: AppHandle) -> CommandResult<()> {
+    crate::updates::install(&app).await
+}

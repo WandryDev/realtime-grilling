@@ -19,6 +19,7 @@ mod shell;
 mod speech;
 mod storage;
 mod summary;
+mod updates;
 mod vad;
 
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent};
@@ -65,6 +66,8 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         // Picking documents and the brief's export folder.
         .plugin(tauri_plugin_dialog::init())
+        // Updates from the GitHub releases (`updates.rs`).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // A recording's channels for the main window's player
         // (`grill-audio://localhost/<id>/<me|others>`, post-call task 3.4).
         .register_asynchronous_uri_scheme_protocol(records::scheme::SCHEME, records::scheme::handle)

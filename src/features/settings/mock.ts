@@ -5,6 +5,7 @@ import type {
   ModelId,
   RecordingsInfo,
   SpeechModel,
+  UpdateStatus,
 } from "@/bindings";
 import type { StoredBenchmark } from "@/data/settings";
 
@@ -97,6 +98,12 @@ export const RECORDINGS: RecordingsInfo = {
   bytes: 1_200_000_000,
   calls: 38,
   path: "~/Library/Application Support/Grill/recordings",
+};
+
+/** The demo's updates: the latest version is installed. */
+export const UPDATES: UpdateStatus = {
+  current: "0.3.0",
+  state: { checkedAt: 0, status: "upToDate" },
 };
 
 /* ------------------------------------------------- Звук и распознавание */

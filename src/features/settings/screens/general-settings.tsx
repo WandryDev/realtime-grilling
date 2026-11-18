@@ -1,6 +1,6 @@
 "use client";
 
-import type { RecordingsInfo } from "@/bindings";
+import type { RecordingsInfo, UpdateStatus } from "@/bindings";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_SETTINGS,
@@ -17,25 +17,34 @@ import {
 import { SettingsScreen } from "../components/settings-screen";
 import { recordingsUsage } from "../format";
 import { FolderIcon } from "../icons";
-import { CALL_LANGUAGES, RECORDINGS, THEMES } from "../mock";
+import { CALL_LANGUAGES, RECORDINGS, THEMES, UPDATES } from "../mock";
 
 /**
- * "Общие": the call language, launch and theme, the recordings folder.
- * Controls are bound to `values` when `onChange` is set (the app), free
- * otherwise. `recordings` is `null` until the backend answered.
+ * "Общие": the call language, launch and theme, the recordings folder, the
+ * app's version and its updates. Controls are bound to `values` when
+ * `onChange` is set (the app), free otherwise. `recordings` and `updates`
+ * are `null` until the backend answered.
  */
 export function GeneralSettings({
   onChange,
+  onCheckUpdates,
+  onRestartToUpdate,
   onShowInFinder,
   recordings = RECORDINGS,
   revealLabel = "Показать в Finder",
+  updates = UPDATES,
   values = DEFAULT_SETTINGS,
 }: {
   onChange?: SettingChange;
+  /** «Проверить обновления». */
+  onCheckUpdates?: () => void;
+  /** «Перезапустить»: installs the downloaded update. */
+  onRestartToUpdate?: () => void;
   onShowInFinder?: () => void;
   recordings?: RecordingsInfo | null;
   /** «Показать в Finder», «Показать в проводнике» on Windows. */
   revealLabel?: string;
+  updates?: UpdateStatus | null;
   values?: SettingsValues;
 }) {
   return (
@@ -102,7 +111,77 @@ export function GeneralSettings({
           </ReadonlyField>
         </SettingsRow>
       </SettingsSection>
+      <SettingsSection className="pt-12" title="Обновления">
+        <SettingsRow
+          control={
+            <UpdateControl
+              onCheck={onCheckUpdates}
+              onRestart={onRestartToUpdate}
+              updates={updates}
+            />
+          }
+          description={updates ? updateDescription(updates) : "…"}
+          title={updates ? `Grill ${updates.current}` : "Grill"}
+        />
+      </SettingsSection>
     </>
+  );
+}
+
+/** What the updater is doing, under the version. */
+function updateDescription({ state }: UpdateStatus): string {
+  switch (state.status) {
+    case "disabled":
+      return "Сборка для разработки не обновляется";
+    case "idle":
+      return "Grill проверяет обновления сам, раз в несколько часов";
+    case "checking":
+      return "Проверяем обновления…";
+    case "upToDate":
+      return "Установлена последняя версия";
+    case "downloading":
+      return state.percent === null
+        ? `Скачиваем версию ${state.version}…`
+        : `Скачиваем версию ${state.version}: ${state.percent}%`;
+    case "ready":
+      return `Версия ${state.version} скачана. Перезапустите Grill, чтобы установить её`;
+    case "installing":
+      return `Устанавливаем версию ${state.version}…`;
+    default:
+      return state.message;
+  }
+}
+
+function UpdateControl({
+  onCheck,
+  onRestart,
+  updates,
+}: {
+  onCheck?: () => void;
+  onRestart?: () => void;
+  updates: UpdateStatus | null;
+}) {
+  const status = updates?.state.status;
+  if (status === "disabled") {
+    return null;
+  }
+  if (status === "ready" || status === "installing") {
+    return (
+      <Button loading={status === "installing"} onClick={onRestart}>
+        Перезапустить
+      </Button>
+    );
+  }
+  const busy = status === "checking" || status === "downloading";
+  return (
+    <Button
+      disabled={!updates || busy}
+      loading={status === "checking"}
+      onClick={onCheck}
+      variant="secondary"
+    >
+      Проверить обновления
+    </Button>
   );
 }
 
