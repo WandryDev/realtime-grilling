@@ -123,8 +123,9 @@ export function FindingCard({
   const hide = useCallback(() => onHideFinding?.(id), [id, onHideFinding]);
   const showQuestion = useCallback(() => {
     if (questionId !== undefined) {
-      // The drawer would cover the question it points at
+      // The drawers would cover the question it points at
       columns?.context.close();
+      columns?.transcript.close();
       onShowQuestion?.(questionId);
     }
   }, [columns, onShowQuestion, questionId]);

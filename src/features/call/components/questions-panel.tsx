@@ -84,10 +84,14 @@ export function QuestionsNav({
         className
       )}
     >
-      {/* Anchors that don't fit move to a second row, never under the status */}
+      {/*
+       * Anchors that don't fit move to a second row, never under the status.
+       * Many rows in a narrow window scroll inside, so the sticky bar never
+       * covers the questions.
+       */}
       <nav
         aria-label="Темы звонка"
-        className="flex min-w-0 flex-wrap items-center gap-1.5"
+        className="flex max-h-[30svh] min-w-0 flex-wrap items-center gap-1.5 overflow-y-auto"
       >
         {anchors.map((anchor) => (
           <AnchorButton

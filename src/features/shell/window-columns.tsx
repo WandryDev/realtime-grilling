@@ -99,8 +99,9 @@ export function WindowColumn({
     if (!(open && element)) {
       return;
     }
+    const drawer = getComputedStyle(element).position === "absolute";
     // Into the drawer, so Tab goes through it next.
-    if (getComputedStyle(element).position === "absolute") {
+    if (drawer) {
       element.focus({ preventScroll: true });
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -115,11 +116,28 @@ export function WindowColumn({
         close();
       }
     };
+    // Focus that leaves the drawer for the page under it (Tab past its end)
+    // closes it, so the drawer never hides the focused control. Not a trap:
+    // the drawer isn't modal. Its toggle and a window losing focus (no
+    // related target) keep it open.
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (
+        drawer &&
+        next instanceof Element &&
+        !element.contains(next) &&
+        next.getAttribute("aria-controls") !== id
+      ) {
+        close();
+      }
+    };
     window.addEventListener("keydown", onKeyDown);
     element.addEventListener("click", onClick);
+    element.addEventListener("focusout", onFocusOut);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("click", onClick);
+      element.removeEventListener("focusout", onFocusOut);
     };
   }, [close, id, open]);
 
