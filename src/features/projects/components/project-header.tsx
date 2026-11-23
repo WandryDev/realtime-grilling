@@ -56,7 +56,10 @@ export function ProjectHeader({
   );
 }
 
-/** "Outline Телемедиа, 48 документов ●" for every source, then the sync time. */
+/**
+ * "Outline Телемедиа, 48 документов ●" for every source, then the sync
+ * time. On a narrow panel the sources wrap, each kept on one line.
+ */
 export function SourcesStatus({
   className,
   sources,
@@ -74,18 +77,31 @@ export function SourcesStatus({
     );
   }
   return (
-    <div className={cn("flex items-center gap-5 text-sm", className)}>
-      <ul aria-label="Источники" className="flex items-center gap-5">
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-5 gap-y-2 text-sm",
+        className
+      )}
+    >
+      <ul
+        aria-label="Источники"
+        className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2"
+      >
         {sources.map((source) => {
           const isError = source.health === "error";
           return (
-            <li className="flex items-center gap-2" key={source.kind}>
-              <SourceMark kind={source.kind} />
-              <span className="text-foreground">{source.name}</span>
+            <li
+              className="flex max-w-full min-w-0 items-center gap-2"
+              key={source.kind}
+            >
+              <SourceMark className="shrink-0" kind={source.kind} />
+              <span className="text-foreground shrink-0">{source.name}</span>
               <span
                 className={cn(
+                  "min-w-0 truncate",
                   isError ? "text-contradiction" : "text-muted-foreground"
                 )}
+                title={source.detail}
               >
                 {source.detail}
               </span>

@@ -83,7 +83,7 @@ function SearchResults({
 }) {
   return (
     <>
-      <div className="flex items-center justify-between gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <FilterTabs label="Проекты" {...search.filter} />
         <p className="text-muted-foreground text-sm">{search.hint}</p>
       </div>
@@ -145,7 +145,7 @@ function NoCalls({ readiness }: { readiness: ReadinessItem[] }) {
     >
       <StartCallButton size="lg" variant="secondary" />
       {readiness.length === 0 ? null : (
-        <StateList className="w-[400px] pt-2" label="Готовность проекта">
+        <StateList className="max-w-[400px] pt-2" label="Готовность проекта">
           {readiness.map((item) => (
             <StateRow
               key={item.id}

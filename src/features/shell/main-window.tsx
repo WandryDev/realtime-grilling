@@ -1,3 +1,5 @@
+"use client";
+
 import type { ComponentProps, ReactNode } from "react";
 
 import {
@@ -14,6 +16,11 @@ import { cn } from "@/lib/utils";
 
 import { SearchIcon } from "./icons";
 import { WindowChromeEnd, WindowChromeStart } from "./window-chrome";
+import {
+  useWindowColumn,
+  WindowColumn,
+  WindowColumnToggle,
+} from "./window-columns";
 
 /*
  * The main window: gray window with the title bar, an optional sidebar and
@@ -26,6 +33,9 @@ import { WindowChromeEnd, WindowChromeStart } from "./window-chrome";
  *
  * Size comes from the call site: `h-svh` in the app, the artboard size in
  * /dev/screens.
+ *
+ * Narrower than 1024 the sidebar, and narrower than 1280 the aside, leave
+ * the row and open as drawers from the title bar (`window-columns.tsx`).
  */
 export function MainWindow({
   actions,
@@ -47,25 +57,61 @@ export function MainWindow({
   panelClassName?: string;
   sidebar?: ReactNode;
 }) {
+  const nav = useWindowColumn();
+  const side = useWindowColumn();
   return (
     <AppWindow className={cn("relative", className)}>
       <WindowTitlebar>
-        <WindowTitlebarStart>
+        <WindowTitlebarStart className="gap-3">
           <WindowChromeStart />
+          {sidebar ? (
+            <WindowColumnToggle
+              breakpoint="lg"
+              column={nav}
+              label="Навигация"
+              side="start"
+            />
+          ) : null}
         </WindowTitlebarStart>
-        <WindowTitlebarEnd>
+        <WindowTitlebarEnd className="min-w-0 shrink">
           {actions}
+          {aside ? (
+            <WindowColumnToggle
+              breakpoint="xl"
+              column={side}
+              label="Боковая колонка"
+              side="end"
+            />
+          ) : null}
           <WindowChromeEnd />
         </WindowTitlebarEnd>
       </WindowTitlebar>
       <AppWindowBody>
-        {sidebar}
+        {sidebar ? (
+          <WindowColumn
+            breakpoint="lg"
+            column={nav}
+            label="Навигация"
+            side="start"
+          >
+            {sidebar}
+          </WindowColumn>
+        ) : null}
         <AppWindowPanel
           className={cn("overflow-x-clip overflow-y-auto", panelClassName)}
         >
           {children}
         </AppWindowPanel>
-        {aside}
+        {aside ? (
+          <WindowColumn
+            breakpoint="xl"
+            column={side}
+            label="Боковая колонка"
+            side="end"
+          >
+            {aside}
+          </WindowColumn>
+        ) : null}
       </AppWindowBody>
       {overlay}
     </AppWindow>
@@ -80,25 +126,34 @@ export function TitlebarSearch({
 }: ComponentProps<"button"> & { label?: string }) {
   return (
     <button
+      aria-label={label}
       className={cn(
-        "bg-background text-muted-foreground hover:text-foreground focus-visible:focus-ring flex h-8 items-center gap-2 rounded-full px-3 transition-colors",
+        "bg-background text-muted-foreground hover:text-foreground focus-visible:focus-ring flex h-8 min-w-0 items-center gap-2 rounded-full px-3 transition-colors @max-3xl/window:w-8 @max-3xl/window:justify-center @max-3xl/window:px-0",
         className
       )}
+      title={label}
       type="button"
       {...props}
     >
       <SearchIcon className="size-3.5 shrink-0" />
-      <span className="text-sm">{label}</span>
-      <kbd className="font-mono text-xs">⌘K</kbd>
+      <span className="truncate text-sm @max-3xl/window:hidden">{label}</span>
+      <kbd className="font-mono text-xs @max-3xl/window:hidden">⌘K</kbd>
     </button>
   );
 }
 
-/** Page padding inside the panel: 40 top, 48 sides and bottom. */
+/**
+ * Page padding inside the panel: 40 top, 48 sides and bottom; 24 on the
+ * sides of a narrow panel. Only the sides change, so a caller's gap and
+ * vertical padding still win.
+ */
 export function PageContent({ className, ...props }: ComponentProps<"main">) {
   return (
     <main
-      className={cn("flex flex-col gap-10 px-12 pt-10 pb-12", className)}
+      className={cn(
+        "flex flex-col gap-10 px-6 pt-10 pb-12 @3xl/panel:px-12",
+        className
+      )}
       {...props}
     />
   );
@@ -119,7 +174,12 @@ export function PageHeader({
   title: ReactNode;
 }) {
   return (
-    <header className={cn("flex items-end justify-between gap-6", className)}>
+    <header
+      className={cn(
+        "flex flex-wrap items-end justify-between gap-x-6 gap-y-4",
+        className
+      )}
+    >
       <div className="flex min-w-0 flex-col gap-1.5">
         {eyebrow ? (
           <p className="text-muted-foreground text-base">{eyebrow}</p>

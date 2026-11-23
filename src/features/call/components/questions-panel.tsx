@@ -80,13 +80,14 @@ export function QuestionsNav({
   return (
     <div
       className={cn(
-        "border-border bg-background sticky top-0 z-10 flex items-center justify-between gap-4 border-b pt-4 pb-3.5",
+        "border-border bg-background sticky top-0 z-10 flex items-start justify-between gap-2 border-b pt-4 pb-3.5",
         className
       )}
     >
+      {/* Anchors that don't fit move to a second row, never under the status */}
       <nav
         aria-label="Темы звонка"
-        className="flex min-w-0 items-center gap-1.5"
+        className="flex min-w-0 flex-wrap items-center gap-1.5"
       >
         {anchors.map((anchor) => (
           <AnchorButton
@@ -105,7 +106,8 @@ export function QuestionsNav({
           </TopicAnchor>
         )}
       </nav>
-      <div className="flex shrink-0 items-center gap-3">
+      {/* On the first row of anchors when they wrap */}
+      <div className="flex h-8 shrink-0 items-center gap-3">
         {usage ? (
           <span
             className="text-muted-foreground text-sm whitespace-nowrap tabular-nums"
@@ -195,7 +197,10 @@ export function TopicSection({
   );
 }
 
-/** 28px topic name and a muted note on the right, on one baseline. */
+/**
+ * 28px topic name and a muted note on the right, on one baseline; the note
+ * goes under the name when both don't fit.
+ */
 export function TopicHeader({
   className,
   meta,
@@ -208,11 +213,11 @@ export function TopicHeader({
   return (
     <header
       className={cn(
-        "flex items-baseline justify-between gap-4 px-1 pt-5 pb-2",
+        "flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 pt-5 pb-2",
         className
       )}
     >
-      <h3 className="text-2xl font-semibold tracking-tight text-balance">
+      <h3 className="min-w-0 text-2xl font-semibold tracking-tight text-balance">
         {title}
       </h3>
       <p className="text-muted-foreground shrink-0 text-sm tabular-nums">

@@ -29,8 +29,8 @@ export function SettingsPageHeader({
 /*
  * A settings section in the main window, titled "Настройки": the sidebar
  * turns into the settings menu (SettingsSidebar) and the page is a 720
- * column centered in the panel. Page title and description come from the
- * section.
+ * column centered in the panel, with smaller margins on a narrow panel. Page
+ * title and description come from the section.
  */
 export function SettingsScreen({
   alerts,
@@ -62,7 +62,7 @@ export function SettingsScreen({
         <SettingsSidebar active={section} alerts={alerts} status={status} />
       }
     >
-      <main className="flex flex-col items-center px-12 pt-12 pb-16">
+      <main className="flex flex-col items-center px-6 pt-8 pb-10 @3xl/panel:px-12 @3xl/panel:pt-12 @3xl/panel:pb-16">
         <div className="max-w-content flex w-full flex-col">
           <SettingsPageHeader
             className="pb-6"

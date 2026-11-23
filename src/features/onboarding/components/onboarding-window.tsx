@@ -20,8 +20,10 @@ import { useWindowChrome } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /*
- * Onboarding window, 1080×720: the step list in the title bar, a white panel
- * with a 520px column and a footer with the step's actions.
+ * Onboarding window, 960×700 (560×520 at least): the step list in the title
+ * bar, a white panel with a 520px column and a footer with the step's
+ * actions. The column narrows with the window and scrolls when the window is
+ * too short; the footer stays put.
  *
  *   <OnboardingWindow step="integrations">
  *     <OnboardingContent>…</OnboardingContent>
@@ -77,13 +79,39 @@ function StepMark({ state }: { state: StepState }) {
   );
 }
 
-export function OnboardingSteps({ current }: { current: OnboardingStepId }) {
+/*
+ * Below this window width the steps keep their marks and only the current
+ * label (the others stay for screen readers). Windows needs more room: its
+ * system buttons take 138px on the right.
+ */
+const COMPACT_STEPS = {
+  macos: {
+    label: "@max-[48rem]/window:sr-only",
+    list: "@max-[48rem]/window:gap-3",
+  },
+  windows: {
+    label: "@max-[52rem]/window:sr-only",
+    list: "@max-[52rem]/window:gap-3",
+  },
+} as const;
+
+export function OnboardingSteps({
+  current,
+  platform = "macos",
+}: {
+  current: OnboardingStepId;
+  platform?: "macos" | "windows";
+}) {
+  const compact = COMPACT_STEPS[platform];
   const currentIndex = ONBOARDING_STEPS.findIndex(
     (step) => step.id === current
   );
 
   return (
-    <ol aria-label="Шаги настройки" className="flex items-center gap-5">
+    <ol
+      aria-label="Шаги настройки"
+      className={cn("flex shrink-0 items-center gap-5", compact.list)}
+    >
       {ONBOARDING_STEPS.map((step, index) => {
         let state: StepState = "pending";
         if (index < currentIndex) {
@@ -100,10 +128,10 @@ export function OnboardingSteps({ current }: { current: OnboardingStepId }) {
             <StepMark state={state} />
             <span
               className={cn(
-                "text-sm",
+                "text-sm whitespace-nowrap",
                 state === "current"
                   ? "text-foreground font-medium"
-                  : "text-muted-foreground"
+                  : cn("text-muted-foreground", compact.label)
               )}
             >
               {step.label}
@@ -119,22 +147,29 @@ export function OnboardingSteps({ current }: { current: OnboardingStepId }) {
 }
 
 /*
+ * Side columns of the title bar share the free room equally, so the steps
+ * stay centered; on a narrow window they shrink to what they hold.
+ */
+const TITLEBAR_SIDE = "flex-1 basis-0";
+
+/*
  * Windows chrome: the app tile on the left, the system
  * buttons (46×32) pinned to the top right corner. The steps stay centered
- * between two 160px columns, as on macOS.
+ * between the side columns, as on macOS; the right one keeps room for the
+ * system buttons.
  */
 function WindowsTitlebarContent({ step }: { step: OnboardingStepId }) {
   const actions = useWindowActions();
   return (
     <>
-      <div className="flex w-40 shrink-0 items-center">
+      <div className={cn(TITLEBAR_SIDE, "flex min-w-8 items-center")}>
         <span
           aria-hidden="true"
           className="bg-foreground size-4 rounded-[5px]"
         />
       </div>
-      <OnboardingSteps current={step} />
-      <div className="w-40 shrink-0" />
+      <OnboardingSteps current={step} platform="windows" />
+      <div className={cn(TITLEBAR_SIDE, "min-w-36")} />
       <WindowControlGroup className="absolute top-0 right-0 h-8">
         <WindowControl
           className="h-8"
@@ -180,11 +215,11 @@ export function OnboardingWindow({
           <WindowsTitlebarContent step={step} />
         ) : (
           <>
-            <div className="w-40 shrink-0">
+            <div className={cn(TITLEBAR_SIDE, "min-w-14")}>
               <WindowChromeStart />
             </div>
             <OnboardingSteps current={step} />
-            <div className="w-40 shrink-0" />
+            <div className={TITLEBAR_SIDE} />
           </>
         )}
       </WindowTitlebar>
@@ -196,19 +231,26 @@ export function OnboardingWindow({
   );
 }
 
-/** The 520px column, centered vertically above the footer. */
+/*
+ * The 520px column, centered vertically above the footer. The whole panel
+ * width scrolls (the scrollbar sits at the panel edge, not by the text);
+ * auto margins center the column and drop to zero once it is taller than the
+ * room, so its top never ends up out of reach.
+ */
 export function OnboardingContent({
   className,
   ...props
 }: ComponentProps<"main">) {
   return (
-    <main
-      className={cn(
-        "flex min-h-0 w-[520px] flex-1 flex-col justify-center gap-8",
-        className
-      )}
-      {...props}
-    />
+    <div className="rounded-t-panel flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-6 py-6">
+      <main
+        className={cn(
+          "mx-auto my-auto flex w-full max-w-[520px] flex-col gap-8",
+          className
+        )}
+        {...props}
+      />
+    </div>
   );
 }
 
@@ -225,7 +267,7 @@ export function OnboardingFooter({
   return (
     <footer
       className={cn(
-        "flex h-22 w-[520px] shrink-0 items-center justify-between",
+        "flex h-22 w-full max-w-[568px] shrink-0 items-center justify-between gap-3 px-6",
         className
       )}
     >

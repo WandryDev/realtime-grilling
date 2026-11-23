@@ -85,7 +85,10 @@ const SYSTEM_ACCESS: Record<ScreenAudioAccess, string> = {
   unknown: "macOS не говорит, есть ли доступ: смотрите на индикатор",
 };
 
-/** Red banner on top of the page while the chosen microphone is gone. */
+/**
+ * Red banner on top of the page while the chosen microphone is gone. On a
+ * narrow panel the button moves under the text instead of squeezing it.
+ */
 function MicrophoneDisconnectedBanner({
   missing,
   onUseDefault,
@@ -106,7 +109,7 @@ function MicrophoneDisconnectedBanner({
         {since}Пока его нет, Grill слушает микрофон по умолчанию. Подключите его
         снова или возьмите микрофон по умолчанию
       </AlertDescription>
-      <AlertAction className="*:data-[slot=button]:bg-primary *:data-[slot=button]:text-primary-foreground *:data-[slot=button]:hover:bg-ink-hover *:data-[slot=button]:active:bg-ink-active">
+      <AlertAction className="*:data-[slot=button]:bg-primary *:data-[slot=button]:text-primary-foreground *:data-[slot=button]:hover:bg-ink-hover *:data-[slot=button]:active:bg-ink-active @max-2xl/panel:col-start-2! @max-2xl/panel:row-span-1! @max-2xl/panel:row-start-3! @max-2xl/panel:pt-3">
         <Button onClick={onUseDefault}>Взять микрофон по умолчанию</Button>
       </AlertAction>
     </Alert>
@@ -449,7 +452,7 @@ export function AudioSettings({
         <SettingsRow
           align="start"
           control={
-            <div className="flex w-70 flex-col gap-2.5">
+            <div className="flex w-70 max-w-full flex-col gap-2.5">
               <SettingsSelect
                 className="w-full"
                 defaultValue={values.microphone}
@@ -480,7 +483,7 @@ export function AudioSettings({
         <SettingsRow
           align="start"
           control={
-            <div className="flex w-70 flex-col gap-2.5">
+            <div className="flex w-70 max-w-full flex-col gap-2.5">
               <LevelMeter
                 caption={levelCaption(levels.system, "слышу звук")}
                 label="Уровень системного звука"

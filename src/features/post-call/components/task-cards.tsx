@@ -73,7 +73,7 @@ export function StatusLegend({ className }: { className?: string }) {
   return (
     <ul
       aria-label="Статусы"
-      className={cn("flex items-center gap-3.5", className)}
+      className={cn("flex flex-wrap items-center gap-x-3.5 gap-y-1", className)}
     >
       {statuses.map((status) => (
         <li
@@ -163,7 +163,7 @@ export function FactQuote({
           </Bubble>
         </MessageContent>
       </Message>
-      <div className="flex items-center gap-3.5 pl-[34px]">
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 pl-[34px]">
         <span className="text-muted-foreground font-mono text-xs tabular-nums">
           {time}
         </span>
@@ -241,8 +241,9 @@ export function TaskFact({
 }
 
 /**
- * One field of a card: 168px label on the left, its facts on the right.
- * `highlighted` puts the facts on gray, while a source is open.
+ * One field of a card: 168px label on the left, its facts on the right;
+ * the label over the facts on a narrow panel. `highlighted` puts the facts
+ * on gray, while a source is open.
  */
 export function TaskCardField({
   children,
@@ -256,15 +257,20 @@ export function TaskCardField({
   label: string;
 }) {
   return (
-    <div className={cn("flex gap-6 px-1 py-[18px]", className)}>
-      <dt className="text-muted-foreground w-[168px] shrink-0 text-base leading-6 font-medium">
+    <div
+      className={cn(
+        "flex flex-col gap-2.5 px-1 py-[18px] @2xl/panel:flex-row @2xl/panel:gap-6",
+        className
+      )}
+    >
+      <dt className="text-muted-foreground shrink-0 text-base leading-6 font-medium @2xl/panel:w-[168px]">
         {label}
       </dt>
       <dd
         className={cn(
           "flex min-w-0 flex-1 flex-col gap-3.5",
           highlighted &&
-            "bg-surface -mx-[18px] -mt-4 -mb-[18px] rounded-md px-[18px] pt-4 pb-[18px]"
+            "bg-surface -mx-[18px] -mb-[18px] rounded-md px-[18px] pt-4 pb-[18px] @2xl/panel:-mt-4"
         )}
       >
         {children}
@@ -290,7 +296,7 @@ export function TaskCardHeading({
 }) {
   return (
     <div className={cn("flex flex-col gap-3 px-1 pt-1", className)}>
-      <div className="flex items-baseline justify-between gap-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2
           className="text-2xl font-semibold tracking-tight text-balance"
           id={id}

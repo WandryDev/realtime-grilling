@@ -109,7 +109,7 @@ function NoTaskCards() {
       mediaClassName="bg-surface text-muted-foreground size-16 rounded-full"
       title="Карточек нет"
     >
-      <div className="flex items-center gap-2 pt-1">
+      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
         <LinkButton href={links.summary} size="lg">
           К итогам звонка
         </LinkButton>
@@ -206,7 +206,7 @@ export function TaskCardsScreen({
           title="Карточки задач"
         />
         {empty ? null : (
-          <div className="flex items-center justify-between gap-6">
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
             <Tabs
               defaultValue={controlled ? undefined : topics[0]?.id}
               onValueChange={controlled ? changeTopic : undefined}

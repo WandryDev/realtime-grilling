@@ -12,7 +12,7 @@ import { type DocumentKind, SourceMark } from "./source-mark";
 /*
  * The brief on the project page: the product in a paragraph, modules, the
  * stack, the client's glossary, «Неясно до звонка», and the key documents
- * on the right (300).
+ * on the right (300); on a narrower panel they move under the brief.
  * The demo projects draw the Paper brief; a stored brief maps onto the same
  * shape (`project-data.ts`).
  */
@@ -76,7 +76,12 @@ export function BriefBody({
   className?: string;
 }) {
   return (
-    <div className={cn("flex gap-12", className)}>
+    <div
+      className={cn(
+        "flex flex-col gap-10 @4xl/panel:flex-row @4xl/panel:gap-12",
+        className
+      )}
+    >
       <div className="flex min-w-0 flex-1 flex-col gap-7">
         <section className="flex flex-col gap-2">
           <BriefLabel>Продукт</BriefLabel>
@@ -94,7 +99,7 @@ export function BriefBody({
         {brief.gaps.length > 0 ? <BriefGaps gaps={brief.gaps} /> : null}
       </div>
       <KeyDocuments
-        className="w-75 shrink-0"
+        className="@4xl/panel:w-75 @4xl/panel:shrink-0"
         documents={brief.keyDocuments}
         note={brief.keyDocumentsNote}
       />

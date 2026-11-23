@@ -39,7 +39,7 @@ export function MicReleasedPanel({
       aria-labelledby="mic-released-title"
       className={cn(
         OVERLAY_SURFACE,
-        "flex w-[580px] flex-col gap-4 py-5 pr-5 pl-[22px]",
+        "flex w-[580px] max-w-[calc(100%-2rem)] flex-col gap-4 py-5 pr-5 pl-[22px]",
         appearClassName("rise"),
         className
       )}
@@ -59,7 +59,7 @@ export function MicReleasedPanel({
           <p className="text-muted-foreground text-base">{panel.description}</p>
         </div>
       </div>
-      <div className="flex items-center gap-3 pl-[50px]">
+      <div className="flex flex-wrap items-center gap-3 pl-[50px]">
         {panel.countdown === undefined ? (
           <span aria-hidden="true" className="flex-1" />
         ) : (
@@ -107,7 +107,7 @@ export function FinishingCard({
       aria-labelledby="finishing-title"
       className={cn(
         OVERLAY_SURFACE,
-        "flex w-[460px] flex-col gap-[22px] p-7",
+        "flex w-[460px] max-w-[calc(100%-2rem)] flex-col gap-[22px] p-7",
         appearClassName("pop"),
         className
       )}
@@ -144,7 +144,7 @@ export function FinishingCard({
           size="sm"
           value={finishing.progress}
         />
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {finishing.cancelDisabled ? null : (
             <Button onClick={onCancelFinish} variant="secondary">
               Отменить завершение

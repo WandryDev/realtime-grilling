@@ -20,7 +20,7 @@ import { SourceTile } from "./source-mark";
 /*
  * Home before the first project: a larger empty state (56px tile, 28px
  * title), three cards that explain the steps (not clickable) and the
- * "Создать проект" button.
+ * "Создать проект" button. On a narrow panel the cards stack.
  */
 export function FirstRun({
   className,
@@ -30,7 +30,7 @@ export function FirstRun({
   steps?: typeof FIRST_RUN_STEPS;
 }) {
   return (
-    <Empty className={cn("gap-10 p-12", className)}>
+    <Empty className={cn("gap-10 p-6 @2xl/panel:p-12", className)}>
       <EmptyHeader className="max-w-[520px] gap-3">
         <EmptyMedia
           className="text-foreground size-14 rounded-md [&_svg:not([class*='size-'])]:size-6"
@@ -46,7 +46,7 @@ export function FirstRun({
           звонке будет подсказывать вопросы именно по этому проекту.
         </EmptyDescription>
       </EmptyHeader>
-      <ol className="flex w-[760px] gap-4 text-left text-wrap">
+      <ol className="flex w-full max-w-[760px] flex-col gap-4 text-left text-wrap @2xl/panel:flex-row">
         {steps.map((step, index) => (
           <FirstRunStep
             description={step.description}

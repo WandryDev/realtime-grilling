@@ -204,7 +204,10 @@ function ConnectedDetails({
 }) {
   if (service === "github") {
     return (
-      <ul aria-label="Репозитории" className="flex items-center gap-1.5">
+      <ul
+        aria-label="Репозитории"
+        className="flex flex-wrap items-center gap-1.5"
+      >
         {GITHUB.repos.map((repo) => (
           <li key={repo}>
             <ServiceChip className="font-mono">{repo}</ServiceChip>
@@ -235,7 +238,7 @@ function ConnectedDetails({
     );
   }
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       <ServiceChip>
         <SmallLockIcon />
         Только чтение
@@ -502,7 +505,7 @@ export function IntegrationsSettingsScreen({
     overlay = <DisconnectServiceDialog />;
   } else if (state === "github-disconnected") {
     overlay = (
-      <div className="absolute right-2 bottom-10 left-64 z-10 flex justify-center">
+      <div className="absolute right-2 bottom-10 left-2 z-10 flex justify-center @5xl/window:left-64">
         <ServiceDisconnectedToast />
       </div>
     );

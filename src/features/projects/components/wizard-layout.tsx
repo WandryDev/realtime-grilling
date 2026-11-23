@@ -11,6 +11,8 @@ import { SmallPlusIcon, StepCheckIcon, WorkingRingIcon } from "../icons";
 /*
  * New project wizard inside the main panel: the 280px step rail on the
  * left, the step's form (600px column) and a 72px footer with the actions.
+ * On a narrower panel (`@4xl/panel`) the rail turns into a one-line step
+ * indicator above the form, and the form takes the panel's width.
  *
  *   <WizardLayout steps={<WizardSteps …/>} footer={<WizardFooter …/>}>
  *     <WizardForm>…</WizardForm>
@@ -29,7 +31,7 @@ export function WizardLayout({
 }) {
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col @4xl/panel:flex-row">
         {steps}
         {children}
       </div>
@@ -49,7 +51,10 @@ export interface WizardStepEntry {
 
 /**
  * The step rail. Finished steps are buttons that lead back to them;
- * `onStepClick` reads the step id from `data-step`.
+ * `onStepClick` reads the step id from `data-step`. In the narrow indicator
+ * the steps line up in a row (scrolling sideways if they don't fit) and
+ * their descriptions stay for screen readers only: the form's heading says
+ * what the current step is about.
  */
 export function WizardSteps({
   className,
@@ -66,14 +71,17 @@ export function WizardSteps({
     <nav
       aria-label="Шаги нового проекта"
       className={cn(
-        "border-border flex w-70 shrink-0 flex-col gap-1 border-r px-6 py-10",
+        "border-border flex shrink-0 flex-col gap-1 border-b px-3 py-2 @3xl/panel:px-9",
+        "@4xl/panel:w-70 @4xl/panel:border-r @4xl/panel:border-b-0 @4xl/panel:px-6 @4xl/panel:py-10",
         className
       )}
     >
-      <p className="text-muted-foreground px-3 pb-3 text-xs">{label}</p>
-      <ol className="flex flex-col gap-1">
+      <p className="text-muted-foreground px-3 pb-3 text-xs @max-4xl/panel:sr-only">
+        {label}
+      </p>
+      <ol className="flex gap-1 overflow-x-auto @4xl/panel:flex-col @4xl/panel:overflow-visible">
         {steps.map((step, index) => (
-          <li key={step.id}>
+          <li className="shrink-0" key={step.id}>
             <WizardStep
               description={step.description}
               id={step.id}
@@ -120,7 +128,9 @@ export function WizardStep({
       <span className="flex min-w-0 flex-col gap-0.5 text-left">
         <span
           className={cn(
-            "text-base",
+            "text-base whitespace-nowrap @4xl/panel:whitespace-normal",
+            // The narrowest indicator names only the current step.
+            !isActive && "@max-2xl/panel:sr-only",
             isActive && "text-foreground font-medium",
             state === "done" && "text-foreground",
             state === "pending" && "text-muted-foreground"
@@ -128,16 +138,21 @@ export function WizardStep({
         >
           {title}
         </span>
-        <span className="text-muted-foreground text-xs">{description}</span>
+        <span className="text-muted-foreground text-xs @max-4xl/panel:sr-only">
+          {description}
+        </span>
         <span className="sr-only">, {STEP_STATE_LABEL[state]}</span>
       </span>
     </>
   );
   const rowClassName = cn(
-    "flex w-full gap-3 rounded-sm px-3 py-2.5",
+    "flex w-full items-center gap-2.5 rounded-sm px-3 py-2 @4xl/panel:items-start @4xl/panel:gap-3 @4xl/panel:py-2.5",
     isActive && "bg-surface",
+    !isActive && "@max-2xl/panel:gap-0",
     className
   );
+  // The step's name on hover where the narrow indicator shows only its mark.
+  const hint = isActive ? undefined : title;
 
   if (state === "done") {
     return (
@@ -148,6 +163,7 @@ export function WizardStep({
         )}
         data-step={id}
         onClick={onClick}
+        title={hint}
         type="button"
       >
         {content}
@@ -155,7 +171,11 @@ export function WizardStep({
     );
   }
   return (
-    <div aria-current={isActive ? "step" : undefined} className={rowClassName}>
+    <div
+      aria-current={isActive ? "step" : undefined}
+      className={rowClassName}
+      title={hint}
+    >
       {content}
     </div>
   );
@@ -197,12 +217,16 @@ function WizardStepMark({
   );
 }
 
-/** The form column: 80px sides, 48px top, 28px between blocks. Scrolls when a step is taller than the window. */
+/**
+ * The form column: 80px sides, 48px top, 28px between blocks. Scrolls when
+ * a step is taller than the window. Its blocks are 600 wide, or the
+ * column's width on a narrow panel.
+ */
 export function WizardForm({ className, ...props }: ComponentProps<"main">) {
   return (
     <main
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col gap-7 overflow-y-auto px-20 pt-12 pb-14 *:w-[600px] *:shrink-0",
+        "flex min-h-0 min-w-0 flex-1 flex-col gap-7 overflow-y-auto px-6 pt-12 pb-14 *:w-full *:max-w-[600px] *:shrink-0 @3xl/panel:px-12 @4xl/panel:pr-14 @4xl/panel:pl-20",
         className
       )}
       {...props}

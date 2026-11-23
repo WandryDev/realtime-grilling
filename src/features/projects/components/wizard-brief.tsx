@@ -203,7 +203,7 @@ export function BriefStats({
   stats: typeof BRIEF_READY.stats;
 }) {
   return (
-    <dl className={cn("flex gap-10 pb-4", className)}>
+    <dl className={cn("flex flex-wrap gap-x-10 gap-y-4 pb-4", className)}>
       {stats.map((stat) => (
         <div className="flex flex-col-reverse gap-0.5" key={stat.label}>
           <dt className="text-muted-foreground text-sm">{stat.label}</dt>

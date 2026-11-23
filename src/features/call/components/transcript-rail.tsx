@@ -1,15 +1,19 @@
 "use client";
 
+import { useCallback } from "react";
+
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";
 import { PanelExpandIcon } from "../icons";
+import { useCallColumns } from "./call-window";
 
 /*
  * The transcript collapsed to a 52px rail: the expand button on top, then
- * who is talking right now (orange ring and voice bars) and "Вы".
+ * who is talking right now (orange ring and voice bars) and "Вы". It stays
+ * in a narrow window's row; expanding there opens the transcript's drawer.
  */
 export function TranscriptRail({
   className,
@@ -20,6 +24,12 @@ export function TranscriptRail({
   speaker?: "client" | "me" | null;
 }) {
   const { onToggleTranscript } = useCallActions();
+  const columns = useCallColumns();
+  const expand = useCallback(() => {
+    onToggleTranscript?.();
+    // CallWindow closes it again where the column fits in the row
+    columns?.transcript.toggle();
+  }, [columns, onToggleTranscript]);
 
   return (
     <section
@@ -32,7 +42,7 @@ export function TranscriptRail({
       <Button
         aria-label="Развернуть расшифровку"
         className="bg-background shadow-touch hover:bg-border size-9"
-        onClick={onToggleTranscript}
+        onClick={expand}
         size="icon"
         variant="secondary"
       >

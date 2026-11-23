@@ -43,8 +43,13 @@ export function CallMeta({
   participants: string;
 }) {
   return (
-    <ul className={cn("flex items-center gap-5 text-base", className)}>
-      <li className="flex items-center gap-1.5">
+    <ul
+      className={cn(
+        "flex flex-wrap items-center gap-x-5 gap-y-1.5 text-base",
+        className
+      )}
+    >
+      <li className="flex items-center gap-1.5 whitespace-nowrap">
         <CalendarIcon className="text-muted-foreground size-3.5 shrink-0" />
         {date}
       </li>
@@ -132,7 +137,7 @@ export function SummarySection({
     >
       <header
         className={cn(
-          "flex justify-between gap-4 px-1 pb-1",
+          "flex flex-wrap justify-between gap-x-4 gap-y-1 px-1 pb-1",
           icon ? "items-center" : "items-baseline"
         )}
       >

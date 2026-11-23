@@ -45,6 +45,7 @@ import { cn } from "@/lib/utils";
 import { useCallActions } from "../call-actions";
 import { CheckIcon } from "../icons";
 import type { ContextItem } from "../types";
+import { useCallColumns } from "./call-window";
 
 /**
  * Right column, 320 wide on the window gray: "Контекст" and the cards. A
@@ -117,13 +118,16 @@ export function FindingCard({
   finding: Extract<ContextItem, { kind: "finding" }>;
 }) {
   const { onHideFinding, onShowQuestion } = useCallActions();
+  const columns = useCallColumns();
   const { id, questionId } = finding;
   const hide = useCallback(() => onHideFinding?.(id), [id, onHideFinding]);
   const showQuestion = useCallback(() => {
     if (questionId !== undefined) {
+      // The drawer would cover the question it points at
+      columns?.context.close();
       onShowQuestion?.(questionId);
     }
-  }, [onShowQuestion, questionId]);
+  }, [columns, onShowQuestion, questionId]);
   const canHide = finding.hideable && onHideFinding;
 
   return (

@@ -24,9 +24,12 @@ const dialogBackdropClassName =
 const dialogSurfaceClassName =
   "flex flex-col gap-5 rounded-lg bg-popover p-6 text-popover-foreground shadow-float"
 
-/* Placement and motion of the live popup */
+/*
+ * Placement and motion of the live popup. Never taller than the window: a
+ * long dialog in a small window scrolls inside.
+ */
 const dialogPopupClassName =
-  "fixed top-1/2 left-1/2 z-50 w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 outline-none sm:max-w-[420px] duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:data-open:zoom-in-100 motion-reduce:data-closed:zoom-out-100"
+  "fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] overflow-y-auto -translate-x-1/2 -translate-y-1/2 outline-none sm:max-w-[420px] duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:data-open:zoom-in-100 motion-reduce:data-closed:zoom-out-100"
 
 const dialogHeaderClassName = "flex flex-col gap-2"
 

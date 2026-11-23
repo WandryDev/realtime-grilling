@@ -99,8 +99,8 @@ export function SettingsSection({
 }
 
 /*
- * Title and description left, the control right; the section spaces the
- * rows. `align="start"` for tall controls (select with a meter under it): the
+ * Title and description left, the control right (under them when the row
+ * is too narrow for both, see SettingRow); the section spaces the rows. `align="start"` for tall controls (select with a meter under it): the
  * text lines up with the 40px field. `children` go under the row at full
  * width (the folder path), 12px below.
  */
@@ -137,7 +137,9 @@ export function SettingsRow({
   if (children) {
     return (
       <SettingRow className={cn("flex-col items-stretch gap-3", className)}>
-        <div className="flex items-center gap-6">{content}</div>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          {content}
+        </div>
         {children}
       </SettingRow>
     );
@@ -145,7 +147,7 @@ export function SettingsRow({
 
   return (
     <SettingRow
-      className={cn("gap-6", align === "start" && "items-start", className)}
+      className={cn("gap-x-6", align === "start" && "items-start", className)}
     >
       {content}
     </SettingRow>

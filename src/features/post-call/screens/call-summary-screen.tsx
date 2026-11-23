@@ -326,8 +326,8 @@ export function CallSummaryScreen({
       overlay={
         toast ? (
           // Centered under the panel: it spans 256px from the left to 336px
-          // from the right of the window.
-          <SavedToast className="absolute bottom-8 left-[calc(256px+(100%-592px)/2)] z-10 -translate-x-1/2" />
+          // from the right of the window; narrower, the columns are drawers.
+          <SavedToast className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2 @5xl/window:left-[calc(256px+(100%-264px)/2)] @7xl/window:left-[calc(256px+(100%-592px)/2)]" />
         ) : null
       }
       pendingProposals={pendingProposals}

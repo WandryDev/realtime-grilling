@@ -7,6 +7,8 @@ import { cn } from "cn"
  * Paper "03 Выбор", "В контексте настроек": title and description on the
  * left, the control on the right. Rows are grouped by space, no lines. The
  * row is a group labelled by its title and described by its description.
+ * When the text would get narrower than 16rem beside the control (a narrow
+ * window), the control wraps under the text.
  */
 const SettingRowContext = React.createContext<{
   titleId: string
@@ -47,7 +49,7 @@ function SettingRow({ className, ...props }: React.ComponentProps<"div">) {
         aria-describedby={ids.descriptionId}
         data-slot="setting-row"
         className={cn(
-          "flex items-center gap-4",
+          "flex flex-wrap items-center gap-x-4 gap-y-3",
           className
         )}
         {...props}
@@ -63,7 +65,10 @@ function SettingRowContent({
   return (
     <div
       data-slot="setting-row-content"
-      className={cn("flex min-w-0 flex-1 flex-col gap-0.5", className)}
+      className={cn(
+        "flex min-w-0 flex-[1_1_16rem] flex-col gap-0.5",
+        className
+      )}
       {...props}
     />
   )
@@ -112,7 +117,7 @@ function SettingRowControl({
   return (
     <div
       data-slot="setting-row-control"
-      className={cn("flex shrink-0 items-center", className)}
+      className={cn("flex max-w-full shrink-0 items-center", className)}
       {...props}
     />
   )
