@@ -1,0 +1,18 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000005",
+  "v": 1,
+  "at": 1795000005000,
+  "kind": "refinedTranscript",
+  "body": {
+    "recordingId": "rec-1",
+    "segments": [
+      {
+        "id": "ref-1",
+        "channel": "others",
+        "startMs": 61000,
+        "endMs": 64400,
+        "text": "Если все заняты, звонок встаёт в очередь."
+      }
+    ]
+  }
+}

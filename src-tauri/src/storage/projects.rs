@@ -209,6 +209,7 @@ pub fn create(
         ],
     )?;
     let project = get(connection, &id)?;
+    super::analytics::project(connection, &id, now)?;
     let event = DataChanged::new(Entity::Project, &id, Some(&id), Change::Created);
     Ok((project, vec![event]))
 }
@@ -219,6 +220,10 @@ pub fn update(
     patch: ProjectUpdate,
 ) -> CommandResult<(Project, Vec<DataChanged>)> {
     let current = get(connection, id)?;
+    let renamed = patch
+        .name
+        .as_deref()
+        .is_some_and(|name| name.trim() != current.name);
     let name = match patch.name {
         Some(name) => required(&name, EMPTY_NAME)?,
         None => current.name,
@@ -246,6 +251,9 @@ pub fn update(
               WHERE id = ?1",
             params![id, brief.map(Json), built_at],
         )?;
+    }
+    if renamed {
+        super::analytics::project(connection, id, now_ms())?;
     }
     let project = get(connection, id)?;
     let event = DataChanged::new(Entity::Project, id, Some(id), Change::Updated);

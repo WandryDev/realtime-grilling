@@ -240,6 +240,7 @@ pub fn append_live_as(
         segment,
         now_ms(),
     )?;
+    super::analytics::segment(connection, &added.id, added.created_at)?;
     let event = changed(recording_id, project_id.as_deref(), Change::Created);
     Ok((added, vec![event]))
 }
@@ -282,6 +283,7 @@ pub fn replace_refined(
             })
             .collect::<CommandResult<Vec<_>>>()?;
         recordings::set_transcript_state(connection, recording_id, TranscriptState::Refined)?;
+        super::analytics::refined_transcript(connection, recording_id, now)?;
         Ok(added)
     })?;
     let event = changed(recording_id, project_id.as_deref(), Change::Updated);

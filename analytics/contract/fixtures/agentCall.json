@@ -1,0 +1,44 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000013",
+  "v": 1,
+  "at": 1795000013000,
+  "kind": "agentCall",
+  "body": {
+    "id": "ac-1",
+    "kind": "fastLoop",
+    "recordingId": "rec-1",
+    "callId": null,
+    "projectLocalId": null,
+    "startedAt": 1795000065000,
+    "durationMs": 9800,
+    "outcome": "ok",
+    "inputTokens": 2,
+    "outputTokens": 640,
+    "cacheRead": 31000,
+    "cacheWrite": 1200,
+    "costUsd": 0.042,
+    "utilization": 0.31,
+    "error": null,
+    "model": null,
+    "effort": null,
+    "trigger": "turnEnd",
+    "triggerSegmentId": "seg-2",
+    "windowSegments": [
+      "seg-1",
+      "seg-2"
+    ],
+    "findingsInPrompt": [],
+    "queries": null,
+    "rawReply": "{\"type\":\"result\",\"subtype\":\"success\",\"structured_output\":{\"ops\":[]}}",
+    "reply": {
+      "ops": []
+    },
+    "parts": [
+      {
+        "label": "file",
+        "hash": "9f2c1d6a0b7e4c3d2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b"
+      }
+    ],
+    "candidates": []
+  }
+}

@@ -118,6 +118,7 @@ windows = { version = "0.62", features = [
 windows-core = "0.62"
 
 [dev-dependencies]
+specta-serde = "=0.0.13"
 tempfile = "3"
 # The local HTTP server of the model download tests.
 tokio = { version = "1", features = ["net", "test-util"] }

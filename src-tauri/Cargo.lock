@@ -3935,6 +3935,7 @@ dependencies = [
  "sha2 0.11.1",
  "sonora",
  "specta",
+ "specta-serde",
  "specta-typescript",
  "static_assertions",
  "tauri",

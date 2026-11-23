@@ -1,0 +1,23 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000014",
+  "v": 1,
+  "at": 1795000014000,
+  "kind": "agentCallOp",
+  "body": {
+    "agentCallId": "ac-1",
+    "idx": 1,
+    "op": "question",
+    "body": {
+      "op": "question",
+      "title": "Сколько ждёт звонок в очереди?"
+    },
+    "applied": false,
+    "reason": {
+      "of": "q-0",
+      "reason": "repeat",
+      "score": 0.91
+    },
+    "subjectKind": null,
+    "subjectId": null
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000008",
+  "v": 1,
+  "at": 1795000008000,
+  "kind": "question",
+  "body": {
+    "id": "q-1",
+    "recordingId": "rec-1",
+    "topicId": "topic-1",
+    "text": "Сколько ждёт звонок в очереди?",
+    "description": "Клиент не назвал предел",
+    "cardField": "edgeCases",
+    "gapType": "empty",
+    "priority": 3,
+    "evidence": [
+      {
+        "id": "seg-2",
+        "quote": "звонок встаёт в очередь",
+        "source": "segment"
+      }
+    ],
+    "answerEvidence": null,
+    "status": "open",
+    "pinned": true,
+    "shownAt": 1795000071000,
+    "createdAt": 1795000070000
+  }
+}

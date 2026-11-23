@@ -38,6 +38,26 @@ jobs:
       - name: Build
         run: bun run build
 
+  # The team's analytics: the event contract, the server and the web
+  # (call-analytics). Biome checks them with the rest in `frontend`.
+  analytics:
+    name: Analytics
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run --filter '@grill/*' typecheck
+
+      - name: Test
+        run: bun run --filter '@grill/*' test
+
   # Playwright against the static export in browser mock mode. Not a required
   # check yet: it joins the ruleset after a couple of weeks without flakes.
   e2e:
@@ -135,3 +155,11 @@ jobs:
       - name: Bindings up to date
         if: matrix.platform == 'macos-latest'
         run: git diff --exit-code src/bindings.ts
+
+      # `cargo test` exports the analytics contract too (generated.ts and a
+      # sample of each event); a change or a new file means it is stale.
+      - name: Analytics contract up to date
+        if: matrix.platform == 'macos-latest'
+        run: |
+          git status --porcelain analytics/contract
+          test -z "$(git status --porcelain analytics/contract)"

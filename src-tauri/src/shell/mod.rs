@@ -82,6 +82,20 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     let storage_failed = stored.is_none();
     let settings = stored.unwrap_or_else(settings::defaults);
 
+    // The team's analytics (call-analytics design.md, decisions 6–7): only
+    // a build with the server's address sends, and nothing of it shows.
+    if let (Some(url), Some(dir), None) =
+        (crate::analytics::url(), storage.data_dir(), storage.error())
+    {
+        match crate::analytics::sender::Sender::open(&url, &dir.join(crate::storage::DATABASE_FILE))
+        {
+            Ok(sender) => {
+                let task = tauri::async_runtime::spawn(sender.run());
+                app.manage(AnalyticsSender(task));
+            }
+            Err(error) => eprintln!("grill: the analytics are not sent: {error}"),
+        }
+    }
     app.manage(storage);
     // Connectors (connectors-outline): their secrets in Keychain / Credential
     // Manager. The connections are checked in the background a few seconds
@@ -300,6 +314,9 @@ fn forget_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     }
 }
 
+/// The task that sends the analytics queue, while the app runs.
+struct AnalyticsSender(tauri::async_runtime::JoinHandle<()>);
+
 /// What the app stops on its way out: on `RunEvent::Exit`, and before the
 /// Windows update installer ends the process without one.
 pub fn shutdown<R: Runtime>(app: &AppHandle<R>) {
@@ -319,6 +336,10 @@ pub fn shutdown<R: Runtime>(app: &AppHandle<R>) {
     }
     crate::recording::stop_on_exit(app);
     crate::audio::mic_watch::stop(app);
+    // The queue stays in the database for the next start.
+    if let Some(sender) = app.try_state::<AnalyticsSender>() {
+        sender.0.abort();
+    }
     if let Some(cache) = app.try_state::<crate::records::audio::AudioCache>() {
         cache.clear();
     }

@@ -2,7 +2,8 @@
 //! decision 5): the audio of a call older than `audioRetention` goes as with
 //! «Удалить запись» (the transcript and the summary stay), the transcript of
 //! a call older than `transcriptRetention` goes too (the summary, cards and
-//! questions stay; `transcript_deleted_at` says so).
+//! questions stay; `transcript_deleted_at` says so). The agent's journal
+//! keeps its calls, but not their texts (`journal::clear_texts`).
 //!
 //! A recording's age is its call's end, for a recording without a call its
 //! own end. A recording being written, or of a call that is not finished, is
@@ -14,7 +15,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use rusqlite::{Connection, params};
 
-use super::{Storage, now_ms, recordings, settings};
+use super::{Storage, journal, now_ms, recordings, settings};
 use crate::{
     error::CommandResult,
     events::{Change, DataChanged, Entity, EventSink},
@@ -103,6 +104,8 @@ pub fn purge_at(connection: &Connection, now: i64) -> CommandResult<(Purged, Vec
                   WHERE id = ?1",
                 params![id, now, now_ms()],
             )?;
+            // The journal's copies of the transcript go with it.
+            journal::clear_texts(connection, &id)?;
             purged.transcripts.push(id);
         }
     }

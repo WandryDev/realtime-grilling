@@ -38,6 +38,7 @@ use crate::{
             OutputPhase, Usage,
         },
         discover::SearchEnv,
+        fast_loop::scheduler::{outcome_of, with_usage},
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
@@ -47,7 +48,10 @@ use crate::{
         builds::{BriefBuilds, BuildSlot},
     },
     storage::{
-        Storage, people,
+        Storage,
+        call_state::{AgentCallInput, AgentCallKind, AgentCallOutcome},
+        journal::{self, PromptPart},
+        new_id, now_ms, people,
         projects::{self, BriefState},
         sources::{self, SourceStatus},
     },
@@ -313,30 +317,66 @@ async fn attempt<H: BriefHost>(
     let cancel = slot
         .take_cancel()
         .ok_or_else(|| failed("Сборка брифа уже запускалась"))?;
+    // The journal of the team's analytics (call-analytics design.md,
+    // decision 2).
+    let mut record = AgentCallInput {
+        id: Some(new_id()),
+        kind: AgentCallKind::Brief,
+        project_id: Some(slot.project_id().to_owned()),
+        started_at: now_ms(),
+        model: Some(MODEL.to_owned()),
+        effort: Some(EFFORT.to_owned()),
+        prompt: vec![
+            PromptPart::new("file", PROMPT),
+            PromptPart::new("message", message.text.as_str()),
+        ],
+        ..AgentCallInput::default()
+    };
+    let started = std::time::Instant::now();
     let reply = agent.run(request, cancel).await;
     drop(prompt);
-    let reply = match reply {
-        Ok(reply) => reply,
-        Err(_) if slot.is_cancelled() => return Err(End::Cancelled),
-        Err(AgentError::Cancelled) => return Err(End::Cancelled),
-        Err(error) => return Err(failed(error.to_string())),
-    };
-    log_cost(slot.project_id(), &reply.usage, &message);
-    unless_cancelled(slot)?;
+    record.duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    match &reply {
+        Ok(reply) => {
+            with_usage(&mut record, &reply.usage);
+            record.outcome = Some(AgentCallOutcome::Ok);
+            record.raw_reply = Some(reply.raw.clone());
+            record.reply = Some(reply.patch.clone());
+        }
+        Err(error) => {
+            record.outcome = Some(outcome_of(error));
+            record.error = Some(error.to_string());
+        }
+    }
+    // The rest of the build, then the call into the journal: the build
+    // never waits on the database for it.
+    let outcome: Result<(), End> = async {
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(_) if slot.is_cancelled() => return Err(End::Cancelled),
+            Err(AgentError::Cancelled) => return Err(End::Cancelled),
+            Err(error) => return Err(failed(error.to_string())),
+        };
+        log_cost(slot.project_id(), &reply.usage, &message);
+        unless_cancelled(slot)?;
 
-    stages.advance(LAST_STAGE);
-    let brief = brief_of(reply.patch, &message).map_err(End::Failed)?;
-    let id = slot.project_id().to_owned();
-    let (fingerprint, truncated) = (inputs.fingerprint, message.truncated);
-    let cancelled = slot.cancel_flag();
-    let saved = storage
-        .write(host, move |db| {
-            save(db, &id, &cancelled, brief, &fingerprint, truncated)
-                .map(|saved| (saved, Vec::new()))
-        })
-        .await
-        .map_err(|error| failed(error.to_string()))?;
-    if saved { Ok(()) } else { Err(End::Cancelled) }
+        stages.advance(LAST_STAGE);
+        let brief = brief_of(reply.patch, &message).map_err(End::Failed)?;
+        let id = slot.project_id().to_owned();
+        let (fingerprint, truncated) = (inputs.fingerprint, message.truncated);
+        let cancelled = slot.cancel_flag();
+        let saved = storage
+            .write(host, move |db| {
+                save(db, &id, &cancelled, brief, &fingerprint, truncated)
+                    .map(|saved| (saved, Vec::new()))
+            })
+            .await
+            .map_err(|error| failed(error.to_string()))?;
+        if saved { Ok(()) } else { Err(End::Cancelled) }
+    }
+    .await;
+    journal::record(Some(storage), record).await;
+    outcome
 }
 
 /// The agent call of a build: the rules in `prompt`, `message` on stdin,
@@ -405,7 +445,7 @@ fn save(
 }
 
 /// The cost and the time of a build, for tuning the budget (design.md,
-/// risks): not in `agent_calls`, which keeps the recordings' calls.
+/// risks), in the app's log besides the journal.
 pub fn log_cost(project_id: &str, usage: &Usage, message: &input::BriefMessage) {
     let cost = usage
         .cost_usd

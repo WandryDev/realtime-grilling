@@ -5,6 +5,7 @@
 //! database can't be opened or migrated the app still starts: the storage is
 //! an `Err` and every data command answers `Storage`.
 
+pub mod analytics;
 pub mod call_records;
 pub mod call_search;
 pub mod call_state;
@@ -12,6 +13,7 @@ pub mod calls;
 pub mod connectors;
 pub mod context_findings;
 pub mod data;
+pub mod journal;
 pub mod json;
 pub mod people;
 pub mod projects;
@@ -80,6 +82,8 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../migrations/0010_context_findings.sql")).foreign_key_check(),
     M::up(include_str!("../../migrations/0011_settings_real.sql")),
     M::up(include_str!("../../migrations/0012_microphone_macbook.sql")),
+    // Rebuilds `agent_calls`: runs with the foreign keys off.
+    M::up(include_str!("../../migrations/0013_analytics_journal.sql")).foreign_key_check(),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
@@ -260,6 +264,12 @@ fn open_dir(dir: &Path, recordings: &LocalStore) -> Result<Db, String> {
     let connection = fs::create_dir_all(dir)
         .map_err(|error| format!("Не удалось создать папку данных {}: {error}", dir.display()))
         .and_then(|()| open(&dir.join(DATABASE_FILE), &MIGRATIONS))?;
+    // Before the tidying: the calls it finishes are sent too.
+    if crate::analytics::url().is_some()
+        && let Err(error) = analytics::enable_on(&connection)
+    {
+        eprintln!("grill: the analytics queue is off: {error}");
+    }
     tidy_recordings(&connection, dir, recordings);
     // After the recordings: a call ends when its last recording did.
     if let Err(error) = calls::finish_stale(&connection, now_ms()) {

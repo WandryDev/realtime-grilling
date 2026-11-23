@@ -170,13 +170,16 @@ fn a_new_topic_needs_its_quote_in_a_client_phrase() {
         }))
     );
     // «Цитата не найдена».
-    assert!(
+    assert_eq!(
         check(
             &new(&segments[2].id, "у каждого свой номер"),
             &assembled,
             &state
-        )
-        .is_err()
+        ),
+        Err(TopicRejectReason::QuoteNotFound {
+            segment_id: segments[2].id.clone(),
+            quote: "у каждого свой номер".to_owned(),
+        })
     );
     // The manager's words, or a phrase out of the window, are no ground.
     assert!(
@@ -210,7 +213,12 @@ fn a_switch_goes_to_another_known_topic() {
         segment_id: segments[2].id.clone(),
         quote: "сидят все под одним номером".to_owned(),
     };
-    assert!(check(&switch("unknown"), &assembled, &state).is_err());
+    assert_eq!(
+        check(&switch("unknown"), &assembled, &state),
+        Err(TopicRejectReason::UnknownTopic {
+            topic_id: "unknown".to_owned()
+        })
+    );
     // To the current topic: nothing to do.
     assert_eq!(check(&switch(&current), &assembled, &state), Ok(None));
 }
@@ -223,4 +231,15 @@ fn the_prompt_file_is_not_a_recordings_prefix() {
     let removed = crate::agent::fast_loop::assembly::sweep_prompts(dir.path(), |_| false).unwrap();
     assert_eq!(removed, 0);
     assert!(path.is_file());
+}
+
+/// Call-analytics task 2.1: the message stays byte for byte.
+#[test]
+fn the_message_snapshot() {
+    let connection = database();
+    let (id, _) = call(&connection);
+    crate::agent::fast_loop::testing::assert_snapshot(
+        "topic_check_message.txt",
+        &assemble(&connection, &id, 12, WINDOW).unwrap().user_message,
+    );
 }

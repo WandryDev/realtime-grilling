@@ -256,7 +256,7 @@ fn a_recording_with_an_outline_source_gets_a_finding() {
         // The index is built before the client's words count.
         rig.until("the search", |_| slow_loop.search(&rig.recording).is_some())
             .await;
-        slow_loop.phrase(&rig.recording, TranscriptChannel::Others, CLIENT);
+        slow_loop.phrase(&rig.recording, TranscriptChannel::Others, CLIENT, None);
         rig.until("a recorded call", |rig| !rig.slow_calls().is_empty())
             .await;
 
@@ -344,7 +344,7 @@ fn the_apps_exit_kills_the_slow_loops_cli() {
         slow_loop.live_started(&rig.recording);
         rig.until("the search", |_| slow_loop.search(&rig.recording).is_some())
             .await;
-        slow_loop.phrase(&rig.recording, TranscriptChannel::Others, CLIENT);
+        slow_loop.phrase(&rig.recording, TranscriptChannel::Others, CLIENT, None);
         let pid_file = rig.dir.path().join("child.pid");
         rig.until("the CLI's child", |_| pid_file.exists()).await;
         let child: i32 = fs::read_to_string(&pid_file)

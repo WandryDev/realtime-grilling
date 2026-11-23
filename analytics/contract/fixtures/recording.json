@@ -1,0 +1,13 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000003",
+  "v": 1,
+  "at": 1795000003000,
+  "kind": "recording",
+  "body": {
+    "id": "rec-1",
+    "callId": "call-1",
+    "status": "finished",
+    "startedAt": 1795000000000,
+    "endedAt": 1795004440000
+  }
+}

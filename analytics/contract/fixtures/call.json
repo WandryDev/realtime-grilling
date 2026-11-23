@@ -1,0 +1,14 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000002",
+  "v": 1,
+  "at": 1795000002000,
+  "kind": "call",
+  "body": {
+    "id": "call-1",
+    "projectLocalId": "proj-1",
+    "title": "KYC для юрлиц",
+    "status": "finished",
+    "startedAt": 1795000000000,
+    "endedAt": 1795004440000
+  }
+}

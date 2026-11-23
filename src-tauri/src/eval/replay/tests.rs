@@ -167,7 +167,7 @@ impl Agent for RealWait {
         });
         Box::pin(async move {
             let reply = tokio::select! {
-                _ = waited => Ok(AgentReply { patch: json!({ "ops": [] }), usage: Usage::default() }),
+                _ = waited => Ok(AgentReply::new(json!({ "ops": [] }), Usage::default())),
                 _ = cancel => Err(AgentError::Cancelled),
             };
             self.took.lock().unwrap().push(started.elapsed());
@@ -553,12 +553,7 @@ impl Agent for AnswersTheUrgent {
             }] })
         };
         calls.push(request.user_message);
-        Box::pin(async move {
-            Ok(AgentReply {
-                patch,
-                usage: Usage::default(),
-            })
-        })
+        Box::pin(async move { Ok(AgentReply::new(patch, Usage::default())) })
     }
 }
 

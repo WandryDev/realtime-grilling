@@ -98,9 +98,25 @@ impl Rig {
         let segment = self
             .host
             .db(|db| say(db, &self.recording, channel, start_ms, text));
-        self.fast_loop.phrase(&self.recording, channel);
+        self.fast_loop
+            .phrase_with_id(&self.recording, channel, &segment.id);
         settle().await;
         segment
+    }
+
+    /// Each fast loop call's trigger and the phrase it names, in order.
+    fn triggers(&self) -> Vec<(String, Option<String>)> {
+        self.host.db(|db| {
+            db.prepare(
+                "SELECT trigger_reason, trigger_segment_id FROM agent_calls
+                  WHERE recording_id = ?1 AND kind = 'fastLoop' ORDER BY started_at, id",
+            )
+            .unwrap()
+            .query_map([&self.recording], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        })
     }
 
     /// Until `seconds` after the start.
@@ -721,7 +737,7 @@ fn found(rig: &Rig, quote: &str, at: i64) -> String {
 async fn a_finding_between_two_calls_leaves_the_prefix_alone() {
     let rig = Rig::new([]).await;
     rig.say(OTHERS, "Первая").await;
-    found(&rig, "В смене три оператора", 1_000);
+    let finding = found(&rig, "В смене три оператора", 1_000);
     rig.until(25).await;
     rig.say(OTHERS, "Вторая").await;
     let (first, second) = (rig.agent.received(0), rig.agent.received(1));
@@ -743,6 +759,20 @@ async fn a_finding_between_two_calls_leaves_the_prefix_alone() {
         ),
         "{message}"
     );
+    // The journal knows which findings each call was given.
+    rig.until(40).await;
+    let given: Vec<String> = rig.host.db(|db| {
+        db.prepare(
+            "SELECT findings_in_prompt FROM agent_calls
+              WHERE recording_id = ?1 AND kind = 'fastLoop' ORDER BY started_at",
+        )
+        .unwrap()
+        .query_map([&rig.recording], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    });
+    assert_eq!(given, ["[]".to_owned(), format!("[\"{finding}\"]")]);
 }
 
 /// Spec «Убрать» in the fast loop: a finding hidden during the call makes
@@ -1370,6 +1400,24 @@ async fn a_new_topic_without_its_quote_changes_nothing() {
     let check = &topic_check_calls(&rig)[0];
     assert_eq!(check.outcome, AgentCallOutcome::Empty);
     assert_eq!(check.rejected[0]["op"], json!("topic"));
+    assert_eq!(check.rejected[0]["reason"], json!("quoteNotFound"));
+    // The journal keeps the decision and why it didn't hold.
+    let ops = journal_ops(&rig, &check.id);
+    assert_eq!(
+        ops,
+        [(
+            "new".to_owned(),
+            false,
+            Some("quoteNotFound".to_owned()),
+            None,
+            None
+        )]
+    );
+    let (labels, _) = journal_prompt(&rig, &check.id);
+    assert_eq!(
+        labels,
+        ["file", "topics", "current", "transcript", "output"]
+    );
 
     move_host_clock(&rig, 3);
     client_says(&rig, "Операторы отвечают по очереди").await;
@@ -1406,4 +1454,313 @@ async fn a_failed_topic_check_does_not_stop_the_loop() {
         AgentCallOutcome::Invalid
     );
     assert_eq!(rig.state(), AgentLoopState::Idle);
+}
+
+/* Причина вызова (call-analytics task 2.2) */
+
+/// «Клиент закончил реплику»: the first call is `firstPhrase`, the next
+/// after the manager's answer `turnEnd`; each names the client's last
+/// phrase, not the manager's.
+#[tokio::test(start_paused = true)]
+async fn a_finished_turn_is_the_trigger() {
+    let rig = Rig::new([]).await;
+    let first = rig.say(OTHERS, "Первая фраза клиента").await;
+    rig.until(7).await;
+    let second = rig.say(OTHERS, "Вторая фраза клиента").await;
+    rig.until(8).await;
+    rig.say(ME, "Понял, а сколько у вас операторов?").await;
+    rig.until(15).await;
+    assert_eq!(
+        rig.triggers(),
+        [
+            ("firstPhrase".to_owned(), Some(first.id)),
+            ("turnEnd".to_owned(), Some(second.id)),
+        ]
+    );
+}
+
+/// «Клиент продолжает говорить»: the call the interval starts says so.
+#[tokio::test(start_paused = true)]
+async fn the_interval_is_the_trigger() {
+    let rig = Rig::new([]).await;
+    rig.say(OTHERS, "Первая фраза клиента").await;
+    let mut last = None;
+    for second in [8, 12, 16] {
+        rig.until(second).await;
+        last = Some(rig.say(OTHERS, "И ещё про очередь").await);
+    }
+    rig.until(30).await;
+    let triggers = rig.triggers();
+    assert_eq!(triggers.len(), 2);
+    assert_eq!(triggers[1], ("interval".to_owned(), Some(last.unwrap().id)));
+}
+
+/// «Повтор после ошибки»: the timer's call is `retry` and names the
+/// client's last phrase by then; «Повторить» is `manualRetry`.
+#[tokio::test(start_paused = true)]
+async fn a_retry_is_the_trigger() {
+    let rig = Rig::new([
+        Step::fail(AgentError::Process("boom".to_owned())),
+        Step::fail(AgentError::Process("boom".to_owned())),
+    ])
+    .await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(21).await;
+    let later = rig.say(OTHERS, "Фраза до повтора").await;
+    // The timer's call ran 35–40 s and failed too.
+    rig.until(45).await;
+    rig.fast_loop.retry(&rig.recording).unwrap();
+    rig.until(55).await;
+    let triggers = rig.triggers();
+    assert_eq!(triggers.len(), 3, "{triggers:?}");
+    assert_eq!(triggers[1], ("retry".to_owned(), Some(later.id.clone())));
+    assert_eq!(triggers[2], ("manualRetry".to_owned(), Some(later.id)));
+}
+
+/// The window of the call is the phrases that went into its prompt.
+#[tokio::test(start_paused = true)]
+async fn the_window_is_journaled() {
+    let rig = Rig::new([]).await;
+    let client = rig.say(OTHERS, "Двести звонков в день").await;
+    rig.until(10).await;
+    let window: String = rig.host.db(|db| {
+        db.query_row(
+            "SELECT window_segments FROM agent_calls WHERE recording_id = ?1",
+            [&rig.recording],
+            |row| row.get(0),
+        )
+        .unwrap()
+    });
+    assert_eq!(window, format!("[\"{}\"]", client.id));
+}
+
+/* Журнал вызова (call-analytics task 2.3) */
+
+/// An operation of the journal: its kind, whether it was applied, the
+/// reason's tag and what it created or changed.
+type JournalOp = (String, bool, Option<String>, Option<String>, Option<String>);
+
+fn journal_ops(rig: &Rig, call_id: &str) -> Vec<JournalOp> {
+    rig.host.db(|db| {
+        db.prepare(
+            "SELECT op, applied, json_extract(reason, '$.reason'), subject_kind, subject_id
+               FROM agent_call_ops WHERE agent_call_id = ?1 ORDER BY idx",
+        )
+        .unwrap()
+        .query_map([call_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get::<_, i64>(1)? == 1,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    })
+}
+
+/// The labels of a call's prompt and its text, as the journal keeps them.
+fn journal_prompt(rig: &Rig, call_id: &str) -> (Vec<String>, String) {
+    rig.host.db(|db| {
+        let parts: Vec<(String, String)> = db
+            .prepare(
+                "SELECT p.label, t.text FROM agent_call_parts p
+                   JOIN prompt_parts t ON t.hash = p.hash
+                  WHERE p.agent_call_id = ?1 ORDER BY p.ord",
+            )
+            .unwrap()
+            .query_map([call_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let labels = parts.iter().map(|(label, _)| label.clone()).collect();
+        let text = parts.into_iter().skip(1).map(|(_, text)| text).collect();
+        (labels, text)
+    })
+}
+
+fn raw_reply(rig: &Rig, call_id: &str) -> Option<String> {
+    rig.host.db(|db| {
+        db.query_row(
+            "SELECT raw_reply FROM agent_calls WHERE id = ?1",
+            [call_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    })
+}
+
+/// Spec «Вызов быстрого контура» and «Два вопроса, один отклонён»: the
+/// journal has the prompt the CLI got, the raw reply, the first question
+/// applied with the question it created, the second rejected as a repeat
+/// of it.
+#[tokio::test(start_paused = true)]
+async fn two_questions_one_rejected_as_a_repeat() {
+    let rig = Rig::new([]).await;
+    let segment = store(&rig, "Все операторы бывают заняты");
+    let mut patch = applied_patch(&segment, "все операторы бывают заняты");
+    let repeat = patch["ops"][2].clone();
+    patch["ops"].as_array_mut().unwrap().push(repeat);
+    rig.agent.push(Step::patch(patch));
+    rig.fast_loop
+        .phrase_with_id(&rig.recording, OTHERS, &segment.id);
+    settle().await;
+    rig.until(10).await;
+
+    let call = rig.calls().pop().unwrap();
+    let question = rig
+        .host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap()
+        .questions[0]
+        .id
+        .clone();
+    let ops = journal_ops(&rig, &call.id);
+    assert_eq!(ops.len(), 4);
+    assert_eq!(
+        ops[2],
+        (
+            "question".to_owned(),
+            true,
+            None,
+            Some("question".to_owned()),
+            Some(question.clone())
+        )
+    );
+    assert_eq!(
+        (ops[3].1, ops[3].2.as_deref()),
+        (false, Some("repeat")),
+        "{ops:?}"
+    );
+    assert_eq!(ops[0].3.as_deref(), Some("topic"));
+    assert_eq!(ops[1].3.as_deref(), Some("card"));
+
+    // The prompt in the journal is what the CLI got.
+    let (labels, message) = journal_prompt(&rig, &call.id);
+    assert_eq!(labels[0], "file");
+    assert_eq!(message, rig.agent.received(0).request.user_message);
+    let prompt = rig.agent.received(0).prompt;
+    let file: String = rig.host.db(|db| {
+        db.query_row(
+            "SELECT t.text FROM agent_call_parts p JOIN prompt_parts t ON t.hash = p.hash
+              WHERE p.agent_call_id = ?1 AND p.label = 'file'",
+            [&call.id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    });
+    assert_eq!(file.as_bytes(), prompt.as_slice());
+    assert!(
+        raw_reply(&rig, &call.id)
+            .unwrap()
+            .contains("structured_output")
+    );
+}
+
+/// Spec «Вопрос и ответ»: a question created by one call and answered by
+/// the next has both in `agent_call_ops`.
+#[tokio::test(start_paused = true)]
+async fn a_question_and_its_answer_name_their_calls() {
+    let rig = Rig::new([]).await;
+    let segment = store(&rig, "Все операторы бывают заняты");
+    rig.agent.push(Step::patch(applied_patch(
+        &segment,
+        "все операторы бывают заняты",
+    )));
+    rig.fast_loop
+        .phrase_with_id(&rig.recording, OTHERS, &segment.id);
+    settle().await;
+    rig.until(10).await;
+    let question = rig
+        .host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap()
+        .questions[0]
+        .id
+        .clone();
+    let answer = store(&rig, "Тогда звонок встаёт в очередь на пять минут");
+    rig.agent.push(Step::patch(json!({ "ops": [{
+        "op": "answered",
+        "questionId": question,
+        "evidence": [{ "source": "segment", "id": answer.id, "quote": "звонок встаёт в очередь" }]
+    }] })));
+    rig.fast_loop
+        .phrase_with_id(&rig.recording, OTHERS, &answer.id);
+    settle().await;
+    rig.until(40).await;
+
+    let origins: Vec<(String, String)> = rig.host.db(|db| {
+        db.prepare(
+            "SELECT o.op, c.trigger_segment_id FROM agent_call_ops o
+               JOIN agent_calls c ON c.id = o.agent_call_id
+              WHERE o.subject_id = ?1 AND o.applied = 1 ORDER BY c.started_at",
+        )
+        .unwrap()
+        .query_map([&question], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    });
+    assert_eq!(
+        origins,
+        [
+            ("question".to_owned(), segment.id),
+            ("answered".to_owned(), answer.id),
+        ]
+    );
+}
+
+/// Spec «Таймаут»: the call that didn't answer keeps its whole prompt and
+/// no reply.
+#[tokio::test(start_paused = true)]
+async fn a_timeout_keeps_the_prompt_without_a_reply() {
+    let rig = Rig::new([Step::empty().after(Duration::MAX)]).await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(33).await;
+    let call = rig.calls().pop().unwrap();
+    assert_eq!(call.outcome, AgentCallOutcome::Timeout);
+    let (labels, message) = journal_prompt(&rig, &call.id);
+    assert_eq!(labels.first().map(String::as_str), Some("file"));
+    assert_eq!(message, rig.agent.received(0).request.user_message);
+    assert_eq!(raw_reply(&rig, &call.id), None);
+    assert!(journal_ops(&rig, &call.id).is_empty());
+}
+
+/// A call the end of the live pass cancelled is journaled as `cancelled`
+/// with the prompt that went out.
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_call_keeps_its_prompt() {
+    let rig = Rig::new([]).await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.fast_loop.live_finished(&rig.recording);
+    settle().await;
+    let call = rig.calls().pop().unwrap();
+    assert_eq!(call.outcome, AgentCallOutcome::Cancelled);
+    let (_, message) = journal_prompt(&rig, &call.id);
+    assert_eq!(message, rig.agent.received(0).request.user_message);
+}
+
+/// Call-analytics spec «Сервер недоступен»: with the analytics queue on
+/// (and no server) the calls start when they did without it.
+#[tokio::test(start_paused = true)]
+async fn the_queue_leaves_the_calls_on_time() {
+    let rig = Rig::new([]).await;
+    rig.host
+        .db(|db| crate::storage::analytics::enable_on(db).unwrap());
+    rig.say(OTHERS, "Первая фраза клиента").await;
+    rig.until(7).await;
+    rig.say(OTHERS, "Вторая фраза клиента").await;
+    rig.until(8).await;
+    rig.say(ME, "Понял, а сколько у вас операторов?").await;
+    assert_eq!(rig.starts(), [0, 8]);
+    let queued: i64 = rig.host.db(|db| {
+        db.query_row("SELECT count(*) FROM analytics_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    });
+    assert!(queued > 0, "the calls were queued");
 }

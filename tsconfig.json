@@ -33,5 +33,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "src-tauri", "spikes"]
+  "exclude": ["node_modules", "src-tauri", "spikes", "analytics", "packages"]
 }

@@ -39,6 +39,7 @@ use std::{
 };
 
 use rusqlite::Connection;
+use serde_json::Value;
 use tokio::{
     runtime::Handle,
     sync::{Semaphore, mpsc, oneshot},
@@ -51,7 +52,8 @@ use super::{
     events::{AgentLoopState, AgentStatus},
     patch::{self, Patch},
     similarity::{QuestionSimilarity, TrigramSimilarity},
-    topic_check, validate,
+    topic_check,
+    validate::{self, Validation},
 };
 use crate::{
     agent::{
@@ -64,9 +66,11 @@ use crate::{
     error::{CommandError, CommandResult},
     storage::{
         call_state::{
-            self, AgentCallInput, AgentCallKind, AgentCallOutcome, ValidatedOp, ValidatedPatch,
+            self, AgentCallInput, AgentCallKind, AgentCallOutcome, AppliedPatch, CallTrigger,
+            ValidatedOp, ValidatedPatch,
         },
-        now_ms, recordings, settings,
+        journal::{CallOp, PromptPart},
+        new_id, now_ms, recordings, settings,
         transcript::{self, TranscriptChannel, TranscriptPass},
     },
 };
@@ -175,7 +179,8 @@ const DEFAULT_INTERVAL: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 enum Message {
-    Phrase(TranscriptChannel),
+    /// A live phrase and its segment's id.
+    Phrase(TranscriptChannel, Option<String>),
     /// `agent_retry`.
     Retry,
     /// A status check found the agent ready.
@@ -305,8 +310,19 @@ impl FastLoop {
     }
 
     /// A live phrase of `recording_id` was stored.
+    #[cfg(test)]
     pub fn phrase(&self, recording_id: &str, channel: TranscriptChannel) {
-        self.send(recording_id, Message::Phrase(channel));
+        self.send(recording_id, Message::Phrase(channel, None));
+    }
+
+    /// A live phrase of `recording_id` was stored as segment `segment_id`:
+    /// the last of «Остальные» is the trigger of the next call
+    /// (call-analytics design.md, decision 3).
+    pub fn phrase_with_id(&self, recording_id: &str, channel: TranscriptChannel, segment_id: &str) {
+        self.send(
+            recording_id,
+            Message::Phrase(channel, Some(segment_id.to_owned())),
+        );
     }
 
     /// The live pass of `recording_id` is over: the running call, if any,
@@ -517,6 +533,8 @@ impl FastLoop {
                     interval: DEFAULT_INTERVAL,
                     retry_at: None,
                     halt: None,
+                    last_client_segment: None,
+                    after_halt: false,
                 };
                 scheduler.run(receiver).await;
             }
@@ -660,6 +678,17 @@ struct Scheduler {
     interval: Duration,
     retry_at: Option<Instant>,
     halt: Option<Halt>,
+    /// The last phrase of «Остальные»: the next call's trigger.
+    last_client_segment: Option<String>,
+    /// A halt ended since the last start: the next call says so.
+    after_halt: bool,
+}
+
+/// Why a call started and the phrase that led to it, for the journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Cause {
+    trigger: CallTrigger,
+    segment_id: Option<String>,
 }
 
 /// Waits until `at`; forever without it.
@@ -697,18 +726,21 @@ impl Scheduler {
             let due_at = self.due_at().filter(|_| idle);
             tokio::select! {
                 message = messages.recv(), if !stopping => match message {
-                    Some(Message::Phrase(channel)) => self.phrase(channel).await,
+                    Some(Message::Phrase(channel, segment_id)) => {
+                        self.phrase(channel, segment_id).await;
+                    }
                     Some(Message::Retry) => {
                         if call.is_none() {
                             // The user asks for a call: whatever stopped
                             // them is tried again.
                             self.call.fast_loop.0.halt.clear();
-                            call = Some(self.start_call());
+                            call = Some(self.start_call(CallTrigger::ManualRetry));
                         }
                     }
                     Some(Message::Resume) => {
                         if self.halt == Some(Halt::NeedsLogin) {
                             self.halt = None;
+                            self.after_halt = true;
                             // The phrases of the halt wait for the next one.
                             self.client_since_last = false;
                             self.turn_ended = false;
@@ -729,16 +761,18 @@ impl Scheduler {
                 }
                 () = sleep_until(retry_at) => {
                     if !self.adopt_halt() {
-                        call = Some(self.start_call());
+                        call = Some(self.start_call(CallTrigger::Retry));
                     }
                 }
                 () = sleep_until(due_at) => {
                     if !self.adopt_halt() {
-                        call = Some(self.start_call());
+                        let trigger = self.due_trigger();
+                        call = Some(self.start_call(trigger));
                     }
                 }
                 () = sleep_until(resets_at) => {
                     self.halt = None;
+                    self.after_halt = true;
                     self.client_since_last = false;
                     self.turn_ended = false;
                     self.report(AgentLoopState::Idle);
@@ -781,10 +815,13 @@ impl Scheduler {
 
     /// A phrase came: one of «Остальные» makes a call due (and reads the
     /// settings again); one of «Я» after it ends the client's turn.
-    async fn phrase(&mut self, channel: TranscriptChannel) {
+    async fn phrase(&mut self, channel: TranscriptChannel, segment_id: Option<String>) {
         if channel == TranscriptChannel::Me {
             self.turn_ended |= self.client_since_last;
             return;
+        }
+        if segment_id.is_some() {
+            self.last_client_segment = segment_id;
         }
         self.client_since_last = true;
         self.turn_ended = false;
@@ -821,7 +858,26 @@ impl Scheduler {
         )
     }
 
-    fn start_call(&mut self) -> JoinHandle<CallEnd> {
+    /// Why the call [`Self::due_at`] made due starts: the first of the
+    /// recording, the first after a halt, the client's turn or the interval.
+    fn due_trigger(&self) -> CallTrigger {
+        if self.last_start.is_none() {
+            CallTrigger::FirstPhrase
+        } else if self.after_halt {
+            CallTrigger::HaltReset
+        } else if self.turn_ended {
+            CallTrigger::TurnEnd
+        } else {
+            CallTrigger::Interval
+        }
+    }
+
+    fn start_call(&mut self, trigger: CallTrigger) -> JoinHandle<CallEnd> {
+        let cause = Cause {
+            trigger,
+            segment_id: self.last_client_segment.clone(),
+        };
+        self.after_halt = false;
         self.last_start = Some(Instant::now());
         self.client_since_last = false;
         self.turn_ended = false;
@@ -837,7 +893,7 @@ impl Scheduler {
                 process: process.clone(),
             },
         );
-        tokio::spawn(run_call(self.call.clone(), stopped, process))
+        tokio::spawn(run_call(self.call.clone(), cause, stopped, process))
     }
 
     fn finish(&mut self, end: CallEnd) {
@@ -885,6 +941,7 @@ impl Scheduler {
 /// `agent_calls`.
 async fn run_call(
     call: CallContext,
+    cause: Cause,
     mut stop: oneshot::Receiver<()>,
     process: TreeSlot,
 ) -> CallEnd {
@@ -899,9 +956,12 @@ async fn run_call(
         },
         _ = &mut stop => return CallEnd::Cancelled,
     };
-    if let Some(end) = run_topic_check(&call, &mut stop, &process).await {
+    if let Some(end) = run_topic_check(&call, &cause, &mut stop, &process).await {
         return end;
     }
+    // Made before the patch is applied: the journal points at it
+    // (call-analytics design.md, decision 1).
+    let call_id = new_id();
     let started_at = host.now_ms();
     let started = Instant::now();
 
@@ -922,6 +982,8 @@ async fn run_call(
         }
     };
 
+    let mut prompt = vec![PromptPart::new("file", call.prefix.text.clone())];
+    prompt.extend(assembled.parts.iter().cloned());
     let request = AgentRequest {
         system_prompt_file: call.prompt_file.clone(),
         user_message: assembled.user_message,
@@ -932,9 +994,30 @@ async fn run_call(
     let reply = ask(&call, request, &mut stop).await;
 
     let mut record = AgentCallInput {
+        id: Some(call_id),
         recording_id: call.recording_id.clone(),
         started_at,
         duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        prompt,
+        trigger: Some(cause.trigger),
+        trigger_segment_id: cause.segment_id.clone(),
+        window_segments: Some(
+            assembled
+                .context
+                .segments
+                .iter()
+                .map(|segment| segment.id.clone())
+                .collect(),
+        ),
+        // The findings in the order the prompt numbers them `D1…Dn`.
+        findings_in_prompt: Some(
+            assembled
+                .context
+                .documents
+                .iter()
+                .filter_map(|document| assembled.context.document_ids.get(&document.id).cloned())
+                .collect(),
+        ),
         ..AgentCallInput::default()
     };
     let reply = match reply {
@@ -954,9 +1037,16 @@ async fn run_call(
 
     fast_loop.note_utilization(reply.usage.utilization);
     with_usage(&mut record, &reply.usage);
+    record.raw_reply = Some(reply.raw);
+    record.reply = Some(reply.patch.clone());
 
     let mut value = reply.patch;
     assembly::strip_id_prefixes(&mut value);
+    let op_values = value
+        .get("ops")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let parsed = match Patch::from_value(value) {
         Ok(parsed) => parsed,
         Err(invalid) => {
@@ -994,7 +1084,14 @@ async fn run_call(
             } else {
                 AgentCallOutcome::Empty
             });
-            call_state::apply_patch_at(connection, &id, &validation.patch, now)?;
+            let applied = call_state::apply_patch_by(
+                connection,
+                &id,
+                &validation.patch,
+                now,
+                record.id.as_deref(),
+            )?;
+            record.ops = journal_ops(&op_values, &validation, &applied);
             let moves_topic = validation.patch.ops.iter().any(|op| {
                 matches!(
                     op,
@@ -1014,9 +1111,10 @@ async fn run_call(
         })
         .or_else(|error| {
             // Nothing applied (the storage failed); the call is still
-            // recorded.
+            // recorded, its operations as not applied.
             record.outcome = Some(AgentCallOutcome::Error);
             record.error = Some(error.to_string());
+            record.ops = not_applied(&op_values, &serde_json::json!({ "reason": "storage" }));
             call_state::insert_agent_call_at(connection, &record, now)?;
             Err(error)
         })?;
@@ -1041,6 +1139,50 @@ async fn run_call(
             CallEnd::Failed(format!("Не удалось применить ответ агента: {error}"))
         }
     }
+}
+
+/// The operations of a reply as the journal keeps them: each applied one
+/// with what it created or changed, each rejected one with its reason.
+fn journal_ops(values: &[Value], validation: &Validation, applied: &AppliedPatch) -> Vec<CallOp> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, body)| {
+            let accepted = validation.indices.iter().position(|&at| at == index);
+            let rejection = validation
+                .rejected
+                .iter()
+                .find(|rejection| rejection.index == index);
+            CallOp {
+                op: op_name(body),
+                body: body.clone(),
+                applied: accepted.is_some(),
+                reason: rejection.and_then(|rejection| serde_json::to_value(rejection).ok()),
+                subject: accepted.and_then(|at| applied.subjects.get(at).cloned().flatten()),
+            }
+        })
+        .collect()
+}
+
+/// The operations of a reply none of which was applied, for `reason`.
+fn not_applied(values: &[Value], reason: &Value) -> Vec<CallOp> {
+    values
+        .iter()
+        .map(|body| CallOp {
+            op: op_name(body),
+            body: body.clone(),
+            applied: false,
+            reason: Some(reason.clone()),
+            subject: None,
+        })
+        .collect()
+}
+
+fn op_name(body: &Value) -> String {
+    body.get("op")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
 /// Runs `request` on the agent: cancelled by `stop` or the call timeout.
@@ -1069,6 +1211,11 @@ async fn ask(
             Err(error)
         }
     }
+}
+
+/// How a failed agent call is recorded.
+pub(crate) fn outcome_of(error: &AgentError) -> AgentCallOutcome {
+    failure(error).0
 }
 
 /// How a failed agent call is recorded and what the scheduler does next.
@@ -1115,6 +1262,7 @@ pub(crate) fn with_usage(record: &mut AgentCallInput, usage: &Usage) {
 /// other failure leaves the topic as it is and the fast-loop call goes on.
 async fn run_topic_check(
     call: &CallContext,
+    cause: &Cause,
     stop: &mut oneshot::Receiver<()>,
     process: &TreeSlot,
 ) -> Option<CallEnd> {
@@ -1185,8 +1333,11 @@ async fn run_topic_check(
             return None;
         }
     };
+    let call_id = new_id();
     let started_at = host.now_ms();
     let started = Instant::now();
+    let mut prompt = vec![PromptPart::new("file", topic_check::PROMPT)];
+    prompt.extend(assembled.parts.iter().cloned());
     let request = AgentRequest {
         system_prompt_file: prompt_file,
         user_message: assembled.user_message.clone(),
@@ -1200,10 +1351,15 @@ async fn run_topic_check(
     };
     let reply = ask(call, request, stop).await;
     let mut record = AgentCallInput {
+        id: Some(call_id),
+        prompt,
         recording_id: call.recording_id.clone(),
         kind: AgentCallKind::TopicCheck,
         started_at,
         duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        trigger: Some(cause.trigger),
+        trigger_segment_id: cause.segment_id.clone(),
+        window_segments: Some(assembled.window.clone()),
         ..AgentCallInput::default()
     };
     let reply = match reply {
@@ -1225,6 +1381,8 @@ async fn run_topic_check(
     };
     fast_loop.note_utilization(reply.usage.utilization);
     with_usage(&mut record, &reply.usage);
+    record.raw_reply = Some(reply.raw);
+    record.reply = Some(reply.patch.clone());
     let decision = match topic_check::parse(&reply.patch) {
         Ok(decision) => decision,
         Err(reason) => {
@@ -1243,11 +1401,29 @@ async fn run_topic_check(
         let mut current = None;
         in_savepoint(connection, || {
             let state = call_state::get(connection, &id)?;
+            let body = record.reply.clone().unwrap_or(Value::Null);
+            let decided = body
+                .get("decision")
+                .and_then(Value::as_str)
+                .unwrap_or("same")
+                .to_owned();
+            let mut journaled = CallOp {
+                op: decided,
+                body,
+                applied: false,
+                reason: None,
+                subject: None,
+            };
             let op = match topic_check::check(&decision, &assembled, &state) {
                 Ok(op) => op,
                 Err(reason) => {
                     eprintln!("grill: the topic check's answer was rejected ({id}): {reason}");
-                    record.rejected = serde_json::json!([{ "op": "topic", "reason": reason }]);
+                    let mut rejected = serde_json::to_value(&reason).unwrap_or(Value::Null);
+                    if let Value::Object(fields) = &mut rejected {
+                        fields.insert("op".to_owned(), Value::from("topic"));
+                    }
+                    record.rejected = Value::Array(vec![rejected.clone()]);
+                    journaled.reason = Some(rejected);
                     None
                 }
             };
@@ -1257,14 +1433,18 @@ async fn run_topic_check(
                 AgentCallOutcome::Empty
             });
             if let Some(op) = op {
-                call_state::apply_patch_at(
+                let applied = call_state::apply_patch_by(
                     connection,
                     &id,
                     &ValidatedPatch { ops: vec![op] },
                     now,
+                    record.id.as_deref(),
                 )?;
+                journaled.applied = true;
+                journaled.subject = applied.subjects.into_iter().next().flatten();
                 current = call_state::get(connection, &id)?.current_topic_id;
             }
+            record.ops = vec![journaled];
             call_state::insert_agent_call_at(connection, &record, now)?;
             Ok(())
         })?;

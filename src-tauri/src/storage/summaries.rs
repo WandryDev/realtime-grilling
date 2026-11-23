@@ -589,6 +589,15 @@ pub fn reconcile_questions(
                 )
                 .optional()?;
             if let Some(recording) = recording {
+                // The summary's call answered it after the call.
+                super::journal::question_event(
+                    connection,
+                    &answer.question_id,
+                    &recording,
+                    super::journal::QuestionEventKind::Answered,
+                    None,
+                    now_ms(),
+                )?;
                 reconciled.question_ids.push(answer.question_id.clone());
                 recordings.insert(recording);
             }

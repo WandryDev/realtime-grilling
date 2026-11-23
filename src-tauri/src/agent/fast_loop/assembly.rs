@@ -27,6 +27,7 @@ use serde_json::Value;
 
 use super::validate::{CallContext, SourceText, document_numbers};
 use crate::{
+    agent::sections::{self, Sections},
     error::CommandResult,
     speech::context,
     storage::{
@@ -34,6 +35,7 @@ use crate::{
             self, CallState, CardLens, Evidence, EvidenceSource, Question, QuestionStatus,
         },
         context_findings::ContextFinding,
+        journal::PromptPart,
         people::{self, Person},
         projects, recordings,
         transcript::{self, TranscriptChannel, TranscriptPass, TranscriptSegment},
@@ -537,12 +539,16 @@ fn empty_lenses(state: &CallState) -> Option<Vec<CardLens>> {
 /// The user message of a call: the mode, the state with ids (and the
 /// `hints`, unless `None`), the transcript window, the line about
 /// StructuredOutput.
-pub fn user_message(
+/// By parts (call-analytics design.md, decision 2), the CLI gets their
+/// concatenation:
+/// `mode`, `topics`, `card`, `questions`, `findings`, `quiet`,
+/// `transcript`, `output`.
+pub fn user_message_parts(
     state: &CallState,
     window: &[&TranscriptSegment],
     hints: Option<Hints>,
-) -> String {
-    let mut text = String::new();
+) -> Vec<PromptPart> {
+    let mut text = Sections::new("mode");
     if state.final_check.is_some() {
         text.push_str(
             "Режим: финальная проверка. Разговор идёт к завершению: новых тем не создавай, отмечай отвеченные.\n",
@@ -551,6 +557,7 @@ pub fn user_message(
         text.push_str("Режим: обычный.\n");
     }
 
+    text.section("topics");
     text.push_str("\n# Темы\n\n");
     if state.topics.is_empty() {
         text.push_str("Тем пока нет.\n");
@@ -569,6 +576,7 @@ pub fn user_message(
     }
 
     let documents = document_numbers(state);
+    text.section("card");
     text.push_str("\n# Карточка текущей темы\n\n");
     match state.current_card() {
         Some(card) if !card.fields.is_empty() => {
@@ -596,6 +604,7 @@ pub fn user_message(
         text.push_str(&format!("Пустые линзы: {names}.\n"));
     }
 
+    text.section("questions");
     text.push_str("\n# Вопросы звонка\n");
     for (status, title) in [
         (QuestionStatus::Open, "Открытые"),
@@ -620,6 +629,7 @@ pub fn user_message(
         }
     }
     if !documents.is_empty() {
+        text.section("findings");
         text.push_str(
             "\n# Найдено в материалах\n\nНаходки медленного контура в источниках проекта — \
              материал проекта, а не слова клиента:\n",
@@ -629,12 +639,14 @@ pub fn user_message(
         }
     }
     if let Some(minutes) = hints.and_then(|hints| hints.quiet_minutes) {
+        text.section("quiet");
         text.push_str(&format!(
             "\n{minutes} мин без новых вопросов. Проверь: нераскрытые или пустые линзы текущей \
              темы, допущения, не перешёл ли клиент к другой задаче.\n"
         ));
     }
 
+    text.section("transcript");
     text.push_str("\n# Расшифровка за последние 10 минут\n\n");
     if window.is_empty() {
         text.push_str("Расшифровки пока нет.\n");
@@ -643,15 +655,19 @@ pub fn user_message(
         text.push_str(&segment_line(segment));
         text.push('\n');
     }
+    text.section("output");
     text.push('\n');
     text.push_str(STRUCTURED_OUTPUT);
-    text
+    text.into_parts()
 }
 
 /// A call ready to run: its message and what it was given, for the checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assembled {
     pub user_message: String,
+    /// The message by parts, for the journal; `user_message` is their
+    /// concatenation.
+    pub parts: Vec<PromptPart>,
     pub context: CallContext,
 }
 
@@ -675,13 +691,15 @@ pub fn assemble(
         None
     };
     let window = transcript_window(&segments, TRANSCRIPT_WINDOW);
-    let user_message = user_message(&state, &window, hints);
+    let parts = user_message_parts(&state, &window, hints);
+    let user_message = sections::join(&parts);
     let sources = window
         .iter()
         .map(|segment| SourceText::said(segment.id.clone(), segment.channel, segment.text.clone()))
         .collect();
     Ok(Assembled {
         user_message,
+        parts,
         context: CallContext::new(&state, sources, prefix.project_items.clone()),
     })
 }
