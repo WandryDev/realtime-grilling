@@ -54,8 +54,8 @@
 
 ## 8. Проверка и выпуск
 
-- [ ] 8.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`, тесты `analytics/*`. Проверка: всё зелёное, `bindings.ts` и контракт стабильны, `openspec validate call-analytics --strict` проходит.
-- [ ] 8.2 Changeset (`minor`): журнал агента и фоновая отправка в аналитику команды. Проверка: файл `.changeset/call-analytics.md` есть.
+- [x] 8.1 Гейты: `bun run check`, `typecheck`, `test`, `build`, `e2e`, `cargo fmt --check`, `clippy -D warnings` (и с `--features eval`), `cargo test`, тесты `analytics/*`. Проверка: всё зелёное, `bindings.ts` и контракт стабильны, `openspec validate call-analytics --strict` проходит.
+- [x] 8.2 Changeset (`minor`): журнал агента и фоновая отправка в аналитику команды. Проверка: файл `.changeset/call-analytics.md` есть.
 - [ ] 8.3 Сквозной прогон: локальный Docker Compose, подписанный debug-бандл с `GRILL_ANALYTICS_URL`, звонок по проекту с Outline и ClickUp. Проверить:
   - таймлайн обновляется вживую;
   - у вопроса видны вызов, промпт, ответ и действия;
