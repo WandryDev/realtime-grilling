@@ -423,12 +423,15 @@ describe("6.4 the reads", () => {
       questions: { id: string }[];
       agentCalls: { id: string; ops: unknown[]; promptBytes: number }[];
       segments: { id: string }[];
+      liveSegments: { id: string }[];
       costUsd: number;
     }>(app, "/api/calls/call-1");
     expect(status).toBe(200);
     expect(timeline.questions.map((q) => q.id)).toEqual(["q-1"]);
     // The refined transcript replaces the live one.
     expect(timeline.segments.map((s) => s.id)).toEqual(["ref-1"]);
+    // «Уточнённая расшифровка»: the phrase the call was set off by stays.
+    expect(timeline.liveSegments.map((s) => s.id)).toEqual(["seg-2"]);
     expect(timeline.agentCalls.map((c) => c.id)).toEqual(["ac-1"]);
     expect(timeline.agentCalls[0]?.ops).toHaveLength(1);
     expect(timeline.costUsd).toBeCloseTo(0.042);

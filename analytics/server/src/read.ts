@@ -194,6 +194,7 @@ export class Read extends Context.Service<
             created: count("created"),
             hidden: count("hidden"),
             pinned: count("pinned"),
+            requeued: count("requeued"),
             restored: count("restored"),
             shown: count("shown"),
           },
@@ -208,7 +209,8 @@ export class Read extends Context.Service<
           SELECT a.id, a.kind, a.recording_id AS "recordingId", a.started_at AS "startedAt",
                  a.duration_ms AS "durationMs", a.outcome, a.input_tokens AS "inputTokens",
                  a.output_tokens AS "outputTokens", a.cache_read AS "cacheRead",
-                 a.cache_write AS "cacheWrite", a.cost_usd AS "costUsd", a.error, a.trigger,
+                 a.cache_write AS "cacheWrite", a.cost_usd AS "costUsd",
+                 a.utilization, a.error, a.trigger,
                  a.trigger_segment_id AS "triggerSegmentId",
                  a.window_segments AS "windowSegments",
                  a.findings_in_prompt AS "findingsInPrompt",
@@ -257,11 +259,10 @@ export class Read extends Context.Service<
         const inRecordings = sql.in(
           recordingIds.length > 0 ? recordingIds : [""]
         );
-        const live = yield* sql<Of<typeof CallTimeline>["segments"][number]>`
+        const allLive = yield* sql<Of<typeof CallTimeline>["segments"][number]>`
           SELECT id, recording_id AS "recordingId", channel, start_ms AS "startMs",
                  end_ms AS "endMs", text
             FROM segments WHERE recording_id IN ${inRecordings}
-              AND recording_id NOT IN (SELECT recording_id FROM refined_transcripts)
            ORDER BY recording_id, start_ms`;
         const refined = yield* sql<{
           recordingId: string;
@@ -269,6 +270,11 @@ export class Read extends Context.Service<
         }>`
           SELECT recording_id AS "recordingId", segments FROM refined_transcripts
            WHERE recording_id IN ${inRecordings}`;
+        const refinedIds = new Set(refined.map((row) => row.recordingId));
+        const live = allLive.filter((row) => !refinedIds.has(row.recordingId));
+        const liveSegments = allLive.filter((row) =>
+          refinedIds.has(row.recordingId)
+        );
         const segments = [
           ...live,
           ...refined.flatMap(({ recordingId, segments: list }) =>
@@ -324,6 +330,7 @@ export class Read extends Context.Service<
           costUsd: agentCalls.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
           findingSteps,
           findings,
+          liveSegments,
           questionSteps,
           questions,
           recordings,

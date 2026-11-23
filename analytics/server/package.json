@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./api": "./src/api.ts"
+  },
   "scripts": {
     "rebuild": "bun src/rebuild-main.ts",
     "start": "bun src/main.ts",

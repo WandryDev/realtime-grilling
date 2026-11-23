@@ -74,6 +74,8 @@ export const QuestionCounts = Schema.Struct({
   created: Count,
   hidden: Count,
   pinned: Count,
+  /** Went back to the queue without an action: gave their place. */
+  requeued: Count,
   restored: Count,
   shown: Count,
 });
@@ -128,6 +130,8 @@ export const AgentCallSummary = Schema.Struct({
   startedAt: Millis,
   trigger: NullableString,
   triggerSegmentId: NullableString,
+  /** Share of the subscription limit, 0–1. */
+  utilization: Schema.NullOr(Count),
   windowSegments: Schema.NullOr(Schema.Array(Schema.String)),
 });
 
@@ -201,6 +205,12 @@ export const CallTimeline = Schema.Struct({
   costUsd: Count,
   findingSteps: Schema.Array(TimelineStep),
   findings: Schema.Array(TimelineFinding),
+  /**
+   * The live phrases of the recordings with a refined transcript: what the
+   * agent was given during the call. The links of calls, questions and facts
+   * lead to them.
+   */
+  liveSegments: Schema.Array(TimelineSegment),
   questionSteps: Schema.Array(TimelineStep),
   questions: Schema.Array(TimelineQuestion),
   recordings: Schema.Array(

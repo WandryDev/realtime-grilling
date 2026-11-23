@@ -1,0 +1,4 @@
+@import "tailwindcss";
+/* The Grill design system (packages/ui): tokens, variants, base styles. */
+@import "@grill/ui/theme.css";
+@source "../../../../packages/ui/src";
