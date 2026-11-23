@@ -178,7 +178,7 @@
 
 **Стек.**
 - Bun, Effect 4: `HttpApi` из `effect/http-api`, `effect/sql` с драйвером Postgres для Effect 4.
-- Сервисы — `Context.Service` со слоями, как в Grill. Тесты — `@effect/vitest` и `HttpApiTest`, без живого HTTP.
+- Сервисы — `Context.Service` со слоями, как в Grill. Тесты — Vitest на настоящем Postgres (`TEST_DATABASE_URL`, схема пересоздаётся перед каждым тестом) через `HttpRouter.toWebHandler`: весь HTTP-конвейер, включая SSE, без открытого порта.
 
 **Хранение — лог и проекции.**
 - `events (seq bigserial, id uuid UNIQUE, v, kind, at, received_at, body jsonb)` — неизменяемый лог, источник правды.
@@ -285,4 +285,4 @@
 ## Open Questions
 
 - Внутренний хост, адрес сервера и как он попадёт в CI (секрет репозитория или переменная).
-- Точное имя и версия драйвера Postgres для Effect 4 (`@effect/sql-pg` или аналог). Проверить при начале работы над сервером.
+- ~~Драйвер Postgres для Effect 4~~ — `@effect/sql-pg` 4.1.0 (свой протокол Postgres, без `pg`); миграции через `Migrator.make` из `effect/sql`.
