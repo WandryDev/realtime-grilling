@@ -53,7 +53,10 @@ function FactAction({
   );
 }
 
-/** Label in a 180px column, the value, an optional note or action right. */
+/**
+ * Label in a 180px column (128px on a narrow panel), the value, an optional
+ * note or action right.
+ */
 function AgentFact({
   children,
   className,
@@ -66,15 +69,20 @@ function AgentFact({
   trailing?: ReactNode;
 }) {
   return (
-    <div className={cn("flex items-center gap-6", className)}>
-      <dt className="text-muted-foreground w-45 shrink-0 text-base">{label}</dt>
+    <div className={cn("flex items-center gap-4 @2xl/panel:gap-6", className)}>
+      <dt className="text-muted-foreground w-32 shrink-0 text-base @2xl/panel:w-45">
+        {label}
+      </dt>
       <dd className="min-w-0 flex-1 text-base">{children}</dd>
       {trailing ? <dd className="shrink-0">{trailing}</dd> : null}
     </div>
   );
 }
 
-/** Agent tile, name and the status line, "Проверить снова" right. */
+/**
+ * Agent tile, name and the status line, "Проверить снова" right; under them
+ * when the row is too narrow.
+ */
 function AgentSummary({
   agent,
   checking,
@@ -87,11 +95,11 @@ function AgentSummary({
   const ready = agent?.status === "ready";
   const unknown = agent === null;
   return (
-    <div className="flex items-center gap-3.5">
+    <div className="flex flex-wrap items-center gap-x-3.5 gap-y-3">
       <span className="bg-surface flex size-10 shrink-0 items-center justify-center rounded-sm">
         <ClaudeIcon className="size-5" />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-[1_1_12rem] flex-col gap-0.5">
         <p className="text-lg font-semibold">Claude Code</p>
         <p
           className={cn(
@@ -246,7 +254,9 @@ export function AgentSettings({
             }
           >
             {values.agentPath ? (
-              <span className="font-mono text-sm">{values.agentPath}</span>
+              <span className="font-mono text-sm wrap-anywhere">
+                {values.agentPath}
+              </span>
             ) : (
               <span className="text-muted-foreground">
                 найден автоматически

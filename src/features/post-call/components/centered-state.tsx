@@ -56,7 +56,10 @@ export function StateList({
   label: string;
 }) {
   return (
-    <ul aria-label={label} className={cn("flex w-[420px] flex-col", className)}>
+    <ul
+      aria-label={label}
+      className={cn("flex w-full max-w-[420px] flex-col", className)}
+    >
       {children}
     </ul>
   );

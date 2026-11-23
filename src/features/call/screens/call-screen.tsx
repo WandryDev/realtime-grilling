@@ -96,6 +96,7 @@ export function CallScreen({
               </TranscriptColumn>
             )
           }
+          transcriptCollapsed={transcript.collapsed}
         />
       </AppearScope>
     </CallActionsProvider>

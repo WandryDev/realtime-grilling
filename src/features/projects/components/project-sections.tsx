@@ -394,7 +394,12 @@ export function SourcesSection({
                   Настроить
                 </Button>
               }
-              className="[&_[data-slot=item-meta]]:text-muted-foreground gap-3.5 px-0 [&_[data-slot=item-actions]]:w-20 [&_[data-slot=item-meta]]:w-50 [&_[data-slot=item-meta]]:gap-1.5"
+              className={cn(
+                "[&_[data-slot=item-meta]]:text-muted-foreground gap-3.5 px-0 [&_[data-slot=item-actions]]:w-20 [&_[data-slot=item-meta]]:w-50 [&_[data-slot=item-meta]]:gap-1.5",
+                // A narrow panel wraps the description and the status
+                // instead of cutting them.
+                "@max-3xl/panel:[&_[data-slot=item-description]]:whitespace-normal @max-3xl/panel:[&_[data-slot=item-meta]]:w-36"
+              )}
               description={
                 <span className={cn(source.mono && "font-mono text-xs/[18px]")}>
                   {source.description}

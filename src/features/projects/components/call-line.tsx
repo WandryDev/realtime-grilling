@@ -13,6 +13,8 @@ import type { CallStatus, CallSummary } from "../mock";
  * 140, mono duration 56 and the status 170 on the right. 52 high, gray on
  * hover. A call with unreviewed suggestions stays gray; a click opens the
  * review.
+ * The line needs a wide list (`@4xl/calls`); narrower, a row takes two
+ * lines: project, topic and status on top, date, people and duration below.
  */
 export function CallLine({
   call,
@@ -23,33 +25,44 @@ export function CallLine({
   className?: string;
   href?: string;
 }) {
+  const hasProject = call.project !== undefined;
   return (
     <Item
       className={cn(
-        "h-13 shrink-0 gap-6 py-0",
+        // Fixed first column, so the rows line up.
+        "grid shrink-0 gap-x-4 gap-y-1 py-2.5",
+        hasProject
+          ? "grid-cols-[9rem_minmax(0,1fr)_auto]"
+          : "grid-cols-[7rem_minmax(0,1fr)_auto]",
+        "@4xl/calls:flex @4xl/calls:h-13 @4xl/calls:gap-6 @4xl/calls:py-0",
         call.highlighted && "bg-muted",
         className
       )}
       render={<Link href={href} />}
     >
-      <span className="text-muted-foreground w-[120px] shrink-0 font-mono text-xs">
+      <span className="text-muted-foreground col-start-1 row-start-2 font-mono text-xs @4xl/calls:w-[120px] @4xl/calls:shrink-0">
         {call.when}
       </span>
-      {call.project === undefined ? null : (
-        <span className="text-foreground w-40 shrink-0 truncate text-base font-medium">
+      {hasProject ? (
+        <span className="text-foreground col-start-1 row-start-1 truncate text-base font-medium @4xl/calls:w-40 @4xl/calls:shrink-0">
           {call.project}
         </span>
-      )}
-      <span className="text-foreground min-w-0 flex-1 truncate text-base">
+      ) : null}
+      <span
+        className={cn(
+          "text-foreground row-start-1 min-w-0 truncate text-base @4xl/calls:flex-1",
+          hasProject ? "col-start-2" : "col-span-2 col-start-1"
+        )}
+      >
         {call.topic}
       </span>
-      <span className="text-muted-foreground w-[140px] shrink-0 truncate text-sm">
+      <span className="text-muted-foreground col-start-2 row-start-2 truncate text-sm @4xl/calls:w-[140px] @4xl/calls:shrink-0">
         {call.people}
       </span>
-      <span className="text-muted-foreground w-14 shrink-0 text-right font-mono text-xs tabular-nums">
+      <span className="text-muted-foreground col-start-3 row-start-2 text-right font-mono text-xs tabular-nums @4xl/calls:w-14 @4xl/calls:shrink-0">
         {call.duration}
       </span>
-      <span className="flex w-[170px] shrink-0 justify-end">
+      <span className="col-start-3 row-start-1 flex justify-end @4xl/calls:w-[170px] @4xl/calls:shrink-0">
         <CallLineStatus status={call.status} />
       </span>
     </Item>
@@ -101,7 +114,7 @@ export function CallLineList({
     return <p className="text-muted-foreground px-4 py-3 text-sm">{empty}</p>;
   }
   return (
-    <ItemGroup className={cn("gap-2", className)}>
+    <ItemGroup className={cn("@container/calls gap-2", className)}>
       {calls.map((call) => (
         <CallLine call={call} key={call.id} />
       ))}

@@ -43,7 +43,8 @@ export function DeviceCodeCard({
         className
       )}
     >
-      <div className="flex items-center justify-between">
+      {/* The copy pill drops under the code on a narrow window; no column gap, it fits in 520px only flush */}
+      <div className="flex flex-wrap items-center justify-between gap-y-3">
         <p className={cn("flex items-center gap-1", expired && "opacity-35")}>
           <span className="sr-only">{code}</span>
           {[...code].map((char, index) =>

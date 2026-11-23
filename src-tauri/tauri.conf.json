@@ -17,8 +17,8 @@
         "title": "Grill",
         "width": 1280,
         "height": 800,
-        "minWidth": 1024,
-        "minHeight": 680,
+        "minWidth": 600,
+        "minHeight": 520,
         "center": true,
         "visible": false
       },
@@ -28,8 +28,8 @@
         "title": "Grill",
         "width": 960,
         "height": 700,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 560,
+        "minHeight": 520,
         "center": true,
         "visible": false
       },

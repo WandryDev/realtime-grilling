@@ -68,6 +68,8 @@ import type { ADD_PERSON, DELETE_PROJECT } from "../mock";
  * 20% ink scrim that covers the window. The app opens the live versions
  * below (`*Live`), built from the same body parts.
  */
+
+/** A live dialog taller than a short window scrolls inside instead of being cut. */
 export function DialogScrim({
   children,
   className,

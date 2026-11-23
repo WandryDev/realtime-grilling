@@ -40,16 +40,16 @@ export function ProfileHeader({
   role: string;
 }) {
   return (
-    <header className={cn("flex items-center gap-4", className)}>
+    <header className={cn("flex flex-wrap items-center gap-4", className)}>
       <PersonAvatar initials={initials} size="lg" />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="flex min-w-60 flex-1 flex-col gap-1">
         <h1 className="text-foreground text-2xl font-semibold tracking-tight text-balance">
           {name}
         </h1>
         {editing ? (
           <Input
             aria-label="Роль"
-            className="h-9 w-[420px]"
+            className="h-9 w-full max-w-[420px]"
             defaultValue={role}
             name="role"
           />
@@ -57,7 +57,8 @@ export function ProfileHeader({
           <p className="text-muted-foreground text-base">{role}</p>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-2">{actions}</div>
+      {/* Wraps under the name on a narrow panel, still on the right. */}
+      <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>
     </header>
   );
 }
@@ -166,7 +167,7 @@ export function ProfileSuggestion({
         </blockquote>
       ) : null}
       {reviewHref ? (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             className={cn(buttonVariants(), "h-[34px] px-4")}
             href={reviewHref}
@@ -175,7 +176,7 @@ export function ProfileSuggestion({
           </Link>
         </div>
       ) : (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button className="h-[34px] px-4" onClick={onAccept}>
             Принять
           </Button>
@@ -475,7 +476,10 @@ export function ProfileSide({
   return (
     <aside
       aria-labelledby={titleId}
-      className={cn("flex w-75 shrink-0 flex-col gap-3 pt-2", className)}
+      className={cn(
+        "flex flex-col gap-3 @4xl/panel:w-75 @4xl/panel:shrink-0 @4xl/panel:pt-2",
+        className
+      )}
     >
       <h2 className="text-muted-foreground text-sm font-normal" id={titleId}>
         {firstName ? `Звонки с ${firstName}` : "Звонки"}

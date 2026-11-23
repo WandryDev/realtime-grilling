@@ -152,9 +152,12 @@ export function QuickAddPerson({
           placeholder="Роль в компании"
         />
       </div>
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <div className="flex items-center gap-2.5">
-          <span className="text-muted-foreground text-sm" id={techId}>
+          <span
+            className="text-muted-foreground text-sm whitespace-nowrap"
+            id={techId}
+          >
             В технике
           </span>
           <SegmentedControl
@@ -175,7 +178,7 @@ export function QuickAddPerson({
           </SegmentedControl>
         </div>
         <Button
-          className="bg-background shadow-touch hover:bg-background h-[34px] px-3.5"
+          className="bg-background shadow-touch hover:bg-background ml-auto h-[34px] px-3.5"
           type="submit"
           variant="secondary"
         >

@@ -50,6 +50,8 @@ export interface CallSuggestion {
  *
  * In edit mode the fields sit in a form; `onSave` gets its submit event
  * (fields: role, askStyle, portrait:<label>).
+ *
+ * On a narrower panel the calls column moves under the profile.
  */
 export function PersonScreen({
   className,
@@ -86,7 +88,7 @@ export function PersonScreen({
       className={className}
       sidebar={<MainSidebar active={project.id} />}
     >
-      <main className="flex gap-12 px-12 pt-9 pb-12">
+      <main className="flex flex-col gap-10 px-6 pt-8 pb-10 @3xl/panel:px-12 @3xl/panel:pt-9 @3xl/panel:pb-12 @4xl/panel:flex-row @4xl/panel:gap-12">
         <ProfileColumn formId={editing ? formId : undefined} onSave={onSave}>
           <ProfileHeader
             actions={
@@ -133,7 +135,7 @@ export function PersonScreen({
             }
             text={editing ? person.askStyleEdited : person.askStyle}
           />
-          <div className="flex gap-4">
+          <div className="flex flex-col gap-4 @xl/panel:flex-row">
             <ScaleCard
               className="flex-1"
               editing={editing}

@@ -83,7 +83,7 @@ function ReviewDone({ outcome }: { outcome: ReviewOutcome }) {
           </StateRow>
         ))}
       </StateList>
-      <div className="flex items-center gap-2 pt-1">
+      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
         <LinkButton href={links.summary} size="lg">
           К итогам звонка
         </LinkButton>
@@ -105,7 +105,7 @@ function NoProposals({ note }: { note: string }) {
       mediaClassName="bg-surface text-muted-foreground size-16 rounded-full"
       title="Предложений нет"
     >
-      <div className="flex items-center gap-2 pt-1">
+      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
         <LinkButton href={links.summary} size="lg">
           К итогам звонка
         </LinkButton>

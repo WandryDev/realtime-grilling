@@ -128,7 +128,10 @@ export function DisconnectServiceDialog({
         aria-describedby={descriptionId}
         aria-labelledby={titleId}
         aria-modal="true"
-        className={cn(dialogSurfaceClassName, "w-120 p-7")}
+        className={cn(
+          dialogSurfaceClassName,
+          "max-h-[calc(100%-2rem)] w-120 max-w-[calc(100%-2rem)] overflow-y-auto p-7"
+        )}
         role="alertdialog"
       >
         <DisconnectServiceBody

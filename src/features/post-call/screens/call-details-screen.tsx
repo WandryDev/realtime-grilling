@@ -4,8 +4,13 @@ import { type ReactNode, useCallback } from "react";
 
 import { MessageGroup } from "@/components/ui/message";
 import { TopicDivider } from "@/components/ui/topic-divider";
+import { cn } from "@/lib/utils";
 
-import { CallWindow, SideColumn } from "../components/call-window";
+import {
+  CallWindow,
+  PANEL_PAGE_X,
+  SideColumn,
+} from "../components/call-window";
 import { FilterTabs, SearchField } from "../components/history";
 import { usePostCallInfo } from "../components/links";
 import {
@@ -286,8 +291,17 @@ export function CallDetailsScreen({
       pendingProposals={pendingProposals}
       taskCards={taskCards}
     >
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-16">
-        <div className="border-border bg-background sticky top-0 z-[1] flex shrink-0 items-center justify-between gap-6 border-b pt-4 pb-3.5">
+      <main
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth",
+          PANEL_PAGE_X
+        )}
+      >
+        {/*
+         * The search narrows to 160 before it wraps under the topics; there,
+         * on a narrow panel, it spans the row.
+         */}
+        <div className="border-border bg-background sticky top-0 z-[1] flex shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-2.5 border-b pt-4 pb-3.5">
           {/* One topic (the whole call) has nothing to switch between. */}
           {topics.length > 1 ? (
             <FilterTabs
@@ -302,7 +316,7 @@ export function CallDetailsScreen({
             />
           ) : null}
           <SearchField
-            className="ml-auto h-8 w-[220px] text-sm"
+            className="ml-auto h-8 w-auto min-w-0 grow basis-40 text-sm @2xl/panel:max-w-[220px]"
             label="Найти в расшифровке"
             onQueryChange={search?.onQueryChange}
             placeholder="Найти в расшифровке"

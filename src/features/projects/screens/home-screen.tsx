@@ -48,7 +48,7 @@ export function HomeScreen({
     <MainWindow
       actions={<TitlebarSearch />}
       className={className}
-      panelClassName={cn(isFirstRun && "justify-center")}
+      panelClassName={cn(isFirstRun && "justify-center-safe")}
       sidebar={
         <MainSidebar active="home" projects={isFirstRun ? [] : undefined} />
       }

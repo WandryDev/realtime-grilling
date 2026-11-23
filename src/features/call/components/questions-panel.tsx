@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback } from "react";
+import { type MouseEvent, type ReactNode, useCallback } from "react";
 
 import { AppWindowPanel } from "@/components/ui/app-window";
 import { AgentStatus } from "@/components/ui/recording-indicator";
@@ -80,13 +80,19 @@ export function QuestionsNav({
   return (
     <div
       className={cn(
-        "border-border bg-background sticky top-0 z-10 flex items-center justify-between gap-4 border-b pt-4 pb-3.5",
+        "border-border bg-background sticky top-0 z-10 flex items-start justify-between gap-2 border-b pt-4 pb-3.5",
         className
       )}
+      data-slot="questions-nav"
     >
+      {/*
+       * Anchors that don't fit move to a second row, never under the status.
+       * Many rows in a narrow window scroll inside, so the sticky bar never
+       * covers the questions.
+       */}
       <nav
         aria-label="Темы звонка"
-        className="flex min-w-0 items-center gap-1.5"
+        className="flex max-h-[30svh] min-w-0 flex-wrap items-center gap-1.5 overflow-y-auto"
       >
         {anchors.map((anchor) => (
           <AnchorButton
@@ -105,7 +111,8 @@ export function QuestionsNav({
           </TopicAnchor>
         )}
       </nav>
-      <div className="flex shrink-0 items-center gap-3">
+      {/* On the first row of anchors when they wrap */}
+      <div className="flex h-8 shrink-0 items-center gap-3">
         {usage ? (
           <span
             className="text-muted-foreground text-sm whitespace-nowrap tabular-nums"
@@ -131,16 +138,27 @@ function AnchorButton({
   anchor: TopicAnchorData;
   sectionIdPrefix?: string;
 }) {
-  const scrollToTopic = useCallback(() => {
-    if (!sectionIdPrefix) {
-      return;
-    }
-    // useId ids carry colons, so the selector needs escaping
-    const id = CSS.escape(topicSectionId(sectionIdPrefix, anchor.id));
-    document
-      .querySelector(`#${id}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [anchor.id, sectionIdPrefix]);
+  const scrollToTopic = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (!sectionIdPrefix) {
+        return;
+      }
+      // useId ids carry colons, so the selector needs escaping
+      const id = CSS.escape(topicSectionId(sectionIdPrefix, anchor.id));
+      const section = document.querySelector<HTMLElement>(`#${id}`);
+      if (!section) {
+        return;
+      }
+      // The sticky bar grows as its anchors wrap: the topic's title lands
+      // under it, never behind it (`scroll-mt-16` is the one-row height).
+      const bar = event.currentTarget.closest("[data-slot=questions-nav]");
+      if (bar) {
+        section.style.scrollMarginTop = `${bar.getBoundingClientRect().height}px`;
+      }
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
+    [anchor.id, sectionIdPrefix]
+  );
 
   return (
     <TopicAnchor
@@ -195,7 +213,10 @@ export function TopicSection({
   );
 }
 
-/** 28px topic name and a muted note on the right, on one baseline. */
+/**
+ * 28px topic name and a muted note on the right, on one baseline; the note
+ * goes under the name when both don't fit.
+ */
 export function TopicHeader({
   className,
   meta,
@@ -208,11 +229,11 @@ export function TopicHeader({
   return (
     <header
       className={cn(
-        "flex items-baseline justify-between gap-4 px-1 pt-5 pb-2",
+        "flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 pt-5 pb-2",
         className
       )}
     >
-      <h3 className="text-2xl font-semibold tracking-tight text-balance">
+      <h3 className="min-w-0 text-2xl font-semibold tracking-tight text-balance">
         {title}
       </h3>
       <p className="text-muted-foreground shrink-0 text-sm tabular-nums">

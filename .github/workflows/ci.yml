@@ -99,9 +99,17 @@ jobs:
         with:
           components: clippy
 
+      # whisper.cpp's CMake cache keeps the compiler's full path, so a target
+      # cached on an older runner image fails once MSVC or Xcode moves: the
+      # image is part of the cache key.
+      - name: Runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: ${{ env.RUNNER_IMAGE }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # v1: the v0 caches hold whisper.cpp built for the CPU of one runner
           # (before `GGML_NATIVE=OFF` in .cargo/config.toml), and Cargo does not

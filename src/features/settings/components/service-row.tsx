@@ -12,6 +12,8 @@ import { SmallCheckIcon } from "../icons";
  * a 36px logo tile, name and description, the status right, and an optional
  * second line (repositories, the broken key's details) with text actions in
  * a 240px column. No lines: rows sit 28px apart, groups further (the caller).
+ * On a narrow panel the status drops its 180px column, and the actions wrap
+ * under the details when both don't fit.
  */
 
 /** Titled list of services: muted 13px title like SettingsSection, a muted count right. */
@@ -90,15 +92,15 @@ export function ServiceRow({
           </p>
         </div>
         {status ? (
-          <div className="flex min-w-45 shrink-0 items-center justify-end">
+          <div className="flex shrink-0 items-center justify-end @2xl/panel:min-w-45">
             {status}
           </div>
         ) : null}
       </div>
       {hasSecondLine ? (
-        <div className="flex items-center gap-3.5 pl-[50px]">
-          <div className="min-w-0 flex-1">{details}</div>
-          <div className="flex w-60 shrink-0 items-center justify-end gap-5">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 pl-[50px]">
+          <div className="min-w-0 flex-[1_1_14rem]">{details}</div>
+          <div className="ml-auto flex shrink-0 items-center justify-end gap-5 @2xl/panel:w-60">
             {actions}
           </div>
         </div>

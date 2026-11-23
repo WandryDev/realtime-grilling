@@ -166,8 +166,13 @@ export function HistoryHeader({
   title: string;
 }) {
   return (
-    <header className={cn("flex items-end justify-between gap-6", className)}>
-      <div className="flex flex-col gap-2">
+    <header
+      className={cn(
+        "flex flex-wrap items-end justify-between gap-x-6 gap-y-4",
+        className
+      )}
+    >
+      <div className="flex min-w-0 flex-col gap-2">
         <p className="text-muted-foreground text-sm">{eyebrow}</p>
         <h1 className="text-3xl font-semibold tracking-tight text-balance">
           {title}
@@ -210,7 +215,11 @@ export function SearchField({
 
   return (
     <InputGroup
-      className={cn("h-9 w-[280px] shrink-0", query && "pr-2", className)}
+      className={cn(
+        "h-9 w-[280px] max-w-full shrink-0",
+        query && "pr-2",
+        className
+      )}
       data-preview={preview}
     >
       <InputGroupAddon>
@@ -369,13 +378,29 @@ export function OpenStatus({
   );
 }
 
-/* A history row: whole row is a link, gray on hover, hairline on top */
+/*
+ * A history row: whole row is a link, gray on hover, hairline on top. On a
+ * panel narrower than 896 (a 1024 window and less) it is a grid: the date
+ * on the left, the content, then the status and duration under it.
+ */
 const HISTORY_ROW =
-  "gap-5 rounded-none border-border border-t p-4 hover:rounded-md hover:border-transparent";
+  "grid grid-cols-[72px_minmax(0,1fr)] items-start gap-x-5 gap-y-2.5 rounded-none border-border border-t p-4 hover:rounded-md hover:border-transparent @4xl/panel:flex @4xl/panel:items-center @4xl/panel:gap-5";
+
+/** Title and description wrap on a narrow panel instead of truncating. */
+const ROW_TEXT_WRAP = "@max-4xl/panel:whitespace-normal";
+
+/** Trailing columns: a row of their own under the content when narrow. */
+function RowTrailing({ children }: { children: ReactNode }) {
+  return (
+    <span className="col-start-2 flex flex-wrap items-center gap-x-5 gap-y-1.5 @4xl/panel:contents">
+      {children}
+    </span>
+  );
+}
 
 function CallDate({ date, time }: { date: string; time: string }) {
   return (
-    <span className="flex w-[72px] shrink-0 flex-col">
+    <span className="row-span-2 flex w-[72px] shrink-0 flex-col">
       <span className="text-base font-medium">{date}</span>
       <span className="text-muted-foreground font-mono text-xs tabular-nums">
         {time}
@@ -394,7 +419,7 @@ function CallDuration({
   return (
     <span
       className={cn(
-        "text-muted-foreground w-14 shrink-0 text-right font-mono text-xs tabular-nums",
+        "text-muted-foreground w-14 shrink-0 text-right font-mono text-xs tabular-nums @max-4xl/panel:ml-auto",
         className
       )}
     >
@@ -423,22 +448,29 @@ export function HistoryCallRow({
     >
       <CallDate date={call.date} time={call.time} />
       <ItemContent className="gap-0.5">
-        <ItemTitle className="text-lg">{call.title}</ItemTitle>
-        <ItemDescription className="text-base">
+        <ItemTitle className={cn("text-lg", ROW_TEXT_WRAP)}>
+          {call.title}
+        </ItemTitle>
+        <ItemDescription className={cn("text-base", ROW_TEXT_WRAP)}>
           {call.participants}
         </ItemDescription>
       </ItemContent>
-      <ItemMeta className="w-40 justify-end">
+      <RowTrailing>
         {call.proposals ? (
-          <Badge indicator={false} variant="waiting">
-            {call.proposals} предложения
-          </Badge>
-        ) : null}
-      </ItemMeta>
-      <ItemActions className="w-[120px] justify-start">
-        <OpenStatus openCount={call.openCount} />
-      </ItemActions>
-      <CallDuration duration={call.duration} />
+          <ItemMeta className="w-40 justify-end @max-4xl/panel:w-auto">
+            <Badge indicator={false} variant="waiting">
+              {call.proposals} предложения
+            </Badge>
+          </ItemMeta>
+        ) : (
+          // Keeps the column on a wide panel; nothing to show when narrow.
+          <ItemMeta className="w-40 @max-4xl/panel:hidden" />
+        )}
+        <ItemActions className="w-[120px] justify-start @max-4xl/panel:w-auto">
+          <OpenStatus openCount={call.openCount} />
+        </ItemActions>
+        <CallDuration duration={call.duration} />
+      </RowTrailing>
     </Item>
   );
 }
@@ -485,7 +517,7 @@ export function SearchResultRow({
   const { callTranscript, Link } = usePostCallLinks();
   return (
     <Item
-      className={cn(HISTORY_ROW, "items-start", className)}
+      className={cn(HISTORY_ROW, "@4xl/panel:items-start", className)}
       render={
         <Link
           href={callTranscript(result.callId ?? result.id, result.moment)}
@@ -498,14 +530,18 @@ export function SearchResultRow({
           <span className="text-muted-foreground text-sm">
             {result.project}
           </span>
-          <ItemTitle className="text-lg">{result.title}</ItemTitle>
+          <ItemTitle className={cn("text-lg", ROW_TEXT_WRAP)}>
+            {result.title}
+          </ItemTitle>
         </span>
         <MatchQuote match={result.match} query={query} />
       </ItemContent>
-      <ItemActions className="h-5 w-[120px] justify-start">
-        <OpenStatus openCount={result.openCount} />
-      </ItemActions>
-      <CallDuration className="leading-5" duration={result.duration} />
+      <RowTrailing>
+        <ItemActions className="h-5 w-[120px] justify-start @max-4xl/panel:w-auto">
+          <OpenStatus openCount={result.openCount} />
+        </ItemActions>
+        <CallDuration className="leading-5" duration={result.duration} />
+      </RowTrailing>
     </Item>
   );
 }

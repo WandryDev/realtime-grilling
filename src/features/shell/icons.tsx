@@ -85,3 +85,23 @@ export function SearchIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Window with its left column: opens the navigation of a narrow window. */
+export function SidebarIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect height="11" rx="2" width="12" x="2" y="2.5" />
+      <path d="M6 2.5V13.5" />
+    </Icon>
+  );
+}
+
+/** Window with its right column: opens the side column of a narrow window. */
+export function AsideIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect height="11" rx="2" width="12" x="2" y="2.5" />
+      <path d="M10 2.5V13.5" />
+    </Icon>
+  );
+}

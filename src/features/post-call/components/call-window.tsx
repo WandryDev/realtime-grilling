@@ -162,7 +162,13 @@ export function CallWindow({
   );
 }
 
-/** Content of the panel: 64px sides, 48 top, 56 bottom. */
+/**
+ * Side padding of the panel's content: 64px, 24 on a narrow panel. The panel
+ * of a 1280 window with both columns is 688 wide and keeps the 64.
+ */
+export const PANEL_PAGE_X = "px-6 @2xl/panel:px-16";
+
+/** Content of the panel: 64px sides (see PANEL_PAGE_X), 48 top, 56 bottom. */
 export function PanelPage({
   "aria-busy": busy,
   children,
@@ -176,7 +182,7 @@ export function PanelPage({
   return (
     <main
       aria-busy={busy || undefined}
-      className={cn("flex flex-col gap-7 px-16 pt-12 pb-14", className)}
+      className={cn("flex flex-col gap-7 pt-12 pb-14", PANEL_PAGE_X, className)}
     >
       {children}
     </main>
@@ -193,7 +199,7 @@ export function CallBreadcrumb({
   const { Link } = usePostCallLinks();
   return (
     <nav aria-label="Путь" className={className}>
-      <ol className="text-muted-foreground flex items-center gap-2 text-sm">
+      <ol className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         {items.map((item, index) => (
           <Fragment key={item.label}>
             {index > 0 ? (

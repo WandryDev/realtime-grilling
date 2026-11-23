@@ -41,7 +41,7 @@ export function ReviewProgress({
     <div className={cn("flex items-center gap-3", className)}>
       <Progress
         aria-label={caption}
-        className="**:data-[slot=progress-track]:bg-border w-[200px]"
+        className="**:data-[slot=progress-track]:bg-border w-[200px] min-w-0 shrink"
         max={total}
         size="sm"
         value={reviewed}
@@ -68,9 +68,14 @@ export function ProposalGroupHeading({
   title: string;
 }) {
   return (
-    <div className={cn("flex items-center gap-2.5 px-1 pb-1", className)}>
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-2.5 gap-y-1 px-1 pb-1",
+        className
+      )}
+    >
       {initial ? (
-        <Avatar className="size-7">
+        <Avatar className="size-7 shrink-0">
           <AvatarFallback>{initial}</AvatarFallback>
         </Avatar>
       ) : (
@@ -102,7 +107,9 @@ function ProposalActions({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-center gap-2", className)}>{children}</div>
+    <div className={cn("flex flex-wrap items-center gap-2", className)}>
+      {children}
+    </div>
   );
 }
 
@@ -200,7 +207,7 @@ export function ProposalCard({
       )}
       data-proposal-id={proposal.id}
     >
-      <header className="flex items-center justify-between gap-4">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <h3 className="text-muted-foreground text-sm font-medium">
           {proposal.section}
         </h3>
@@ -267,7 +274,10 @@ export function ProposalCard({
   );
 }
 
-/** Accepted or rejected proposal, folded into a 52px row with an undo. */
+/**
+ * Accepted or rejected proposal, folded into a 52px row with an undo; it
+ * grows when the text wraps on a narrow panel.
+ */
 export function ProposalResolvedRow({
   className,
   onAction,
@@ -283,7 +293,7 @@ export function ProposalResolvedRow({
   return (
     <div
       className={cn(
-        "flex h-[52px] shrink-0 items-center gap-3 rounded-md px-6",
+        "flex min-h-[52px] shrink-0 items-center gap-3 rounded-md py-1.5 pr-4 pl-6 @2xl/panel:pr-6",
         accepted && "bg-surface",
         className
       )}
@@ -303,14 +313,14 @@ export function ProposalResolvedRow({
       </p>
       <p
         className={cn(
-          "text-sm",
+          "shrink-0 text-sm",
           accepted ? "text-confirmed" : "text-muted-foreground"
         )}
       >
         {accepted ? "принято" : "отклонено"}
       </p>
       <Button
-        className={cn(accepted && "bg-background hover:bg-border")}
+        className={cn("shrink-0", accepted && "bg-background hover:bg-border")}
         onClick={undo}
         size="sm"
         variant="secondary"

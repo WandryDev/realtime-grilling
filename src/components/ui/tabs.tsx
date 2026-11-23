@@ -15,7 +15,7 @@ function Tabs({
       data-slot="tabs"
       data-orientation={orientation}
       className={cn(
-        "group/tabs flex gap-2 data-horizontal:flex-col",
+        "group/tabs flex max-w-full min-w-0 gap-2 data-horizontal:flex-col",
         className
       )}
       {...props}
@@ -27,14 +27,17 @@ function Tabs({
  * Paper "04 Метки и пилюли", "Фильтр и вкладка": the selected item is a white
  * segment on a gray track, text 500. Tabs are 32px tall, filters (`sm`) 30px.
  * Black stays reserved for the topic anchor in a call.
+ *
+ * A horizontal list that doesn't fit scrolls sideways (no scrollbar drawn)
+ * instead of leaving its parent.
  */
 const tabsListVariants = cva(
-  "group/tabs-list inline-flex w-fit items-center group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col group-data-vertical/tabs:items-stretch",
+  "group/tabs-list inline-flex w-fit max-w-full items-center group-data-horizontal/tabs:overflow-x-auto group-data-horizontal/tabs:[scrollbar-width:none] group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col group-data-vertical/tabs:items-stretch",
   {
     variants: {
       variant: {
         default: "gap-0.5 rounded-full bg-surface p-[3px]",
-        line: "gap-1 bg-transparent",
+        line: "gap-1 bg-transparent group-data-horizontal/tabs:pb-1",
       },
       size: {
         default: "",

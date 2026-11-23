@@ -16,13 +16,17 @@ import { cn } from "cn"
  *       <AppWindowPanel>…main content…</AppWindowPanel>
  *     </AppWindowBody>
  *   </AppWindow>
+ *
+ * Both are size containers: layouts inside follow the window's width
+ * (`@max-5xl/window:…`) or the panel's (`@3xl/panel:…`), not the viewport,
+ * so a window in an artboard behaves like the real one of that size.
  */
 function AppWindow({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="app-window"
       className={cn(
-        "flex flex-col overflow-clip rounded-lg bg-surface ring-1 ring-foreground/6",
+        "@container/window flex flex-col overflow-clip rounded-lg bg-surface ring-1 ring-foreground/6",
         className
       )}
       {...props}
@@ -49,7 +53,7 @@ function AppWindowPanel({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="app-window-panel"
       className={cn(
-        "flex min-w-0 flex-1 flex-col rounded-panel bg-background shadow-card",
+        "@container/panel flex min-w-0 flex-1 flex-col rounded-panel bg-background shadow-card",
         className
       )}
       {...props}
