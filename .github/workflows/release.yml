@@ -146,9 +146,15 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
 
+      # The runner image is part of the cache key: see the same step in ci.yml.
+      - name: Runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: ${{ env.RUNNER_IMAGE }}
           # v1: see the same key in ci.yml.
           prefix-key: v1-rust
 
