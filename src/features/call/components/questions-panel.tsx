@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback } from "react";
+import { type MouseEvent, type ReactNode, useCallback } from "react";
 
 import { AppWindowPanel } from "@/components/ui/app-window";
 import { AgentStatus } from "@/components/ui/recording-indicator";
@@ -83,6 +83,7 @@ export function QuestionsNav({
         "border-border bg-background sticky top-0 z-10 flex items-start justify-between gap-2 border-b pt-4 pb-3.5",
         className
       )}
+      data-slot="questions-nav"
     >
       {/*
        * Anchors that don't fit move to a second row, never under the status.
@@ -137,16 +138,27 @@ function AnchorButton({
   anchor: TopicAnchorData;
   sectionIdPrefix?: string;
 }) {
-  const scrollToTopic = useCallback(() => {
-    if (!sectionIdPrefix) {
-      return;
-    }
-    // useId ids carry colons, so the selector needs escaping
-    const id = CSS.escape(topicSectionId(sectionIdPrefix, anchor.id));
-    document
-      .querySelector(`#${id}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [anchor.id, sectionIdPrefix]);
+  const scrollToTopic = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (!sectionIdPrefix) {
+        return;
+      }
+      // useId ids carry colons, so the selector needs escaping
+      const id = CSS.escape(topicSectionId(sectionIdPrefix, anchor.id));
+      const section = document.querySelector<HTMLElement>(`#${id}`);
+      if (!section) {
+        return;
+      }
+      // The sticky bar grows as its anchors wrap: the topic's title lands
+      // under it, never behind it (`scroll-mt-16` is the one-row height).
+      const bar = event.currentTarget.closest("[data-slot=questions-nav]");
+      if (bar) {
+        section.style.scrollMarginTop = `${bar.getBoundingClientRect().height}px`;
+      }
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
+    [anchor.id, sectionIdPrefix]
+  );
 
   return (
     <TopicAnchor
