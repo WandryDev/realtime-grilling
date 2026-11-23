@@ -241,6 +241,29 @@ fn only_what_came_after_the_update_is_sent() {
     assert_eq!(segments, [Value::from(new)]);
 }
 
+/// Spec «Проект старше аналитики»: a project made while the queue was off
+/// is sent when it turns on, so its new calls land in it and not in «Без
+/// проекта».
+#[test]
+fn a_project_from_before_is_sent_when_the_queue_turns_on() {
+    let connection = database();
+    let (project, _) = projects::create(
+        &connection,
+        ProjectCreate {
+            name: "Обменник".to_owned(),
+            ..ProjectCreate::default()
+        },
+    )
+    .unwrap();
+    assert!(kinds(&connection).is_empty());
+    enable_on(&connection).unwrap();
+    let queued = queued(&connection);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].0, "project");
+    assert_eq!(queued[0].1["body"]["localId"], Value::from(project.id));
+    assert_eq!(queued[0].1["body"]["name"], "Обменник");
+}
+
 /// A rename sends the project again; another change of it does not.
 #[test]
 fn a_rename_sends_the_project() {

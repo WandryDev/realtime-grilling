@@ -33,9 +33,20 @@ pub fn notifier() -> Arc<Notify> {
     Arc::clone(NOTIFY.get_or_init(|| Arc::new(Notify::new())))
 }
 
-/// Turns the queue on for `connection`.
+/// Turns the queue on for `connection` and queues every project as it is
+/// now: a project made before the analytics started (or before this build)
+/// was never sent at its creation, and without it its calls land in «Без
+/// проекта». The server takes a project's snapshot again without harm.
 pub fn enable_on(connection: &Connection) -> CommandResult<()> {
     connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS analytics_on (on_since INTEGER)")?;
+    let ids = connection
+        .prepare("SELECT id FROM projects ORDER BY created_at, id")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let at = now_ms();
+    for id in ids {
+        project(connection, &id, at)?;
+    }
     Ok(())
 }
 
