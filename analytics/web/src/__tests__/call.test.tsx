@@ -29,6 +29,7 @@ vi.mock("next/navigation", () => ({
 const LIVE_PHRASE = /если все заняты звонок/u;
 const QUESTION_CHIP = /Сколько ждёт звонок/u;
 const FINDING_CHIP = /Находка · Регламент/u;
+const TOKEN_MIX = /Токены вызова/u;
 
 beforeEach(() => {
   serve({});
@@ -86,6 +87,11 @@ describe("«Таймлайн звонка»", () => {
       "$0.200"
     );
     expect(screen.getAllByTestId("agent-call")).toHaveLength(44);
+    // The compact head holds the same totals, hidden until the big one scrolls away.
+    const bar = screen.getByTestId("sticky-bar");
+    expect(bar.dataset.shown).toBe("false");
+    expect(bar.textContent).toContain("Расход агента: $0.750");
+    expect(bar.textContent).toContain("Вызовов агента: 44");
   });
 
   it("«Уточнённая расшифровка»: shown, and the call's live phrases stay by its link", async () => {
@@ -176,6 +182,26 @@ describe("«Таймлайн звонка»", () => {
   });
 });
 
+describe("«Живое обновление»", () => {
+  it("follows the latest phrase of a live call until told not to", async () => {
+    serve({
+      "/api/calls/call-1": timeline({
+        segments: [segment("s-1", MINUTE, "Очередь звонков")],
+      }),
+    });
+    render(<CallView />);
+    const follow = await screen.findByRole("button", {
+      name: "Следовать за последней фразой",
+    });
+    expect(follow.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(follow);
+    expect(follow.getAttribute("aria-pressed")).toBe("false");
+    // At the end of the chat the way down is hidden.
+    const down = screen.getByLabelText("К последней фразе");
+    expect(down.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
 describe("«Вызов агента целиком»", () => {
   it("«Отклонённый вопрос»: rejected with «цитата не найдена» and the quote", async () => {
     const call = agentCall("ac-1", MINUTE, {
@@ -238,7 +264,7 @@ describe("«Вызов агента целиком»", () => {
     const panel = await screen.findByTestId("agent-call-panel");
     expect(panel.textContent).toContain("CLI не ответил за 60 с");
     await within(panel).findByTestId("no-reply");
-    expect(panel.textContent).toContain("Промпт · 2 частей");
+    expect(panel.textContent).toContain("Промпт · 2 части");
     expect(within(panel).getByText("system")).toBeDefined();
     expect(within(panel).getByText("window")).toBeDefined();
   });
@@ -261,11 +287,85 @@ describe("«Вызов агента целиком»", () => {
     openCall(1);
     const panel = await screen.findByTestId("agent-call-panel");
     const system = (await within(panel).findByText("system")).closest(
-      "summary"
+      "[data-testid=prompt-part]"
     );
     expect(system?.textContent).toContain("как в прошлом вызове");
-    const window = within(panel).getByText("window").closest("summary");
+    const window = within(panel)
+      .getByText("window")
+      .closest("[data-testid=prompt-part]");
     expect(window?.textContent).not.toContain("как в прошлом вызове");
+  });
+  it("draws the call's spend: the tokens by part and the limit it moved", async () => {
+    const before = agentCall("ac-1", MINUTE, { utilization: 0.63 });
+    const call = agentCall("ac-2", 2 * MINUTE, {
+      cacheRead: 10_000,
+      cacheWrite: 21_000,
+      costUsd: 0.137,
+      inputTokens: 4,
+      outputTokens: 5000,
+      utilization: 0.65,
+    });
+    serve({
+      "/api/agent-calls/ac-1": details(before),
+      "/api/agent-calls/ac-2": details(call),
+      "/api/calls/call-1": timeline({ agentCalls: [before, call] }),
+    });
+    render(<CallView />);
+    await screen.findByTestId("call-totals");
+    openCall(1);
+    const panel = await screen.findByTestId("agent-call-panel");
+
+    expect(within(panel).getByText("$0.137")).toBeDefined();
+    const mix = within(panel).getByRole("img", { name: TOKEN_MIX });
+    expect(mix.getAttribute("aria-label")).toContain("Запись кеша: 21K, 58 %");
+    expect(mix.children).toHaveLength(4);
+    const meter = within(panel).getByRole("meter");
+    expect(meter.getAttribute("value")).toBe("65");
+    expect(panel.textContent).toContain("+2 п. п. с прошлого вызова");
+  });
+
+  it("shows each part of the prompt in its own view", async () => {
+    const call = agentCall("ac-1", MINUTE);
+    serve({
+      "/api/agent-calls/ac-1": details(call, {
+        parts: [
+          { hash: "h-mode", label: "mode", text: "Режим: обычный." },
+          {
+            hash: "h-card",
+            label: "card",
+            text: "# Карточка текущей темы\n\n- goal: Клиенты бронируют сами. (основания: S:1, S:2)\nПустые линзы: критерии готовности.",
+          },
+          {
+            hash: "h-questions",
+            label: "questions",
+            text: "# Открытые вопросы\n\n- [Q:q-1] Сколько касс подключить первыми?",
+          },
+        ],
+      }),
+      "/api/calls/call-1": timeline({ agentCalls: [call] }),
+    });
+    render(<CallView />);
+    await screen.findByTestId("call-totals");
+    openCall();
+    const panel = await screen.findByTestId("agent-call-panel");
+
+    // A short part shows in its line, with nothing to open.
+    const mode = (await within(panel).findByText("Режим")).closest(
+      "[data-testid=prompt-part]"
+    ) as HTMLElement;
+    expect(mode.textContent).toContain("обычный.");
+    expect(within(mode).queryByRole("button")).toBeNull();
+
+    fireEvent.click(within(panel).getByText("Карточка темы"));
+    expect(await within(panel).findByText("Цель")).toBeDefined();
+    expect(within(panel).getByText("Клиенты бронируют сами.")).toBeDefined();
+    expect(within(panel).getByText("2 основания")).toBeDefined();
+
+    fireEvent.click(within(panel).getByText("Вопросы"));
+    expect(
+      await within(panel).findByText("Сколько касс подключить первыми?")
+    ).toBeDefined();
+    expect(within(panel).getByText("Открытые вопросы · 1")).toBeDefined();
   });
 });
 

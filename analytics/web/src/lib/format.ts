@@ -156,3 +156,51 @@ export const reasonText = (reason: unknown): string => {
   }
   return name;
 };
+
+/** `1 часть`, `2 части`, `5 частей`: the Russian form for `count`. */
+export const plural = (
+  count: number,
+  [one, few, many]: readonly [string, string, string]
+): string => {
+  const tens = count % 100;
+  const units = count % 10;
+  let word = many;
+  if (tens < 11 || tens > 14) {
+    if (units === 1) {
+      word = one;
+    } else if (units >= 2 && units <= 4) {
+      word = few;
+    }
+  }
+  return `${ru.format(count)} ${word}`;
+};
+
+/** An operation of the agent's patch. */
+export const OP_NAMES: Record<string, string> = {
+  answered: "Ответ на вопрос",
+  card: "Факт карточки",
+  finalCheck: "Финальная проверка",
+  finding: "Находка",
+  new: "Новая тема",
+  question: "Вопрос",
+  same: "Тема та же",
+  switch: "Смена темы",
+  topic: "Тема",
+};
+
+/** A lens of the topic's card. */
+export const LENS_NAMES: Record<string, string> = {
+  acceptance: "Критерии готовности",
+  constraints: "Ограничения",
+  edgeCases: "Крайние случаи",
+  goal: "Цель",
+  integrations: "Интеграции",
+  scenarios: "Сценарии",
+  users: "Пользователи",
+};
+
+export const GAP_NAMES: Record<string, string> = {
+  assumption: "допущение",
+  contradiction: "противоречие",
+  empty: "пробел",
+};

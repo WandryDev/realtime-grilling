@@ -102,7 +102,7 @@ const Overview = ({ summary }: { summary: Summary }) => {
           value={percent(useful, questions.shown)}
         />
       </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.6fr_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <Panel aside="новые сверху" title="Звонки">
           <Calls summary={summary} />
         </Panel>

@@ -227,3 +227,35 @@ export const callsThat = (
       (item) => item.applied && item.op === op && item.subjectId === subjectId
     )
   );
+
+/** Who speaks a turn of the chat: the client, the manager or the agent. */
+export type Speaker = "client" | "manager" | "agent";
+
+/** The items of one speaker in a row, shown as one message. */
+export interface Turn {
+  readonly items: readonly Item[];
+  readonly key: string;
+  readonly speaker: Speaker;
+}
+
+const speakerOf = (item: Item): Speaker => {
+  if (item.kind !== "phrase") {
+    return "agent";
+  }
+  return item.segment.channel === "others" ? "client" : "manager";
+};
+
+/** The timeline as a chat: the items of one speaker in a row are one turn. */
+export const turns = (list: readonly Item[]): Turn[] => {
+  const result: { key: string; speaker: Speaker; items: Item[] }[] = [];
+  for (const item of list) {
+    const speaker = speakerOf(item);
+    const last = result.at(-1);
+    if (last?.speaker === speaker) {
+      last.items.push(item);
+    } else {
+      result.push({ items: [item], key: item.key, speaker });
+    }
+  }
+  return result;
+};

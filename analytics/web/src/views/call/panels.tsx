@@ -10,17 +10,20 @@ import type {
   FindingDetails,
 } from "@grill/analytics-server/api";
 import { Effect } from "effect";
+import { SearchIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { Code } from "@/components/code";
+import { inline } from "@/components/markdown";
 import {
   clock,
   KIND_NAMES,
+  OP_NAMES,
   OUTCOME_NAMES,
-  percent,
+  plural,
   reasonText,
   STEP_NAMES,
   seconds,
   TRIGGER_NAMES,
-  tokens,
   usd,
 } from "@/lib/format";
 import { useQuery } from "@/lib/query";
@@ -35,21 +38,16 @@ import {
   type Timeline,
 } from "./model";
 import { Open } from "./open";
+import { PromptParts } from "./prompt-parts";
+import { Usage } from "./usage";
 
 type Details = typeof AgentCallDetails.Type;
 type FindingInfo = typeof FindingDetails.Type;
 
 const Block = ({ children, title }: { children: ReactNode; title: string }) => (
-  <div className="border-border flex flex-col gap-2 border-t pt-4">
+  <div className="border-border flex flex-col gap-2 border-t pt-4 first:border-t-0 first:pt-0">
     <h3 className="text-muted-foreground text-[13px] font-medium">{title}</h3>
     {children}
-  </div>
-);
-
-const Fact = ({ label, value }: { label: string; value: ReactNode }) => (
-  <div className="flex justify-between gap-3 text-[13px] tabular-nums">
-    <span className="text-muted-foreground">{label}</span>
-    <span>{value}</span>
   </div>
 );
 
@@ -68,18 +66,6 @@ const opTitle = (body: unknown): string => {
     }
   }
   return "";
-};
-
-const OP_NAMES: Record<string, string> = {
-  answered: "Ответ на вопрос",
-  card: "Факт карточки",
-  finalCheck: "Финальная проверка",
-  finding: "Находка",
-  new: "Новая тема",
-  question: "Вопрос",
-  same: "Тема та же",
-  switch: "Смена темы",
-  topic: "Тема",
 };
 
 export const AgentCallPanel = ({
@@ -117,42 +103,16 @@ export const AgentCallPanel = ({
       <p className="text-muted-foreground text-sm">Вызов ещё не пришёл.</p>
     );
   }
-  const start = startOf(timeline);
   return (
     <div className="flex flex-col gap-4" data-testid="agent-call-panel">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold">
-          {KIND_NAMES[summary.kind] ?? summary.kind}
-        </h2>
-        <div className="text-muted-foreground text-[13px] tabular-nums">
-          {clock(summary.startedAt - start)} · {seconds(summary.durationMs)} ·{" "}
-          <span
-            className={
-              summary.outcome === "ok" || summary.outcome === "empty"
-                ? ""
-                : "text-contradiction"
-            }
-          >
-            {OUTCOME_NAMES[summary.outcome] ?? summary.outcome}
-          </span>
+      {summary.error ? (
+        <div className="bg-contradiction-soft text-contradiction rounded-[10px] px-3 py-2 text-[13px]">
+          {summary.error}
         </div>
-        {summary.error ? (
-          <div className="text-contradiction text-[13px]">{summary.error}</div>
-        ) : null}
-      </div>
+      ) : null}
       <Trigger call={summary} timeline={timeline} />
       <Block title="Расход">
-        <Fact label="Вход" value={tokens(summary.inputTokens)} />
-        <Fact label="Чтение кеша" value={tokens(summary.cacheRead)} />
-        <Fact label="Запись кеша" value={tokens(summary.cacheWrite)} />
-        <Fact label="Выход" value={tokens(summary.outputTokens)} />
-        <Fact label="Эквивалент" value={usd(summary.costUsd)} />
-        <Fact
-          label="Доля лимита подписки"
-          value={
-            summary.utilization === null ? "—" : percent(summary.utilization, 1)
-          }
-        />
+        <Usage call={summary} timeline={timeline} />
       </Block>
       <Block title={`Операции · ${summary.ops.length}`}>
         {summary.ops.length === 0 ? (
@@ -261,97 +221,149 @@ const Trigger = ({
   );
 };
 
+const QueryList = ({ queries }: { queries: readonly string[] }) => (
+  <ul className="flex flex-col gap-1 text-[13px]">
+    {queries.map((query) => (
+      <li className="flex items-center gap-2" key={query}>
+        <SearchIcon
+          aria-hidden
+          className="text-muted-foreground size-3.5 shrink-0"
+        />
+        {query}
+      </li>
+    ))}
+  </ul>
+);
+
+const isStrings = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/**
+ * The search the slow loop ran: the agent's queries as a list, the
+ * client's phrase it searched by as a quote; JSON for anything else.
+ */
+const Queries = ({ queries }: { queries: unknown }) => {
+  if (isStrings(queries)) {
+    return <QueryList queries={queries} />;
+  }
+  const fields =
+    typeof queries === "object" && queries !== null
+      ? (queries as Record<string, unknown>)
+      : null;
+  if (fields && isStrings(fields.agent)) {
+    return (
+      <div className="flex flex-col gap-2">
+        <QueryList queries={fields.agent} />
+        {typeof fields.client === "string" ? (
+          <div className="text-muted-foreground text-[12px]">
+            И по фразе клиента: «{fields.client}»
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  return <Code code={JSON.stringify(queries, null, 2)} language="json" />;
+};
+
+const parseJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * What the CLI returned, colored: the agent's patch first when the reply
+ * carries it, then the whole reply.
+ */
+const CliReply = ({ raw }: { raw: string }) => {
+  const parsed = parseJson(raw);
+  if (parsed === undefined) {
+    return <Code code={raw} language="markdown" title="Текст" />;
+  }
+  const patch =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>).structured_output
+      : undefined;
+  const whole = JSON.stringify(parsed, null, 2);
+  return (
+    <div className="flex flex-col gap-3">
+      {patch === undefined ? null : (
+        <Code
+          code={JSON.stringify(patch, null, 2)}
+          language="json"
+          title="Патч агента · structured_output"
+        />
+      )}
+      <Code
+        code={whole}
+        language="json"
+        maxHeight={patch === undefined ? "max-h-[420px]" : "max-h-60"}
+        title="Весь ответ CLI"
+      />
+    </div>
+  );
+};
+
+const PARTS = ["часть", "части", "частей"] as const;
+
 const Prompt = ({
   details,
   previous,
 }: {
   details: Details;
   previous: Details | null;
-}) => {
-  const before = new Set(previous?.parts.map((part) => part.hash) ?? []);
-  return (
-    <>
-      {details.queries ? (
-        <Block title="Поисковые запросы">
-          <pre className="font-mono text-[12px] whitespace-pre-wrap">
-            {JSON.stringify(details.queries, null, 2)}
-          </pre>
-        </Block>
-      ) : null}
-      {details.candidates.length > 0 ? (
-        <Block title={`Кандидаты · ${details.candidates.length}`}>
-          <ul className="flex flex-col gap-2">
-            {details.candidates.map((candidate) => (
-              <li className="text-[13px]" key={candidate.label}>
-                <span className="font-medium">{candidate.label}</span>{" "}
-                {candidate.sourceUrl ? (
-                  <a
-                    className="hover:underline"
-                    href={candidate.sourceUrl}
-                    rel="noopener noreferrer"
-                    target="_blank"
-                  >
-                    {candidate.sourceName}
-                  </a>
-                ) : (
-                  candidate.sourceName
-                )}
-                {candidate.headingPath ? (
-                  <span className="text-muted-foreground">
-                    {" "}
-                    › {candidate.headingPath}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </Block>
-      ) : null}
-      <Block title={`Промпт · ${details.parts.length} частей`}>
-        {details.parts.length === 0 ? (
-          <p className="text-muted-foreground text-[13px]">
-            Промпт не уходил в CLI.
-          </p>
-        ) : null}
-        {details.parts.map((part) => (
-          <details
-            className="bg-surface rounded-lg px-3 py-2"
-            key={`${part.label}:${part.hash}`}
-          >
-            <summary className="cursor-pointer text-[13px]">
-              <span className="font-medium">{part.label}</span>
-              <span className="text-muted-foreground">
-                {" "}
-                ·{" "}
-                {part.text === null
-                  ? "текст ещё не пришёл"
-                  : `${part.text.length} символов`}
-                {before.has(part.hash) ? " · как в прошлом вызове" : ""}
-              </span>
-            </summary>
-            <pre className="mt-2 max-h-80 overflow-auto font-mono text-[12px] whitespace-pre-wrap">
-              {part.text}
-            </pre>
-          </details>
-        ))}
+}) => (
+  <>
+    {details.queries ? (
+      <Block title="Поисковые запросы">
+        <Queries queries={details.queries} />
       </Block>
-      <Block title="Ответ CLI">
-        {details.rawReply ? (
-          <pre className="bg-surface max-h-80 overflow-auto rounded-lg p-3 font-mono text-[12px] whitespace-pre-wrap">
-            {details.rawReply}
-          </pre>
-        ) : (
-          <p
-            className="text-muted-foreground text-[13px]"
-            data-testid="no-reply"
-          >
-            Ответа нет.
-          </p>
-        )}
+    ) : null}
+    {details.candidates.length > 0 ? (
+      <Block title={`Кандидаты · ${details.candidates.length}`}>
+        <ul className="flex flex-col gap-2">
+          {details.candidates.map((candidate) => (
+            <li className="text-[13px]" key={candidate.label}>
+              <span className="font-medium">{candidate.label}</span>{" "}
+              {candidate.sourceUrl ? (
+                <a
+                  className="hover:underline"
+                  href={candidate.sourceUrl}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  {candidate.sourceName}
+                </a>
+              ) : (
+                candidate.sourceName
+              )}
+              {candidate.headingPath ? (
+                <span className="text-muted-foreground">
+                  {" "}
+                  › {candidate.headingPath}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       </Block>
-    </>
-  );
-};
+    ) : null}
+    <Block title={`Промпт · ${plural(details.parts.length, PARTS)}`}>
+      <PromptParts details={details} previous={previous} />
+    </Block>
+    <Block title="Ответ CLI">
+      {details.rawReply ? (
+        <CliReply raw={details.rawReply} />
+      ) : (
+        <p className="text-muted-foreground text-[13px]" data-testid="no-reply">
+          Ответа нет.
+        </p>
+      )}
+    </Block>
+  </>
+);
 
 export const QuestionPanel = ({
   id,
@@ -511,7 +523,9 @@ const Finding = ({
             finding.sourceName
           )}
         </h2>
-        <blockquote className="text-[14px]">«{finding.quote}»</blockquote>
+        <blockquote className="text-[14px]">
+          «{inline(finding.quote)}»
+        </blockquote>
         <p className="text-muted-foreground text-[13px]">{finding.note}</p>
       </div>
       <Block title="Нашёл вызов">
@@ -581,5 +595,72 @@ const Finding = ({
         </ol>
       </Block>
     </div>
+  );
+};
+
+const Head = ({ sub, title }: { sub: ReactNode; title: ReactNode }) => (
+  <div className="flex min-w-0 flex-col gap-0.5">
+    <h2 className="truncate text-lg font-semibold tracking-tight">{title}</h2>
+    <div className="text-muted-foreground truncate text-[13px] tabular-nums">
+      {sub}
+    </div>
+  </div>
+);
+
+/** What is open beside the timeline, kept in view while its details scroll. */
+export const DetailsHead = ({
+  selection,
+  timeline,
+}: {
+  selection: Selection;
+  timeline: Timeline;
+}) => {
+  const start = startOf(timeline);
+  if (selection.kind === "agentCall") {
+    const call = timeline.agentCalls.find((item) => item.id === selection.id);
+    if (!call) {
+      return <Head sub="ещё не пришёл" title="Вызов агента" />;
+    }
+    const failed = !["ok", "empty"].includes(call.outcome);
+    return (
+      <Head
+        sub={
+          <>
+            {clock(call.startedAt - start)} · {seconds(call.durationMs)} ·{" "}
+            <span className={failed ? "text-contradiction" : ""}>
+              {OUTCOME_NAMES[call.outcome] ?? call.outcome}
+            </span>{" "}
+            · {usd(call.costUsd)}
+          </>
+        }
+        title={KIND_NAMES[call.kind] ?? call.kind}
+      />
+    );
+  }
+  if (selection.kind === "question") {
+    const question = timeline.questions.find(
+      (item) => item.id === selection.id
+    );
+    return (
+      <Head
+        sub={
+          question
+            ? `создан ${clock(question.createdAt - start)} · ${STEP_NAMES[question.status] ?? (question.status === "open" ? "открыт" : question.status)}`
+            : "ещё не пришёл"
+        }
+        title="Вопрос"
+      />
+    );
+  }
+  const finding = timeline.findings.find((item) => item.id === selection.id);
+  return (
+    <Head
+      sub={
+        finding
+          ? `${finding.sourceName} · ${clock(finding.createdAt - start)}`
+          : "ещё не пришла"
+      }
+      title="Находка"
+    />
   );
 };

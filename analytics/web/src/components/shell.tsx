@@ -47,10 +47,10 @@ export const Shell = ({
           Grill{" "}
           <span className="text-muted-foreground font-normal">Аналитика</span>
         </Link>
-        <div className="flex min-w-56 justify-end">
+        <div className="flex justify-end sm:min-w-56">
           {state ? (
             <span
-              className={`border-border flex items-center gap-2 rounded-full border px-3 py-1 text-[13px] ${state.tone}`}
+              className={`border-border flex items-center gap-2 rounded-full border px-3 py-1 text-[13px] whitespace-nowrap ${state.tone}`}
               data-testid="connection"
             >
               <span className={`size-1.5 rounded-full ${state.dot}`} />
@@ -80,10 +80,10 @@ export const Panel = ({
   title?: ReactNode;
 }) => (
   <section
-    className={`bg-card flex flex-col gap-5 rounded-[18px] p-6 sm:p-7 ${className}`}
+    className={`bg-card flex min-w-0 flex-col gap-5 rounded-[18px] p-6 sm:p-7 ${className}`}
   >
     {title || aside ? (
-      <div className="flex items-baseline justify-between gap-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
         <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
         {aside ? (
           <div className="text-muted-foreground text-[13px]">{aside}</div>
@@ -91,6 +91,34 @@ export const Panel = ({
       </div>
     ) : null}
     {children}
+  </section>
+);
+
+/**
+ * A card as tall as its place: the head stays, the body scrolls inside it
+ * (the body decides how: pass a scrolling child).
+ */
+export const ScrollPanel = ({
+  aside,
+  children,
+  className = "",
+  head,
+}: {
+  aside?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  head: ReactNode;
+}) => (
+  <section
+    className={`bg-card flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[18px] ${className}`}
+  >
+    <header className="border-border flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-4 sm:px-7">
+      <div className="min-w-0">{head}</div>
+      {aside ? (
+        <div className="text-muted-foreground text-[13px]">{aside}</div>
+      ) : null}
+    </header>
+    <div className="min-h-0 flex-1">{children}</div>
   </section>
 );
 

@@ -5,16 +5,34 @@
 // pick lives apart from the data: a live re-read never closes or moves it
 // (spec «Чтение во время звонка»).
 
+import { Button } from "@grill/ui/button";
+import { Toggle } from "@grill/ui/toggle";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@grill/ui/tooltip";
+import { ArrowDownToLineIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
-import { Kpi, Panel, Shell } from "@/components/shell";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Kpi, Panel, ScrollPanel, Shell } from "@/components/shell";
 import { LoadError, Loading, NotFound } from "@/components/states";
 import { date, KIND_NAMES, span, tokens, usd } from "@/lib/format";
 import { useQuery } from "@/lib/query";
 import { anchors, items, type Selection, type Timeline, totals } from "./model";
-import { AgentCallPanel, FindingPanel, QuestionPanel } from "./panels";
+import {
+  AgentCallPanel,
+  DetailsHead,
+  FindingPanel,
+  QuestionPanel,
+} from "./panels";
+import { StickyBar, useScrolledPast } from "./sticky-bar";
 import { TimelineList } from "./timeline";
+
+/** A column of the chat and the details: the screen less the compact head. */
+const COLUMN = "h-[calc(100dvh-7.5rem)] min-h-[480px]";
 
 export const CallView = () => {
   const id = useSearchParams().get("id") ?? "";
@@ -60,7 +78,10 @@ const Call = ({ timeline }: { timeline: Timeline }) => {
   const list = useMemo(() => items(timeline), [timeline]);
   const sums = useMemo(() => totals(timeline), [timeline]);
   const close = useCallback(() => setSelected(null), []);
-  const toggleFollow = useCallback(() => setFollow((value) => !value), []);
+  const changeFollow = useCallback(
+    (checked: boolean) => setFollow(checked),
+    []
+  );
   // The phrases the picked call was given, and the one that set it off.
   const highlighted = useMemo(() => {
     if (selected?.kind !== "agentCall") {
@@ -78,9 +99,23 @@ const Call = ({ timeline }: { timeline: Timeline }) => {
     (call) => !["ok", "empty"].includes(call.outcome)
   ).length;
   const live = timeline.call.status !== "finished";
+  const totalsRef = useRef<HTMLDivElement>(null);
+  const past = useScrolledPast(totalsRef);
 
   return (
     <>
+      <StickyBar
+        live={live}
+        project={timeline.call.projectName}
+        shown={past}
+        stats={{
+          calls: sums.all.calls,
+          cost: usd(sums.all.costUsd),
+          failures,
+          tokens: tokens(sums.all.tokens),
+        }}
+        title={timeline.call.title || "Без названия"}
+      />
       <div className="flex flex-col gap-1.5">
         <h1 className="text-[28px] font-semibold tracking-tight">
           {timeline.call.title || "Без названия"}
@@ -99,6 +134,7 @@ const Call = ({ timeline }: { timeline: Timeline }) => {
       <div
         className="grid grid-cols-2 gap-4 lg:grid-cols-4"
         data-testid="call-totals"
+        ref={totalsRef}
       >
         <Kpi label="Расход агента" value={usd(sums.all.costUsd)} />
         <Kpi label="Токены" value={tokens(sums.all.tokens)} />
@@ -138,18 +174,41 @@ const Call = ({ timeline }: { timeline: Timeline }) => {
           </tbody>
         </table>
       </Panel>
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[1.4fr_1fr]">
-        <Panel
+      {/* Both columns as tall as the screen; each scrolls inside. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <ScrollPanel
           aside={
-            <label className="flex cursor-pointer items-center gap-2">
-              <input checked={follow} onChange={toggleFollow} type="checkbox" />
-              Следовать за последней фразой
-            </label>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Toggle
+                      aria-label="Следовать за последней фразой"
+                      className="text-muted-foreground aria-pressed:border-foreground aria-pressed:bg-foreground aria-pressed:text-background aria-pressed:hover:bg-ink-hover"
+                      onPressedChange={changeFollow}
+                      pressed={follow}
+                      size="sm"
+                      variant="outline"
+                    />
+                  }
+                >
+                  <ArrowDownToLineIcon aria-hidden />
+                </TooltipTrigger>
+                <TooltipContent align="end" side="bottom">
+                  {follow
+                    ? "Следую за последней фразой · нажмите, чтобы остановиться"
+                    : "Следовать за последней фразой"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           }
-          title="Ход звонка"
+          className={COLUMN}
+          head={
+            <h2 className="text-xl font-semibold tracking-tight">Ход звонка</h2>
+          }
         >
           {list.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
+            <p className="text-muted-foreground h-full px-6 py-5 text-sm">
               Агент пока ничего не делал: первый вызов уходит после первой фразы
               клиента.
             </p>
@@ -162,20 +221,19 @@ const Call = ({ timeline }: { timeline: Timeline }) => {
               selected={selected}
             />
           )}
-        </Panel>
-        <aside className="xl:sticky xl:top-5">
-          {selected ? (
-            <Panel
-              aside={
-                <button
-                  className="hover:underline"
-                  onClick={close}
-                  type="button"
-                >
-                  Закрыть
-                </button>
-              }
-            >
+        </ScrollPanel>
+        {selected ? (
+          <ScrollPanel
+            aside={
+              <Button onClick={close} size="sm" variant="ghost">
+                <XIcon />
+                Закрыть
+              </Button>
+            }
+            className={COLUMN}
+            head={<DetailsHead selection={selected} timeline={timeline} />}
+          >
+            <div className="h-full overflow-y-auto overscroll-contain px-6 py-5 sm:px-7">
               {selected.kind === "agentCall" ? (
                 <AgentCallPanel
                   id={selected.id}
@@ -197,17 +255,17 @@ const Call = ({ timeline }: { timeline: Timeline }) => {
                   timeline={timeline}
                 />
               ) : null}
-            </Panel>
-          ) : (
-            <Panel>
-              <p className="text-muted-foreground text-sm">
-                Нажмите на вызов агента, вопрос или находку в ходе звонка —
-                здесь откроется, что ушло в Claude Code, что вернулось и что из
-                этого вышло.
-              </p>
-            </Panel>
-          )}
-        </aside>
+            </div>
+          </ScrollPanel>
+        ) : (
+          <Panel className="self-start">
+            <p className="text-muted-foreground text-sm">
+              Нажмите на вызов агента, вопрос или находку в ходе звонка — здесь
+              откроется, что ушло в Claude Code, что вернулось и что из этого
+              вышло.
+            </p>
+          </Panel>
+        )}
       </div>
     </>
   );
