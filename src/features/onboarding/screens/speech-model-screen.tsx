@@ -1,6 +1,6 @@
-import { Button } from "@/components/ui/button";
-import { ProgressLabel, ProgressValue } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@grill/ui/button";
+import { ProgressLabel, ProgressValue } from "@grill/ui/progress";
+import { Spinner } from "@grill/ui/spinner";
 import {
   CheckIcon,
   CrossIcon,

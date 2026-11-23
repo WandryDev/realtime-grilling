@@ -1,9 +1,8 @@
 "use client";
 
+import { Field, FieldError, FieldLabel } from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
 import { type ChangeEvent, type FormEvent, type Ref, useCallback } from "react";
-
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { MaskedKeyInput } from "@/features/connectors/masked-key-input";
 import { ExternalArrowIcon } from "@/features/onboarding/components/icons";
 import { cn } from "@/lib/utils";

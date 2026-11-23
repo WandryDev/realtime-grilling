@@ -3,8 +3,6 @@
 // Client module: the class constants below come from "use client" ui files
 // and are only real values inside another client module.
 
-import { type ReactNode, useId } from "react";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,19 +16,16 @@ import {
   dialogHeaderClassName,
   dialogSurfaceClassName,
   dialogTitleClassName,
-} from "@/components/ui/alert-dialog";
-import {
-  ClickUpIcon,
-  GitHubIcon,
-  OutlineIcon,
-} from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/alert-dialog";
+import { ClickUpIcon, GitHubIcon, OutlineIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
 import {
   ToastIcon,
   toastContentClassName,
   toastSurfaceClassName,
   toastTitleClassName,
-} from "@/components/ui/toast";
+} from "@grill/ui/toast";
+import { type ReactNode, useId } from "react";
 import type { IntegrationService } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 

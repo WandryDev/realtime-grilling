@@ -1,10 +1,5 @@
+import { ClickUpIcon, GitHubIcon, OutlineIcon } from "@grill/ui/brand-icons";
 import type { ComponentProps } from "react";
-
-import {
-  ClickUpIcon,
-  GitHubIcon,
-  OutlineIcon,
-} from "@/components/ui/brand-icons";
 import { cn } from "@/lib/utils";
 
 import type { ServiceId } from "./mock";

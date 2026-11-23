@@ -1,6 +1,5 @@
+import { Button, type ButtonProps } from "@grill/ui/button";
 import type { ReactNode } from "react";
-
-import { Button, type ButtonProps } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ChevronLeftIcon } from "./icons";
 

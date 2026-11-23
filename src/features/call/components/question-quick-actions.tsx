@@ -1,15 +1,14 @@
 "use client";
 
-import { type ReactElement, useCallback } from "react";
-
-import { Kbd } from "@/components/ui/kbd";
-import { QuestionAction, QuestionActions } from "@/components/ui/question";
+import { Kbd } from "@grill/ui/kbd";
+import { QuestionAction, QuestionActions } from "@grill/ui/question";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
   tooltipSurfaceClassName,
-} from "@/components/ui/tooltip";
+} from "@grill/ui/tooltip";
+import { type ReactElement, useCallback } from "react";
 import { cn } from "@/lib/utils";
 
 import { CheckIcon, EyeOffIcon, PinIcon } from "../icons";

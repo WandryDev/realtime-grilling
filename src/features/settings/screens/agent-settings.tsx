@@ -1,12 +1,11 @@
 "use client";
 
+import { ClaudeIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import { Progress, ProgressLabel } from "@grill/ui/progress";
+import { Spinner } from "@grill/ui/spinner";
 import type { ReactNode } from "react";
-
 import type { AgentState, AgentUsage } from "@/bindings";
-import { ClaudeIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
-import { Progress, ProgressLabel } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,

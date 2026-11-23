@@ -1,16 +1,6 @@
 "use client";
 
 import {
-  type ChangeEvent,
-  type ComponentProps,
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useId,
-  useState,
-} from "react";
-
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -24,10 +14,10 @@ import {
   dialogHeaderClassName,
   dialogSurfaceClassName,
   dialogTitleClassName,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { ChoiceField, ChoiceFieldLabel } from "@/components/ui/choice-field";
+} from "@grill/ui/alert-dialog";
+import { Button } from "@grill/ui/button";
+import { Checkbox } from "@grill/ui/checkbox";
+import { ChoiceField, ChoiceFieldLabel } from "@grill/ui/choice-field";
 import {
   Dialog,
   DialogClose,
@@ -36,23 +26,29 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@grill/ui/dialog";
 import {
   Field,
   FieldDescription,
   FieldError,
   FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
+} from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
+import { NativeSelect, NativeSelectOption } from "@grill/ui/native-select";
 import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/segmented-control";
-import { Textarea } from "@/components/ui/textarea";
+} from "@grill/ui/segmented-control";
+import { Textarea } from "@grill/ui/textarea";
+import {
+  type ChangeEvent,
+  type ComponentProps,
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useId,
+  useState,
+} from "react";
 import {
   DESCRIPTION_LIMIT_HINT,
   DESCRIPTION_MAX_CHARS,

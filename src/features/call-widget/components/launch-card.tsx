@@ -1,8 +1,7 @@
+import { CallWidgetFooter } from "@grill/ui/call-widget";
+import { Progress } from "@grill/ui/progress";
+import { Spinner } from "@grill/ui/spinner";
 import type { ComponentProps } from "react";
-
-import { CallWidgetFooter } from "@/components/ui/call-widget";
-import { Progress } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
 
 import type { BriefStepItem } from "../mock";
 import { ActionButton } from "./action-button";

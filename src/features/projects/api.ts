@@ -1,11 +1,9 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { Effect, Stream } from "effect";
 import { useCallback, useEffect, useState } from "react";
-
 import type { SourceAddResult } from "@/bindings";
-
-import { toast } from "@/components/ui/toast";
 import { ProjectsData } from "@/data/services/projects";
 import { addProjectSources } from "@/data/sources";
 import { createStore } from "@/data/store";

@@ -1,6 +1,5 @@
+import { ZoomIcon } from "@grill/ui/brand-icons";
 import type { ReactNode } from "react";
-
-import { ZoomIcon } from "@/components/ui/brand-icons";
 import { cn } from "@/lib/utils";
 
 /*

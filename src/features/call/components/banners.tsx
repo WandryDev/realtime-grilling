@@ -1,15 +1,14 @@
 "use client";
 
-import { useCallback } from "react";
-
 import {
   Alert,
   AlertAction,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/alert";
-import { ClaudeIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/alert";
+import { ClaudeIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import { useCallback } from "react";
 import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
 import { useCallActions } from "../call-actions";

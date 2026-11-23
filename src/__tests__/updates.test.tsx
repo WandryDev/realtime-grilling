@@ -1,8 +1,7 @@
+import { Toaster } from "@grill/ui/toast";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { Toaster } from "@/components/ui/toast";
 import { GeneralSettings } from "@/features/settings/screens/general-settings";
 import { mockUpdates } from "@/features/updates/backend";
 import { UpdateToast } from "@/features/updates/update-toast";

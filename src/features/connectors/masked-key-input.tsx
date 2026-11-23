@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@grill/ui/input-group";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import {
   type ChangeEvent,
@@ -8,13 +14,6 @@ import {
   useCallback,
   useState,
 } from "react";
-
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
 
 /*

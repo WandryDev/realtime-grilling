@@ -1,8 +1,5 @@
-import { ClockIcon } from "lucide-react";
-import type { ReactNode } from "react";
-
-import { AvatarFallback } from "@/components/ui/avatar";
-import { Bubble } from "@/components/ui/bubble";
+import { AvatarFallback } from "@grill/ui/avatar";
+import { Bubble } from "@grill/ui/bubble";
 import {
   Marker,
   MarkerAction,
@@ -10,7 +7,7 @@ import {
   MarkerDot,
   MarkerIcon,
   MarkerTime,
-} from "@/components/ui/marker";
+} from "@grill/ui/marker";
 import {
   Message,
   MessageAvatar,
@@ -20,9 +17,11 @@ import {
   MessageHeader,
   MessageSpeaking,
   MessageTyping,
-} from "@/components/ui/message";
-import { Spinner } from "@/components/ui/spinner";
-import { TopicDivider } from "@/components/ui/topic-divider";
+} from "@grill/ui/message";
+import { Spinner } from "@grill/ui/spinner";
+import { TopicDivider } from "@grill/ui/topic-divider";
+import { ClockIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { ShowcaseSection, Specimen, Stage } from "../_components/showcase";
 
 // Paper "06 Сообщения расшифровки". Every cell is the gray transcript column, 340 wide.

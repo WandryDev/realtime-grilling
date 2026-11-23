@@ -1,17 +1,12 @@
 "use client";
 
+import { AvatarFallback } from "@grill/ui/avatar";
+import { Badge, type BadgeVariant } from "@grill/ui/badge";
+import { ClaudeIcon, OutlineIcon } from "@grill/ui/brand-icons";
+import { Bubble } from "@grill/ui/bubble";
+import { Button } from "@grill/ui/button";
+import { Message, MessageAvatar, MessageContent } from "@grill/ui/message";
 import { type ReactNode, useCallback } from "react";
-
-import { AvatarFallback } from "@/components/ui/avatar";
-import { Badge, type BadgeVariant } from "@/components/ui/badge";
-import { ClaudeIcon, OutlineIcon } from "@/components/ui/brand-icons";
-import { Bubble } from "@/components/ui/bubble";
-import { Button } from "@/components/ui/button";
-import {
-  Message,
-  MessageAvatar,
-  MessageContent,
-} from "@/components/ui/message";
 import { cn } from "@/lib/utils";
 
 import {

@@ -1,7 +1,6 @@
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
+import { Badge } from "@grill/ui/badge";
 import Link from "next/link";
-
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 import type { PersonSummary } from "../mock";

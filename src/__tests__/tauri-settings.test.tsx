@@ -93,7 +93,7 @@ const { settingProblem } = await import("@/data/services/setting-checks");
 const { getSettings, refreshSettings, resetSettings } = await import(
   "@/data/settings"
 );
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 const { SettingsBackend } = await import("@/features/settings/backend");
 
 /** Runs an operation of `SettingsBackend.layerTauri`. */

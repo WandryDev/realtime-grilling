@@ -74,7 +74,7 @@ const { NewProjectPage } = await import(
 const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshSources } = await import("@/data/sources");
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 const { useAddDocuments } = await import("@/features/projects/api");
 const { DESCRIPTION_LIMIT_HINT, DESCRIPTION_MAX_CHARS, NOTES_MAX_CHARS } =
   await import("@/data/project-limits");

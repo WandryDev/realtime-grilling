@@ -1,8 +1,7 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useEffect, useState } from "react";
-
-import { toast } from "@/components/ui/toast";
 import {
   cancelSpeechModel,
   downloadFallbackModel,

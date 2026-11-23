@@ -1,9 +1,7 @@
 "use client";
 
-import { type ComponentProps, type ReactNode, useCallback } from "react";
-
-import { Button } from "@/components/ui/button";
-import { Counter } from "@/components/ui/counter";
+import { Button } from "@grill/ui/button";
+import { Counter } from "@grill/ui/counter";
 import {
   Question,
   QuestionAction,
@@ -13,12 +11,13 @@ import {
   QuestionStatus,
   QuestionTitle,
   QuestionTopic,
-} from "@/components/ui/question";
+} from "@grill/ui/question";
 import {
   RecordingIndicator,
   type RecordingLevel,
-} from "@/components/ui/recording-indicator";
-import { RowStatus } from "@/components/ui/row-status";
+} from "@grill/ui/recording-indicator";
+import { RowStatus } from "@grill/ui/row-status";
+import { type ComponentProps, type ReactNode, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { CollapseIcon, ExpandIcon, EyeOffIcon } from "../icons";
 import type { OverlayQuestionItem } from "../mock";

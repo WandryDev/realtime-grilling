@@ -1,8 +1,7 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-import { Button } from "@/components/ui/button";
 import { type CallStartFailure, startCall } from "@/data/call-session";
 import { NO_PROJECT_CALL, useCalls } from "@/data/calls";
 import { usePeople } from "@/data/people";

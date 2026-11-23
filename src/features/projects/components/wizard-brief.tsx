@@ -1,9 +1,8 @@
+import { Button } from "@grill/ui/button";
+import { Field, FieldDescription } from "@grill/ui/field";
+import { Progress, ProgressCaption } from "@grill/ui/progress";
+import { Textarea } from "@grill/ui/textarea";
 import type { ChangeEvent, MouseEvent } from "react";
-
-import { Button } from "@/components/ui/button";
-import { Field, FieldDescription } from "@/components/ui/field";
-import { Progress, ProgressCaption } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
 import { charCount, NOTES_MAX_CHARS } from "@/data/project-limits";
 import { cn } from "@/lib/utils";
 

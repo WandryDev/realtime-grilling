@@ -1,5 +1,17 @@
 "use client";
 
+import { Badge } from "@grill/ui/badge";
+import { ClickUpIcon, OutlineIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@grill/ui/item";
+import { Spinner } from "@grill/ui/spinner";
 import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
 import {
   type MouseEvent,
@@ -8,24 +20,11 @@ import {
   useId,
   useState,
 } from "react";
-
 import type {
   ProjectConnectorView,
   ProjectSource,
   SelectionItemView,
 } from "@/bindings";
-import { Badge } from "@/components/ui/badge";
-import { ClickUpIcon, OutlineIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
-import { Spinner } from "@/components/ui/spinner";
 import type { IntegrationState } from "@/data/integrations";
 import { documentRowId } from "@/features/projects/components/documents-block";
 import { SourceTile } from "@/features/projects/components/source-mark";

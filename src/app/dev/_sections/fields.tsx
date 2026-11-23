@@ -1,17 +1,14 @@
 "use client";
 
-import { CheckIcon, PlusIcon } from "lucide-react";
-import type { ReactNode } from "react";
-
 import {
   Field,
   FieldDescription,
   FieldError,
   FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { PasswordInput } from "@/components/ui/password-input";
-import { SearchInput } from "@/components/ui/search-input";
+} from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
+import { PasswordInput } from "@grill/ui/password-input";
+import { SearchInput } from "@grill/ui/search-input";
 import {
   Select,
   SelectAction,
@@ -22,8 +19,10 @@ import {
   SelectValue,
   selectItemClassName,
   selectPopupClassName,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+} from "@grill/ui/select";
+import { Textarea } from "@grill/ui/textarea";
+import { CheckIcon, PlusIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 import {

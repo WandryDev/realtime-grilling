@@ -1,10 +1,8 @@
 "use client";
 
-import { type ReactNode, useEffect, useRef } from "react";
-
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Bubble } from "@/components/ui/bubble";
-import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
+import { Bubble } from "@grill/ui/bubble";
+import { Button } from "@grill/ui/button";
 import {
   Message,
   MessageAvatar,
@@ -13,10 +11,11 @@ import {
   MessageHeader,
   MessageSpeaking,
   MessageTyping,
-} from "@/components/ui/message";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
-import { TopicDivider } from "@/components/ui/topic-divider";
+} from "@grill/ui/message";
+import { Skeleton } from "@grill/ui/skeleton";
+import { Spinner } from "@grill/ui/spinner";
+import { TopicDivider } from "@grill/ui/topic-divider";
+import { type ReactNode, useEffect, useRef } from "react";
 import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";
 

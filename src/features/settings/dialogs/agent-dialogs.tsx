@@ -1,5 +1,19 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@grill/ui/dialog";
+import { Field, FieldError, FieldLabel } from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
+import { Spinner } from "@grill/ui/spinner";
+import { toast } from "@grill/ui/toast";
 import {
   type ChangeEvent,
   type FormEvent,
@@ -9,20 +23,6 @@ import {
   useState,
 } from "react";
 import type { AgentState } from "@/bindings";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { toast } from "@/components/ui/toast";
 import {
   cancelAgentLogin,
   getAgentSetup,

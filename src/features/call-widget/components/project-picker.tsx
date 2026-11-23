@@ -1,8 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
-
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@grill/ui/field";
 import {
   Select,
   SelectAction,
@@ -12,7 +10,8 @@ import {
   SelectValue,
   selectItemClassName,
   selectPopupClassName,
-} from "@/components/ui/select";
+} from "@grill/ui/select";
+import { useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 
 import { CheckIcon, SearchIcon } from "../icons";

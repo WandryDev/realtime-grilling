@@ -1,9 +1,8 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { Effect } from "effect";
-
 import type { BenchmarkResult } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import { appRuntime, inTauri } from "@/effect/runtime";
 import { SHORTCUTS } from "@/features/settings/mock";
 

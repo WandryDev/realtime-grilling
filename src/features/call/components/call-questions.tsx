@@ -1,8 +1,7 @@
 "use client";
 
+import { Appear, AppearScope, usePresence } from "@grill/ui/appear";
 import { useId } from "react";
-
-import { Appear, AppearScope, usePresence } from "@/components/ui/appear";
 import { cn } from "@/lib/utils";
 
 import type {

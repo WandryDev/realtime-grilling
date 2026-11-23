@@ -1,9 +1,8 @@
 "use client";
 
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
+import { Button } from "@grill/ui/button";
 import { useCallback } from "react";
-
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";

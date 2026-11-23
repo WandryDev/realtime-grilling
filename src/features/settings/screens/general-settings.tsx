@@ -1,7 +1,7 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
 import type { RecordingsInfo, UpdateStatus } from "@/bindings";
-import { Button } from "@/components/ui/button";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,

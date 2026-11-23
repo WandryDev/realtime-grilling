@@ -1,12 +1,11 @@
 "use client";
 
-import { Fragment, type ReactNode } from "react";
-
 import {
   ContextColumnDescription,
   ContextColumnHeader,
-} from "@/components/ui/context-card";
-import { NavMenu } from "@/components/ui/nav-item";
+} from "@grill/ui/context-card";
+import { NavMenu } from "@grill/ui/nav-item";
+import { Fragment, type ReactNode } from "react";
 import { MainWindow } from "@/features/shell/main-window";
 import { cn } from "@/lib/utils";
 

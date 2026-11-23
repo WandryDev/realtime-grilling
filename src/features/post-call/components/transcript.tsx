@@ -8,13 +8,6 @@
  */
 
 import {
-  type ChangeEvent,
-  type ReactNode,
-  type RefObject,
-  useCallback,
-} from "react";
-
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -28,23 +21,29 @@ import {
   dialogHeaderClassName,
   dialogSurfaceClassName,
   dialogTitleClassName,
-} from "@/components/ui/alert-dialog";
-import { AvatarFallback } from "@/components/ui/avatar";
-import { Bubble } from "@/components/ui/bubble";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/alert-dialog";
+import { AvatarFallback } from "@grill/ui/avatar";
+import { Bubble } from "@grill/ui/bubble";
+import { Button } from "@grill/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@grill/ui/dropdown-menu";
 import {
   Message,
   MessageAvatar,
   MessageContent,
   MessageHeader,
-} from "@/components/ui/message";
+} from "@grill/ui/message";
+import {
+  type ChangeEvent,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+} from "react";
 import { cn } from "@/lib/utils";
 
 import {

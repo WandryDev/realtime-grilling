@@ -1,5 +1,16 @@
 "use client";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@grill/ui/alert-dialog";
+import { toast } from "@grill/ui/toast";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,17 +25,6 @@ import {
   useState,
 } from "react";
 import type { ProjectSource } from "@/bindings";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { toast } from "@/components/ui/toast";
 import { addPerson, initialsOf, usePeople } from "@/data/people";
 import {
   createProject,

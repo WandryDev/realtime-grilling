@@ -1,14 +1,10 @@
+import { Badge } from "@grill/ui/badge";
+import { Counter } from "@grill/ui/counter";
+import { Kbd, KbdGroup } from "@grill/ui/kbd";
+import { AgentStatus, RecordingIndicator } from "@grill/ui/recording-indicator";
+import { SourceBadge } from "@grill/ui/source-badge";
+import { TopicAnchor } from "@grill/ui/topic-anchor";
 import type { ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { Counter } from "@/components/ui/counter";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
-import {
-  AgentStatus,
-  RecordingIndicator,
-} from "@/components/ui/recording-indicator";
-import { SourceBadge } from "@/components/ui/source-badge";
-import { TopicAnchor } from "@/components/ui/topic-anchor";
 import {
   ShowcaseGroup,
   ShowcaseSection,

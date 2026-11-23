@@ -1,7 +1,6 @@
+import { ChoiceField, ChoiceFieldLabel } from "@grill/ui/choice-field";
+import { RadioGroup, RadioGroupItem } from "@grill/ui/radio-group";
 import { useCallback, useId } from "react";
-
-import { ChoiceField, ChoiceFieldLabel } from "@/components/ui/choice-field";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
 import type { SpeechLanguage } from "../mock";
 

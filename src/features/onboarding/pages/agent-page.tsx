@@ -1,8 +1,7 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useEffect, useMemo } from "react";
-
-import { toast } from "@/components/ui/toast";
 import {
   type AgentFailure as AgentSetupFailure,
   type AgentStatus,

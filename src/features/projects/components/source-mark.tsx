@@ -1,10 +1,5 @@
+import { ClickUpIcon, GitHubIcon, OutlineIcon } from "@grill/ui/brand-icons";
 import { FileTextIcon } from "lucide-react";
-
-import {
-  ClickUpIcon,
-  GitHubIcon,
-  OutlineIcon,
-} from "@/components/ui/brand-icons";
 import { cn } from "@/lib/utils";
 
 import type { SourceKind } from "../mock";

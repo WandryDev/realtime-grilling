@@ -34,7 +34,7 @@
 
 ## 5. Дизайн-система в пакет
 
-- [ ] 5.1 Вынести `src/components/ui` и токены темы в `packages/ui`; Grill импортирует оттуда; обновить `components.json` и раздел shadcn в AGENTS.md и README на новый путь. Проверка: `bun run check`, `typecheck`, `test`, `build`, `e2e` Grill зелёные; `bunx --bun shadcn@latest add button --dry-run` указывает на `packages/ui`.
+- [x] 5.1 Вынести `src/components/ui` и токены темы в `packages/ui`; Grill импортирует оттуда; обновить `components.json` и раздел shadcn в AGENTS.md и README на новый путь. Проверка: `bun run check`, `typecheck`, `test`, `build`, `e2e` Grill зелёные; `bunx --bun shadcn@latest add button --dry-run` указывает на `packages/ui`.
 
 ## 6. Сервер (`analytics/server`)
 

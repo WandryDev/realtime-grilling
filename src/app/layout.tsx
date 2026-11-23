@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 
 import "./globals.css";
+import { Toaster } from "@grill/ui/toast";
 import { ThemeProvider } from "@/components/theme-provider";
-import { Toaster } from "@/components/ui/toast";
 import { AppFrame } from "@/features/shell/app-frame";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export default function RootLayout({
     >
       <body>
         <ThemeProvider>
-          {/* Toasts from anywhere: `toast.add(…)` from @/components/ui/toast */}
+          {/* Toasts from anywhere: `toast.add(…)` from @grill/ui/toast */}
           <Toaster>
             <AppFrame>{children}</AppFrame>
           </Toaster>

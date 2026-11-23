@@ -1,14 +1,12 @@
 "use client";
 
-import { type ChangeEvent, type ReactNode, useCallback } from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button, type ButtonProps } from "@/components/ui/button";
+import { Badge } from "@grill/ui/badge";
+import { Button, type ButtonProps } from "@grill/ui/button";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
-} from "@/components/ui/input-group";
+} from "@grill/ui/input-group";
 import {
   Item,
   ItemActions,
@@ -16,10 +14,11 @@ import {
   ItemDescription,
   ItemMeta,
   ItemTitle,
-} from "@/components/ui/item";
-import { NavMenu } from "@/components/ui/nav-item";
-import { formatOpenQuestions } from "@/components/ui/row-status";
-import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs";
+} from "@grill/ui/item";
+import { NavMenu } from "@grill/ui/nav-item";
+import { formatOpenQuestions } from "@grill/ui/row-status";
+import { Tabs, TabsCount, TabsList, TabsTrigger } from "@grill/ui/tabs";
+import { type ChangeEvent, type ReactNode, useCallback } from "react";
 import { MainWindow } from "@/features/shell/main-window";
 import { linkButtonProps } from "@/lib/link-button";
 import { cn } from "@/lib/utils";

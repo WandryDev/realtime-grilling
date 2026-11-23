@@ -1,16 +1,14 @@
-import type { ComponentType } from "react";
-
-import { Checkbox } from "@/components/ui/checkbox";
+import { Checkbox } from "@grill/ui/checkbox";
 import {
   ChoiceField,
   ChoiceFieldLabel,
   ChoiceFieldMeta,
-} from "@/components/ui/choice-field";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+} from "@grill/ui/choice-field";
+import { RadioGroup, RadioGroupItem } from "@grill/ui/radio-group";
 import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/segmented-control";
+} from "@grill/ui/segmented-control";
 import {
   SettingList,
   SettingRow,
@@ -18,9 +16,10 @@ import {
   SettingRowControl,
   SettingRowDescription,
   SettingRowTitle,
-} from "@/components/ui/setting-row";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs";
+} from "@grill/ui/setting-row";
+import { Switch } from "@grill/ui/switch";
+import { Tabs, TabsCount, TabsList, TabsTrigger } from "@grill/ui/tabs";
+import type { ComponentType } from "react";
 import {
   ShowcaseGroup,
   ShowcaseSection,

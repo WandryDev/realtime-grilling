@@ -1,12 +1,6 @@
-import type { ReactNode } from "react";
-
-import {
-  AppWindow,
-  AppWindowBody,
-  AppWindowPanel,
-} from "@/components/ui/app-window";
-import { ZoomIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
+import { AppWindow, AppWindowBody, AppWindowPanel } from "@grill/ui/app-window";
+import { ZoomIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
 import {
   CallWidget,
   CallWidgetAddPerson,
@@ -18,23 +12,23 @@ import {
   CallWidgetPerson,
   CallWidgetSelectTrigger,
   CallWidgetTitle,
-} from "@/components/ui/call-widget";
-import { Counter } from "@/components/ui/counter";
+} from "@grill/ui/call-widget";
+import { Counter } from "@grill/ui/counter";
 import {
   NavItem,
   NavItemError,
   NavItemLabel,
   NavItemRecording,
   NavMenu,
-} from "@/components/ui/nav-item";
-import { RecordingIndicator } from "@/components/ui/recording-indicator";
+} from "@grill/ui/nav-item";
+import { RecordingIndicator } from "@grill/ui/recording-indicator";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectValue,
-} from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
+} from "@grill/ui/select";
+import { Skeleton } from "@grill/ui/skeleton";
 import {
   WindowControl,
   WindowControlGroup,
@@ -45,7 +39,8 @@ import {
   WindowTitlebarEnd,
   WindowTitlebarStart,
   WindowTrafficLights,
-} from "@/components/ui/window-titlebar";
+} from "@grill/ui/window-titlebar";
+import type { ReactNode } from "react";
 import {
   ShowcaseGroup,
   ShowcaseSection,

@@ -1,8 +1,7 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
 import { type FormEvent, type Ref, useId } from "react";
-
-import { Button } from "@/components/ui/button";
 import { OnboardingBackButton } from "@/features/onboarding/components/onboarding-actions";
 import {
   OnboardingContent,

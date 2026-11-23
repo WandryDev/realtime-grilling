@@ -1,7 +1,5 @@
-import type { ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@grill/ui/badge";
+import { Button } from "@grill/ui/button";
 import {
   ContextCard,
   ContextCardActions,
@@ -30,7 +28,8 @@ import {
   ContextColumnDescription,
   ContextColumnHeader,
   ContextColumnTitle,
-} from "@/components/ui/context-card";
+} from "@grill/ui/context-card";
+import type { ReactNode } from "react";
 import { ShowcaseSection, Specimen, Stage } from "../_components/showcase";
 
 // Paper "07 Карточки контекста". Every cell is the gray context column, 320 wide.

@@ -1,9 +1,9 @@
 "use client";
 
-import { appearClassName, useAppear } from "@/components/ui/appear";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
+import { appearClassName, useAppear } from "@grill/ui/appear";
+import { Button } from "@grill/ui/button";
+import { Progress } from "@grill/ui/progress";
+import { Spinner } from "@grill/ui/spinner";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";

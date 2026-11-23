@@ -1,6 +1,5 @@
+import { Button } from "@grill/ui/button";
 import { useId } from "react";
-
-import { Button } from "@/components/ui/button";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { PlusIcon } from "@/features/shell/icons";
 import {

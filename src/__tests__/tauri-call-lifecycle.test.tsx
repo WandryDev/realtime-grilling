@@ -91,7 +91,7 @@ const { CallSummaryPage } = await import(
 const { PrivacySection } = await import(
   "@/features/settings/pages/privacy-section"
 );
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 const { routes } = await import("@/lib/routes");
 const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");

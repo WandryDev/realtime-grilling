@@ -1,24 +1,11 @@
 "use client";
 
 import {
-  CheckIcon,
-  CircleAlertIcon,
-  CopyIcon,
-  EllipsisIcon,
-  InfoIcon,
-  MicIcon,
-  PinIcon,
-  Trash2Icon,
-  XIcon,
-} from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
-
-import {
   Alert,
   AlertAction,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/alert";
+} from "@grill/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,9 +21,9 @@ import {
   dialogHeaderClassName,
   dialogSurfaceClassName,
   dialogTitleClassName,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/alert-dialog";
+import { Badge } from "@grill/ui/badge";
+import { Button } from "@grill/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,7 +35,7 @@ import {
   menuPopupClassName,
   menuSeparatorClassName,
   menuShortcutClassName,
-} from "@/components/ui/dropdown-menu";
+} from "@grill/ui/dropdown-menu";
 import {
   Empty,
   EmptyContent,
@@ -56,8 +43,8 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+} from "@grill/ui/empty";
+import { Kbd, KbdGroup } from "@grill/ui/kbd";
 import {
   Popover,
   PopoverClose,
@@ -70,16 +57,16 @@ import {
   popoverDescriptionClassName,
   popoverSurfaceClassName,
   popoverTitleClassName,
-} from "@/components/ui/popover";
+} from "@grill/ui/popover";
 import {
   Progress,
   ProgressCaption,
   ProgressLabel,
   ProgressValue,
-} from "@/components/ui/progress";
-import { AgentStatus } from "@/components/ui/recording-indicator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
+} from "@grill/ui/progress";
+import { AgentStatus } from "@grill/ui/recording-indicator";
+import { Skeleton } from "@grill/ui/skeleton";
+import { Spinner } from "@grill/ui/spinner";
 import {
   createToastManager,
   Toaster,
@@ -90,14 +77,26 @@ import {
   toastContentClassName,
   toastSurfaceClassName,
   toastTitleClassName,
-} from "@/components/ui/toast";
+} from "@grill/ui/toast";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
   tooltipSurfaceClassName,
-} from "@/components/ui/tooltip";
+} from "@grill/ui/tooltip";
+import {
+  CheckIcon,
+  CircleAlertIcon,
+  CopyIcon,
+  EllipsisIcon,
+  InfoIcon,
+  MicIcon,
+  PinIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
+import { type ReactNode, useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 
 import {

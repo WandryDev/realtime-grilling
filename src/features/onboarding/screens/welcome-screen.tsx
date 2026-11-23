@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@grill/ui/alert";
 import { GrillAppIcon } from "../components/grill-app-icon";
 import { IconTile } from "../components/icon-tile";
 import {

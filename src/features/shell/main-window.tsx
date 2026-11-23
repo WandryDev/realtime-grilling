@@ -1,17 +1,12 @@
 "use client";
 
-import type { ComponentProps, ReactNode } from "react";
-
-import {
-  AppWindow,
-  AppWindowBody,
-  AppWindowPanel,
-} from "@/components/ui/app-window";
+import { AppWindow, AppWindowBody, AppWindowPanel } from "@grill/ui/app-window";
 import {
   WindowTitlebar,
   WindowTitlebarEnd,
   WindowTitlebarStart,
-} from "@/components/ui/window-titlebar";
+} from "@grill/ui/window-titlebar";
+import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 import { SearchIcon } from "./icons";

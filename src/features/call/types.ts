@@ -1,6 +1,6 @@
-import type { ContextSource } from "@/components/ui/context-card";
-import type { QuestionHistoryStatus } from "@/components/ui/question-history";
-import type { RecordingLevel } from "@/components/ui/recording-indicator";
+import type { ContextSource } from "@grill/ui/context-card";
+import type { QuestionHistoryStatus } from "@grill/ui/question-history";
+import type { RecordingLevel } from "@grill/ui/recording-indicator";
 
 /*
  * Data shapes of the call window. Screens get them through props, the demo

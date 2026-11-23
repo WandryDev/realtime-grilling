@@ -1,18 +1,17 @@
 "use client";
 
-import { useCallback } from "react";
-
-import type { InputDevice, ModelId, SpeechModel } from "@/bindings";
 import {
   Alert,
   AlertAction,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { RadioGroup } from "@/components/ui/radio-group";
-import { Spinner } from "@/components/ui/spinner";
+} from "@grill/ui/alert";
+import { Button } from "@grill/ui/button";
+import { Progress } from "@grill/ui/progress";
+import { RadioGroup } from "@grill/ui/radio-group";
+import { Spinner } from "@grill/ui/spinner";
+import { useCallback } from "react";
+import type { InputDevice, ModelId, SpeechModel } from "@/bindings";
 import type { ScreenAudioAccess } from "@/data/onboarding-setup";
 import {
   DEFAULT_SETTINGS,

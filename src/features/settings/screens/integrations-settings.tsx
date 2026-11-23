@@ -1,15 +1,15 @@
 "use client";
 
-import Link from "next/link";
-import { type ReactNode, useCallback } from "react";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@grill/ui/badge";
 import {
   ClaudeIcon,
   ClickUpIcon,
   GitHubIcon,
   OutlineIcon,
-} from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import Link from "next/link";
+import { type ReactNode, useCallback } from "react";
 import type { IntegrationState, IntegrationsState } from "@/data/integrations";
 import { relativeTime } from "@/features/projects/project-data";
 import { type IntegrationService, routes } from "@/lib/routes";

@@ -1,7 +1,6 @@
+import { Button, type ButtonProps } from "@grill/ui/button";
+import { NavItemLabel } from "@grill/ui/nav-item";
 import type { ComponentProps, MouseEvent, ReactNode } from "react";
-
-import { Button, type ButtonProps } from "@/components/ui/button";
-import { NavItemLabel } from "@/components/ui/nav-item";
 import { SidebarItem } from "@/features/shell/app-sidebar";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";

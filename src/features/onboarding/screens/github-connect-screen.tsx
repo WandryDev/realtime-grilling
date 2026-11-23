@@ -1,6 +1,5 @@
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
 import type { ReactNode } from "react";
-
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { InfoIcon } from "@/features/onboarding/components/icons";
 import {
   OnboardingBackButton,

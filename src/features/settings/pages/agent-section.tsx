@@ -1,9 +1,8 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useCallback, useEffect, useState } from "react";
-
 import type { AgentState, AgentUsage } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import { updateSetting, useSettings } from "@/data/settings";
 
 import { publishAgentState } from "../agent-status";

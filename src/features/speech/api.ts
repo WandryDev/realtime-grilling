@@ -1,9 +1,8 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { Effect, Stream } from "effect";
 import { useSyncExternalStore } from "react";
-
-import { toast } from "@/components/ui/toast";
 import { appRuntime, runCancelable } from "@/effect/runtime";
 import type { BackendError } from "@/effect/tauri";
 

@@ -1,14 +1,13 @@
-import Link from "next/link";
-import { type MouseEvent, type ReactNode, useId } from "react";
-
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, buttonVariants } from "@grill/ui/button";
+import { Input } from "@grill/ui/input";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupTextarea,
-} from "@/components/ui/input-group";
-import { Textarea } from "@/components/ui/textarea";
+} from "@grill/ui/input-group";
+import { Textarea } from "@grill/ui/textarea";
+import Link from "next/link";
+import { type MouseEvent, type ReactNode, useId } from "react";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 

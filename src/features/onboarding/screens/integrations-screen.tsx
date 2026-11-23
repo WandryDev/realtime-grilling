@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@grill/ui/button";
 import {
   OnboardingBackButton,
   OnboardingNextButton,

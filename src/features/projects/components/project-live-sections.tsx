@@ -1,14 +1,13 @@
 "use client";
 
-import { type ChangeEvent, useCallback, useId, useState } from "react";
-
-import { Button } from "@/components/ui/button";
+import { Button } from "@grill/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@grill/ui/dropdown-menu";
+import { type ChangeEvent, useCallback, useId, useState } from "react";
 import { cn } from "@/lib/utils";
 
 import { MoreIcon, TrashIcon } from "../icons";

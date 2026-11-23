@@ -1,8 +1,7 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-import { toast } from "@/components/ui/toast";
 import { useConnectorSelections } from "@/data/connector-selections";
 import {
   disconnectIntegration,

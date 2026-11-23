@@ -32,7 +32,7 @@ const { TranscriptPage } = await import(
 const { CURRENT_CALL_ID, finishCall, resetCall, startCall, useCallSession } =
   await import("@/data/call-session");
 const { resetCalls } = await import("@/data/calls");
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 const { SUMMARY_TLDR } = await import("@/features/post-call/mock");
 const { routes } = await import("@/lib/routes");
 

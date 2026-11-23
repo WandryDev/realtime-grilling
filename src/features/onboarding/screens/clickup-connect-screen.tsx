@@ -1,8 +1,7 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
 import { useId } from "react";
-
-import { Button } from "@/components/ui/button";
 import {
   type ClickUpConnectState as ClickUpConnectForm,
   ClickUpTokenFields,

@@ -1,5 +1,20 @@
 "use client";
 
+import { ClickUpIcon, GitHubIcon, OutlineIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@grill/ui/dialog";
+import { Field, FieldError, FieldLabel } from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
+import { Spinner } from "@grill/ui/spinner";
+import { toast } from "@grill/ui/toast";
 import {
   type ChangeEvent,
   type FormEvent,
@@ -9,26 +24,6 @@ import {
   useRef,
   useState,
 } from "react";
-
-import {
-  ClickUpIcon,
-  GitHubIcon,
-  OutlineIcon,
-} from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { toast } from "@/components/ui/toast";
 import { connectWithKey, useIntegration } from "@/data/integrations";
 import {
   ClickUpTokenFields,

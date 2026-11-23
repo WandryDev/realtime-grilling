@@ -1,13 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { FeedbackSection } from "@/app/dev/_sections/feedback";
 import {
   Alert,
   AlertAction,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/alert";
+} from "@grill/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,16 +14,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/alert-dialog";
+import { Button } from "@grill/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { createToastManager, Toaster } from "@/components/ui/toast";
+} from "@grill/ui/dropdown-menu";
+import { createToastManager, Toaster } from "@grill/ui/toast";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { FeedbackSection } from "@/app/dev/_sections/feedback";
 
 describe("AlertDialog", () => {
   it("opens from its trigger and runs the confirm handler", async () => {

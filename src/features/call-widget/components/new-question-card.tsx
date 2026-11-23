@@ -1,6 +1,6 @@
-import { appearClassName, useAppear } from "@/components/ui/appear";
-import { Button } from "@/components/ui/button";
-import { CallWidget } from "@/components/ui/call-widget";
+import { appearClassName, useAppear } from "@grill/ui/appear";
+import { Button } from "@grill/ui/button";
+import { CallWidget } from "@grill/ui/call-widget";
 import { cn } from "@/lib/utils";
 
 import { CloseIcon } from "../icons";

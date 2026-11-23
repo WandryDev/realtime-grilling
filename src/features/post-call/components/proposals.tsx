@@ -1,5 +1,9 @@
 "use client";
 
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
+import { Button } from "@grill/ui/button";
+import { Progress } from "@grill/ui/progress";
+import { Textarea } from "@grill/ui/textarea";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -7,11 +11,6 @@ import {
   useEffect,
   useRef,
 } from "react";
-
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { CheckIcon, CrossIcon, DocumentIcon } from "../icons";

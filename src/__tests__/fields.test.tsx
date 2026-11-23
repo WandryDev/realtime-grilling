@@ -1,16 +1,15 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
 import {
   Field,
   FieldDescription,
   FieldError,
   FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { PasswordInput } from "@/components/ui/password-input";
-import { SearchInput } from "@/components/ui/search-input";
+} from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
+import { PasswordInput } from "@grill/ui/password-input";
+import { SearchInput } from "@grill/ui/search-input";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 describe("PasswordInput", () => {
   it("masks the value until the eye is pressed", async () => {

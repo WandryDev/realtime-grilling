@@ -1,13 +1,12 @@
+import { CallRow } from "@grill/ui/call-row";
+import { IntegrationRow } from "@grill/ui/integration-row";
+import { PersonChip, PersonChipRemove } from "@grill/ui/person-chip";
+import { ProjectRow } from "@grill/ui/project-row";
+import { formatOpenQuestions } from "@grill/ui/row-status";
+import { SetupStep } from "@grill/ui/setup-step";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-
-import { CallRow } from "@/components/ui/call-row";
-import { IntegrationRow } from "@/components/ui/integration-row";
-import { PersonChip, PersonChipRemove } from "@/components/ui/person-chip";
-import { ProjectRow } from "@/components/ui/project-row";
-import { formatOpenQuestions } from "@/components/ui/row-status";
-import { SetupStep } from "@/components/ui/setup-step";
 
 const SELECTED_CALL = /Школа Ритм/u;
 const OTHER_CALL = /Ветклиника Лапа/u;

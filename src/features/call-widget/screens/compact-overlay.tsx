@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback } from "react";
-
-import { AppearScope } from "@/components/ui/appear";
+import { AppearScope } from "@grill/ui/appear";
 import {
   AgentStatus,
   type RecordingLevel,
-} from "@/components/ui/recording-indicator";
+} from "@grill/ui/recording-indicator";
+import { useCallback } from "react";
 import { cn } from "@/lib/utils";
 
 import { FloatingSurface } from "../components/floating-surface";

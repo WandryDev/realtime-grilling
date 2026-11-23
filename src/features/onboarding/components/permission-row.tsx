@@ -1,8 +1,7 @@
+import { Badge } from "@grill/ui/badge";
+import { RowStatus } from "@grill/ui/row-status";
+import { Spinner } from "@grill/ui/spinner";
 import type { ComponentProps, ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { RowStatus } from "@/components/ui/row-status";
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { IconTile } from "./icon-tile";
 import { CheckIcon } from "./icons";

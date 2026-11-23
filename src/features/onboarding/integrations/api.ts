@@ -1,8 +1,7 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { Effect } from "effect";
-
-import { toast } from "@/components/ui/toast";
 import { type IntegrationState, setIntegration } from "@/data/integrations";
 import { type AppServices, appRuntime, runCancelable } from "@/effect/runtime";
 import { OnboardingBackend } from "@/features/onboarding/backend";

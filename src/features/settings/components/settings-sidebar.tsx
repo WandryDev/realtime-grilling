@@ -1,6 +1,5 @@
+import { NavItemLabel, NavMenu } from "@grill/ui/nav-item";
 import type { ComponentProps, ComponentType, ReactNode } from "react";
-
-import { NavItemLabel, NavMenu } from "@/components/ui/nav-item";
 import {
   AppSidebar,
   DefaultSidebarStatus,

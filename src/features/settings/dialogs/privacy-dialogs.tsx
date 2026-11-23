@@ -1,14 +1,6 @@
 "use client";
 
 import {
-  type ChangeEvent,
-  type FormEvent,
-  useCallback,
-  useId,
-  useState,
-} from "react";
-
-import {
   AlertDialog,
   AlertDialogCancel,
   AlertDialogContent,
@@ -16,11 +8,18 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+} from "@grill/ui/alert-dialog";
+import { Button } from "@grill/ui/button";
+import { Field, FieldLabel } from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
+import { Spinner } from "@grill/ui/spinner";
+import {
+  type ChangeEvent,
+  type FormEvent,
+  useCallback,
+  useId,
+  useState,
+} from "react";
 
 import { backendErrorKind, deleteAllData, isAbortError } from "../api";
 import { DELETE_CONFIRM_WORD } from "../mock";

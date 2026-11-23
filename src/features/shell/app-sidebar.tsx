@@ -1,15 +1,15 @@
 "use client";
 
-import Link from "next/link";
-import type { ComponentProps, ReactNode } from "react";
-import type { AgentState } from "@/bindings";
-import { ClaudeIcon } from "@/components/ui/brand-icons";
+import { ClaudeIcon } from "@grill/ui/brand-icons";
 import {
   NavItem,
   NavItemLabel,
   type NavItemProps,
   NavMenu,
-} from "@/components/ui/nav-item";
+} from "@grill/ui/nav-item";
+import Link from "next/link";
+import type { ComponentProps, ReactNode } from "react";
+import type { AgentState } from "@/bindings";
 import { useProjects } from "@/data/projects";
 import type { MockProject } from "@/features/mock/projects";
 import { useAgentState } from "@/features/settings/agent-status";
