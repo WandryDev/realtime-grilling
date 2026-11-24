@@ -724,9 +724,10 @@ fn an_unplugged_microphone_reconnects_and_system_audio_has_no_gap() {
     );
     let [me, others] = stats;
     // ~400 ms unplugged: silence in "Я", none in "Остальные" past its
-    // start (the fake opens a few ms after t0).
+    // start (the fake opens a few ms after t0, a few dozen on a busy CI
+    // runner: 34 ms seen on macOS).
     assert!(ms(me.silence_inserted) >= 300, "{me:?}");
-    assert!(ms(others.silence_inserted) <= 30, "{others:?}");
+    assert!(ms(others.silence_inserted) <= 80, "{others:?}");
     assert_eq!(others.samples_dropped, 0, "{others:?}");
     let me = opus_duration_ms(&fx.file(&id, ME_FILE));
     let others = opus_duration_ms(&fx.file(&id, OTHERS_FILE));
