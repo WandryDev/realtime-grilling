@@ -10,6 +10,7 @@ pub mod halt;
 pub mod install;
 pub mod login;
 pub mod process;
+pub mod sections;
 pub mod slow_loop;
 
 use std::{

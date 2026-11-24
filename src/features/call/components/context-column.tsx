@@ -1,17 +1,14 @@
 "use client";
 
-import { type ComponentType, type ReactNode, useCallback, useRef } from "react";
-
-import { useSlideIntoPlace } from "@/components/ui/appear";
-
-import { Badge } from "@/components/ui/badge";
+import { useSlideIntoPlace } from "@grill/ui/appear";
+import { Badge } from "@grill/ui/badge";
 import {
   ClaudeIcon,
   ClickUpIcon,
   GitHubIcon,
   OutlineIcon,
-} from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
 import {
   ContextCard,
   ContextCardBody,
@@ -36,9 +33,10 @@ import {
   type ContextSource,
   contextCardSourceVariants,
   FileSourceIcon,
-} from "@/components/ui/context-card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
+} from "@grill/ui/context-card";
+import { Skeleton } from "@grill/ui/skeleton";
+import { Spinner } from "@grill/ui/spinner";
+import { type ComponentType, type ReactNode, useCallback, useRef } from "react";
 import { handleServiceLink } from "@/features/connectors/api";
 import { cn } from "@/lib/utils";
 

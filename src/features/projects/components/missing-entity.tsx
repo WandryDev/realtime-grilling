@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@grill/ui/button";
 import {
   Empty,
   EmptyContent,
@@ -6,7 +6,7 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty";
+} from "@grill/ui/empty";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import { MainWindow, TitlebarSearch } from "@/features/shell/main-window";
 import { linkButtonProps } from "@/lib/link-button";

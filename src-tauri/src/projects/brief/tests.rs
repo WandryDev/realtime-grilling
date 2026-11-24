@@ -840,9 +840,11 @@ impl Agent for QuickAgent {
             if let Some(before) = before {
                 before();
             }
-            reply.map(|patch| crate::agent::claude_cli::AgentReply {
-                patch,
-                usage: crate::agent::claude_cli::Usage::default(),
+            reply.map(|patch| {
+                crate::agent::claude_cli::AgentReply::new(
+                    patch,
+                    crate::agent::claude_cli::Usage::default(),
+                )
             })
         })
     }
@@ -957,4 +959,50 @@ fn prepare_skips_inputs_that_just_failed() {
     assert!(block_on(prepare(&host, &builds, &project.id)).unwrap());
     until_built();
     assert_eq!(agent.calls(), 4);
+}
+
+/// Call-analytics spec «Освежение брифа»: the build is a call of kind
+/// `brief` of the project, with its tokens, prompt and reply, not of a call.
+#[test]
+fn a_build_is_journaled_with_its_project() {
+    let host = TestHost::new(None);
+    let builds = BriefBuilds::default();
+    let project = host.project();
+    let agent = QuickAgent::new(Ok(reply()));
+    let running = run::start(&host, &builds, &project.id, Some(agent)).unwrap();
+    block_on(running).unwrap();
+
+    let id = project.id.clone();
+    type Row = (String, Option<String>, Option<String>, String, i64, i64);
+    let rows: Vec<Row> = block_on(host.storage.read(move |db| {
+        let mut statement = db.prepare(
+            "SELECT kind, call_id, recording_id, model,
+                        (SELECT count(*) FROM agent_call_parts p WHERE p.agent_call_id = a.id),
+                        raw_reply IS NOT NULL
+                   FROM agent_calls a WHERE project_id = ?1",
+        )?;
+        let rows = statement.query_map([&id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }))
+    .unwrap();
+    assert_eq!(
+        rows,
+        [(
+            "brief".to_owned(),
+            None,
+            None,
+            super::run::MODEL.to_owned(),
+            2,
+            1
+        )]
+    );
 }

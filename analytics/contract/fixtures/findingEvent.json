@@ -1,0 +1,13 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000011",
+  "v": 1,
+  "at": 1795000011000,
+  "kind": "findingEvent",
+  "body": {
+    "id": "fe-1",
+    "findingId": "f-1",
+    "recordingId": "rec-1",
+    "step": "shown",
+    "at": 1795000120000
+  }
+}

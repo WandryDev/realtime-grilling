@@ -1,9 +1,8 @@
 "use client";
 
+import { MessageGroup } from "@grill/ui/message";
+import { TopicDivider } from "@grill/ui/topic-divider";
 import { type ReactNode, useCallback } from "react";
-
-import { MessageGroup } from "@/components/ui/message";
-import { TopicDivider } from "@/components/ui/topic-divider";
 import { cn } from "@/lib/utils";
 
 import {

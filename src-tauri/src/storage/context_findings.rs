@@ -13,7 +13,12 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{call_state::in_savepoint, new_id};
+use super::{
+    analytics,
+    call_state::in_savepoint,
+    journal::{self, FindingEventKind},
+    new_id, now_ms,
+};
 use crate::error::{CommandError, CommandResult};
 
 /// Visible findings of a recording at most.
@@ -233,6 +238,7 @@ pub fn insert_at(
                 "UPDATE context_findings SET evicted_at = ?2 WHERE id = ?1",
                 params![oldest, now],
             )?;
+            journal::finding_event(connection, &oldest, FindingEventKind::Evicted, now)?;
             evicted = Some(oldest);
         }
         let id = new_id();
@@ -256,6 +262,7 @@ pub fn insert_at(
                 now
             ],
         )?;
+        journal::finding_event(connection, &id, FindingEventKind::Shown, now)?;
         Ok(Inserted::Added { id, evicted })
     })
 }
@@ -281,13 +288,14 @@ pub fn hide(
             "Находка {finding_id} не найдена"
         ))),
         Some(Some(_)) => Ok(()),
-        Some(None) => {
+        Some(None) => in_savepoint(connection, || {
             connection.execute(
                 "UPDATE context_findings SET hidden_at = ?2 WHERE id = ?1",
                 params![finding_id, now],
             )?;
+            journal::finding_event(connection, finding_id, FindingEventKind::Hidden, now)?;
             Ok(())
-        }
+        }),
     }
 }
 
@@ -301,6 +309,7 @@ pub fn attach_call(
         "UPDATE context_findings SET agent_call_id = ?2 WHERE id = ?1",
         params![finding_id, agent_call_id],
     )?;
+    analytics::finding(connection, finding_id, now_ms())?;
     Ok(())
 }
 
@@ -312,11 +321,14 @@ pub fn link_question(
     finding_id: &str,
     question_id: &str,
 ) -> CommandResult<()> {
-    connection.execute(
+    let linked = connection.execute(
         "UPDATE context_findings SET question_id = ?3
           WHERE id = ?1 AND recording_id = ?2 AND question_id IS NULL",
         params![finding_id, recording_id, question_id],
     )?;
+    if linked > 0 {
+        analytics::finding(connection, finding_id, now_ms())?;
+    }
     Ok(())
 }
 

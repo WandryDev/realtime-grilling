@@ -26,9 +26,11 @@ use super::{
     evidence::{quote_long_enough, quote_matches},
 };
 use crate::{
+    agent::sections::{self, Sections},
     error::CommandResult,
     storage::{
         call_state::{self, CallState, ValidatedOp},
+        journal::PromptPart,
         transcript::{self, TranscriptChannel, TranscriptSegment},
     },
 };
@@ -72,6 +74,37 @@ pub fn write_prompt(dir: &Path) -> io::Result<PathBuf> {
     let path = prompt_path(dir);
     fs::write(&path, PROMPT)?;
     Ok(path)
+}
+
+/// Why a decision of the check doesn't hold, as the journal keeps it
+/// (call-analytics design.md, decision 2).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "reason",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TopicRejectReason {
+    /// The phrase is not one of «Остальные» in the window.
+    UnknownPhrase { segment_id: String },
+    /// «цитата не найдена»: the quote is not in its phrase.
+    QuoteNotFound { segment_id: String, quote: String },
+    /// The topic to switch to is not one of the call's.
+    UnknownTopic { topic_id: String },
+}
+
+impl std::fmt::Display for TopicRejectReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownPhrase { segment_id } => {
+                write!(f, "нет фразы «Остальные» {segment_id} в окне")
+            }
+            Self::QuoteNotFound { segment_id, quote } => {
+                write!(f, "цитаты «{quote}» нет в {segment_id}")
+            }
+            Self::UnknownTopic { topic_id } => write!(f, "нет темы {topic_id}"),
+        }
+    }
 }
 
 /// What the agent answered.
@@ -145,13 +178,16 @@ pub fn parse(reply: &Value) -> Result<Decision, String> {
 
 /// The user message: the topics, the current one and how long it goes, the
 /// transcript of the last `window_minutes`.
-pub fn message(
+/// By parts (call-analytics design.md, decision 2): `topics`, `current`,
+/// `transcript`, `output`; the CLI gets their concatenation.
+pub fn message_parts(
     state: &CallState,
     window: &[&TranscriptSegment],
     topic_minutes: i64,
     window_minutes: u64,
-) -> String {
-    let mut text = String::from("# Темы звонка\n\n");
+) -> Vec<PromptPart> {
+    let mut text = Sections::new("topics");
+    text.push_str("# Темы звонка\n\n");
     for topic in &state.topics {
         let current = if state.current_topic_id.as_deref() == Some(topic.id.as_str()) {
             " (текущая)"
@@ -169,11 +205,13 @@ pub fn message(
         .as_deref()
         .and_then(|id| state.topics.iter().find(|topic| topic.id == id));
     if let Some(topic) = current {
+        text.section("current");
         text.push_str(&format!(
             "\n# Текущая тема: {}, идёт {topic_minutes} мин\n",
             one_line(&topic.title)
         ));
     }
+    text.section("transcript");
     text.push_str(&format!(
         "\n# Расшифровка за последние {window_minutes} мин\n\n"
     ));
@@ -181,8 +219,9 @@ pub fn message(
         text.push_str(&segment_line(segment));
         text.push('\n');
     }
+    text.section("output");
     text.push_str("\nПередай ответ одним вызовом инструмента StructuredOutput.");
-    text
+    text.into_parts()
 }
 
 fn one_line(text: &str) -> String {
@@ -193,6 +232,10 @@ fn one_line(text: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assembled {
     pub user_message: String,
+    /// The message by parts, for the journal.
+    pub parts: Vec<PromptPart>,
+    /// The ids of the phrases in the window.
+    pub window: Vec<String>,
     /// The phrases of «Остальные» in the window, `(id, text)`: a quote must
     /// be in one of them.
     pub client_phrases: Vec<(String, String)>,
@@ -209,8 +252,11 @@ pub fn assemble(
     let segments = transcript::for_recording(connection, recording_id)?;
     let minutes = window.as_secs() / 60;
     let window = transcript_window(&segments, window);
+    let parts = message_parts(&state, &window, topic_minutes, minutes);
     Ok(Assembled {
-        user_message: message(&state, &window, topic_minutes, minutes),
+        user_message: sections::join(&parts),
+        parts,
+        window: window.iter().map(|segment| segment.id.clone()).collect(),
         client_phrases: window
             .iter()
             .filter(|segment| segment.channel == TranscriptChannel::Others)
@@ -227,17 +273,22 @@ pub fn check(
     decision: &Decision,
     assembled: &Assembled,
     state: &CallState,
-) -> Result<Option<ValidatedOp>, String> {
-    let quoted = |segment_id: &str, quote: &str| -> Result<(), String> {
+) -> Result<Option<ValidatedOp>, TopicRejectReason> {
+    let quoted = |segment_id: &str, quote: &str| -> Result<(), TopicRejectReason> {
         let (_, text) = assembled
             .client_phrases
             .iter()
             .find(|(id, _)| id == segment_id)
-            .ok_or_else(|| format!("нет фразы «Остальные» {segment_id} в окне"))?;
+            .ok_or_else(|| TopicRejectReason::UnknownPhrase {
+                segment_id: segment_id.to_owned(),
+            })?;
         if quote_long_enough(quote, text) && quote_matches(quote, text) {
             Ok(())
         } else {
-            Err(format!("цитаты «{quote}» нет в {segment_id}"))
+            Err(TopicRejectReason::QuoteNotFound {
+                segment_id: segment_id.to_owned(),
+                quote: quote.to_owned(),
+            })
         }
     };
     match decision {
@@ -258,7 +309,9 @@ pub fn check(
             quote,
         } => {
             if !state.topics.iter().any(|topic| &topic.id == topic_id) {
-                return Err(format!("нет темы {topic_id}"));
+                return Err(TopicRejectReason::UnknownTopic {
+                    topic_id: topic_id.clone(),
+                });
             }
             if state.current_topic_id.as_deref() == Some(topic_id.as_str()) {
                 return Ok(None);

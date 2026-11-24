@@ -1,4 +1,4 @@
-import { Button, type ButtonProps } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@grill/ui/button";
 import { ExternalArrowIcon } from "@/features/onboarding/components/icons";
 import { cn } from "@/lib/utils";
 

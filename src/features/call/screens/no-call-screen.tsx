@@ -1,11 +1,11 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@grill/ui/button";
 import {
   Empty,
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from "@/components/ui/empty";
+} from "@grill/ui/empty";
 import { MainWindow } from "@/features/shell/main-window";
 
 /*

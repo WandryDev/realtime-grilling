@@ -1,8 +1,7 @@
 "use client";
 
+import { Kbd, KbdGroup } from "@grill/ui/kbd";
 import { useCallback, useId } from "react";
-
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 
 /*

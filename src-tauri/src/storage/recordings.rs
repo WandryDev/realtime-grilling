@@ -223,6 +223,7 @@ pub fn create(
             now
         ],
     )?;
+    super::analytics::recording(connection, &id, now)?;
     Ok(id)
 }
 
@@ -378,12 +379,15 @@ fn end(
     state: RecordingState,
     ended_at: i64,
 ) -> CommandResult<Recording> {
-    connection.execute(
+    let ended = connection.execute(
         "UPDATE recordings
             SET status = ?2, ended_at = max(?3, started_at), updated_at = ?4
           WHERE id = ?1 AND status = 'recording'",
         params![id, state.as_str(), ended_at, now_ms()],
     )?;
+    if ended > 0 {
+        super::analytics::recording(connection, id, ended_at)?;
+    }
     get(connection, id)
 }
 

@@ -1,4 +1,5 @@
 mod agent;
+mod analytics;
 mod audio;
 mod bindings;
 mod call;

@@ -3,6 +3,10 @@
   "version": "0.5.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "analytics/*"
+  ],
   "scripts": {
     "build": "next build",
     "changeset": "changeset",
@@ -21,6 +25,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
+    "@grill/ui": "workspace:*",
     "@shadcn/react": "^0.3.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.8.4",

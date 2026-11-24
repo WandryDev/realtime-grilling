@@ -55,9 +55,12 @@ use crate::{
         process::TreeSlot,
     },
     storage::{
-        call_state::{self, AgentCallInput, AgentCallKind, AgentCallOutcome, QuestionStatus},
+        call_state::{
+            self, AgentCallInput, AgentCallKind, AgentCallOutcome, CallTrigger, QuestionStatus,
+        },
         context_findings::{self, ContextSearch, Inserted, NewFinding},
-        now_ms, recordings, sources,
+        journal::{self, CallOp, PromptPart, SubjectKind},
+        new_id, now_ms, recordings, sources,
         transcript::{self, TranscriptChannel},
     },
 };
@@ -95,8 +98,8 @@ impl SlowConfig {
 
 #[derive(Debug)]
 enum Message {
-    /// Words of «Остальные».
-    ClientWords(usize),
+    /// Words of «Остальные» and their segment's id.
+    ClientWords(usize, Option<String>),
     TopicChanged,
     /// A status check found the agent ready.
     Resume,
@@ -178,10 +181,21 @@ impl SlowLoop {
     }
 
     /// A live phrase of `recording_id` was stored.
-    pub fn phrase(&self, recording_id: &str, channel: TranscriptChannel, text: &str) {
+    /// `segment_id`: the phrase's segment, the trigger of the next call
+    /// (call-analytics design.md, decision 3).
+    pub fn phrase(
+        &self,
+        recording_id: &str,
+        channel: TranscriptChannel,
+        text: &str,
+        segment_id: Option<&str>,
+    ) {
         if channel == TranscriptChannel::Others {
             let words = text.split_whitespace().count();
-            self.send(recording_id, Message::ClientWords(words));
+            self.send(
+                recording_id,
+                Message::ClientWords(words, segment_id.map(str::to_owned)),
+            );
         }
     }
 
@@ -329,6 +343,7 @@ impl SlowLoop {
                 recording_id,
                 index: Arc::new(index),
                 prompt_file,
+                prompt: Arc::new(prompt),
                 agent: None,
             },
             started,
@@ -338,6 +353,7 @@ impl SlowLoop {
             retry_at: None,
             waiting_for_agent: false,
             queries: Vec::new(),
+            last_client_segment: None,
         };
         scheduler.run(receiver).await;
     }
@@ -365,7 +381,16 @@ struct CallContext {
     recording_id: String,
     index: Arc<Index>,
     prompt_file: PathBuf,
+    /// The prompt file's text, for the journal.
+    prompt: Arc<String>,
     agent: Option<Arc<dyn Agent>>,
+}
+
+/// Why a call started and the client's last phrase, for the journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Cause {
+    trigger: CallTrigger,
+    segment_id: Option<String>,
 }
 
 struct Scheduler {
@@ -382,6 +407,8 @@ struct Scheduler {
     waiting_for_agent: bool,
     /// The agent's queries of the last call.
     queries: Vec<String>,
+    /// The last phrase of «Остальные»: the next call's trigger.
+    last_client_segment: Option<String>,
 }
 
 async fn sleep_until(at: Option<Instant>) {
@@ -410,7 +437,12 @@ impl Scheduler {
             let due_at = self.due_at().filter(|_| call.is_none() && !stopping);
             tokio::select! {
                 message = messages.recv(), if !stopping => match message {
-                    Some(Message::ClientWords(words)) => self.words += words,
+                    Some(Message::ClientWords(words, segment_id)) => {
+                        self.words += words;
+                        if segment_id.is_some() {
+                            self.last_client_segment = segment_id;
+                        }
+                    }
                     Some(Message::TopicChanged) => self.topic_due = true,
                     Some(Message::Resume) => self.waiting_for_agent = false,
                     Some(Message::Stop) | None => {
@@ -493,6 +525,14 @@ impl Scheduler {
                 }
             }
         }
+        let cause = Cause {
+            trigger: if self.topic_due {
+                CallTrigger::TopicChanged
+            } else {
+                CallTrigger::Interval
+            },
+            segment_id: self.last_client_segment.clone(),
+        };
         self.last_start = Some(Instant::now());
         self.words = 0;
         self.topic_due = false;
@@ -515,6 +555,7 @@ impl Scheduler {
         );
         Some(tokio::spawn(run_call(
             self.call.clone(),
+            cause,
             self.queries.clone(),
             stopped,
             process,
@@ -633,6 +674,7 @@ pub fn schema_argument() -> &'static str {
 /// running the agent.
 async fn run_call(
     call: CallContext,
+    cause: Cause,
     queries: Vec<String>,
     mut stop: oneshot::Receiver<()>,
     process: TreeSlot,
@@ -647,12 +689,18 @@ async fn run_call(
         },
         _ = &mut stop => return CallEnd::Cancelled,
     };
+    // Made before the findings are stored: the journal points at it
+    // (call-analytics design.md, decision 1).
+    let call_id = new_id();
     let started_at = host.now_ms();
     let started = Instant::now();
     let mut record = AgentCallInput {
+        id: Some(call_id.clone()),
         recording_id: call.recording_id.clone(),
         kind: AgentCallKind::SlowLoop,
         started_at,
+        trigger: Some(cause.trigger),
+        trigger_segment_id: cause.segment_id,
         ..AgentCallInput::default()
     };
 
@@ -677,6 +725,7 @@ async fn run_call(
     };
     let mut searched = queries.clone();
     let client = assembly::client_query(&segments);
+    record.queries = Some(serde_json::json!({ "agent": queries, "client": client }));
     if !client.trim().is_empty() {
         searched.push(client);
     }
@@ -694,9 +743,27 @@ async fn run_call(
     let Some(agent) = call.agent.clone() else {
         return CallEnd::Failed;
     };
+    let parts = assembly::user_message_parts(&state, &segments, &queries, &candidates);
+    record.prompt = vec![PromptPart::new("file", call.prompt.as_str())];
+    record.prompt.extend(parts.iter().cloned());
+    record.candidates = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| journal::Candidate {
+            label: format!("C{}", index + 1),
+            rank: i64::try_from(index + 1).unwrap_or(i64::MAX),
+            chunk_key: candidate.key.clone(),
+            source_id: Some(candidate.source.id.clone()),
+            source_kind: candidate.source.kind,
+            source_name: candidate.source.name.clone(),
+            source_url: candidate.source.url.clone(),
+            heading_path: candidate.path.clone(),
+            text: candidate.text.clone(),
+        })
+        .collect();
     let request = AgentRequest {
         system_prompt_file: call.prompt_file.clone(),
-        user_message: assembly::user_message(&state, &segments, &queries, &candidates),
+        user_message: crate::agent::sections::join(&parts),
         schema: schema_argument().to_owned(),
         process,
         options: CallOptions {
@@ -728,6 +795,14 @@ async fn run_call(
         }
     };
     with_usage(&mut record, &reply.usage);
+    record.raw_reply = Some(reply.raw);
+    record.reply = Some(reply.patch.clone());
+    let finding_values = reply
+        .patch
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let parsed = match Reply::parse(reply.patch) {
         Ok(parsed) => parsed,
         Err(reason) => {
@@ -765,6 +840,7 @@ async fn run_call(
             let validation = validate::recheck(&parsed, checked, &fresh);
             let mut rejected = validation.rejected;
             let mut inserted = Vec::new();
+            let mut stored_at: Vec<(usize, String)> = Vec::new();
             for (index, accepted) in validation.accepted {
                 let new = NewFinding {
                     source_id: Some(accepted.candidate.source.id.clone()),
@@ -778,7 +854,10 @@ async fn run_call(
                     agent_call_id: None,
                 };
                 match context_findings::insert_at(connection, &id, &new, now)? {
-                    Inserted::Added { id, .. } => inserted.push(id),
+                    Inserted::Added { id, .. } => {
+                        stored_at.push((index, id.clone()));
+                        inserted.push(id);
+                    }
                     Inserted::NoRoom => rejected.push(SlowRejection {
                         index,
                         op: "finding",
@@ -793,6 +872,23 @@ async fn run_call(
             }
             record.rejected = serde_json::to_value(&rejected)
                 .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+            record.ops = finding_values
+                .iter()
+                .enumerate()
+                .map(|(index, body)| {
+                    let stored = stored_at.iter().find(|(at, _)| *at == index);
+                    CallOp {
+                        op: "finding".to_owned(),
+                        body: body.clone(),
+                        applied: stored.is_some(),
+                        reason: rejected
+                            .iter()
+                            .find(|rejection| rejection.index == index)
+                            .and_then(|rejection| serde_json::to_value(rejection).ok()),
+                        subject: stored.map(|(_, id)| (SubjectKind::Finding, id.clone())),
+                    }
+                })
+                .collect();
             record.outcome = Some(if inserted.is_empty() {
                 AgentCallOutcome::Empty
             } else {
@@ -808,6 +904,10 @@ async fn run_call(
         .or_else(|error| {
             record.outcome = Some(AgentCallOutcome::Error);
             record.error = Some(error.to_string());
+            for op in &mut record.ops {
+                op.applied = false;
+                op.subject = None;
+            }
             call_state::insert_agent_call_at(connection, &record, now)?;
             Err(error)
         })?;

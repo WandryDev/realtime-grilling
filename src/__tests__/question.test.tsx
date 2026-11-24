@@ -1,9 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
-import { AppearScope } from "@/components/ui/appear";
-import { Badge } from "@/components/ui/badge";
+import { AppearScope } from "@grill/ui/appear";
+import { Badge } from "@grill/ui/badge";
 import {
   Question,
   QuestionAction,
@@ -12,7 +8,7 @@ import {
   QuestionContent,
   QuestionDescription,
   QuestionTitle,
-} from "@/components/ui/question";
+} from "@grill/ui/question";
 import {
   QuestionHistory,
   QuestionHistoryContent,
@@ -22,7 +18,10 @@ import {
   QuestionHistoryQuestion,
   QuestionHistoryRestore,
   QuestionHistoryTime,
-} from "@/components/ui/question-history";
+} from "@grill/ui/question-history";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 describe("Question", () => {
   it("is a group named by its title", () => {

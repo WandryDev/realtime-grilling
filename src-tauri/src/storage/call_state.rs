@@ -16,7 +16,9 @@ use serde_json::Value;
 use specta::Type;
 
 use super::{
+    analytics,
     context_findings::{self, ContextFinding, ContextSearch, ContextSources},
+    journal::{self, CallOp, PromptPart, QuestionEventKind, SubjectKind},
     json::Json,
     new_id, now_ms, recordings, settings,
 };
@@ -392,6 +394,10 @@ pub struct NewQuestion {
 pub struct AppliedPatch {
     pub topic_ids: Vec<String>,
     pub question_ids: Vec<String>,
+    /// What each operation of the patch created or changed, in its order
+    /// (`None` for the final check): the journal's origin of the questions,
+    /// topics and cards (call-analytics design.md, decision 2).
+    pub subjects: Vec<Option<(SubjectKind, String)>>,
 }
 
 /* Quick actions */
@@ -468,6 +474,12 @@ pub enum AgentCallKind {
     /// The slow loop's search in the project's sources (agent-slow-loop
     /// design.md, decision 3).
     SlowLoop,
+    /// The summary of a finished call (call A of call-summary).
+    Summary,
+    /// The proposals to the brief and the profiles (call B of call-summary).
+    Proposals,
+    /// The build of a project's brief.
+    Brief,
 }
 
 impl AgentCallKind {
@@ -476,6 +488,9 @@ impl AgentCallKind {
             Self::FastLoop => "fastLoop",
             Self::TopicCheck => "topicCheck",
             Self::SlowLoop => "slowLoop",
+            Self::Summary => "summary",
+            Self::Proposals => "proposals",
+            Self::Brief => "brief",
         }
     }
 
@@ -485,6 +500,9 @@ impl AgentCallKind {
             "fastLoop" => Ok(Self::FastLoop),
             "topicCheck" => Ok(Self::TopicCheck),
             "slowLoop" => Ok(Self::SlowLoop),
+            "summary" => Ok(Self::Summary),
+            "proposals" => Ok(Self::Proposals),
+            "brief" => Ok(Self::Brief),
             other => Err(rusqlite::Error::InvalidColumnType(
                 0,
                 format!("kind {other}"),
@@ -494,10 +512,50 @@ impl AgentCallKind {
     }
 }
 
+/// Why a loop called the agent (call-analytics design.md, decision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallTrigger {
+    /// The first phrase of the client in the recording.
+    FirstPhrase,
+    /// The client finished a turn.
+    TurnEnd,
+    /// The client keeps talking: the loop's interval ran out.
+    Interval,
+    /// A retry after a failed call.
+    Retry,
+    /// The manager asked for a retry.
+    ManualRetry,
+    /// The loop resumed after a halt.
+    HaltReset,
+    /// The topic changed (the slow loop).
+    TopicChanged,
+}
+
+impl CallTrigger {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FirstPhrase => "firstPhrase",
+            Self::TurnEnd => "turnEnd",
+            Self::Interval => "interval",
+            Self::Retry => "retry",
+            Self::ManualRetry => "manualRetry",
+            Self::HaltReset => "haltReset",
+            Self::TopicChanged => "topicChanged",
+        }
+    }
+}
+
 /// One call of the agent, as the fast loop records it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AgentCallInput {
+    /// The call's id, made before its patch is applied so the journal can
+    /// point at it (call-analytics design.md, decision 1); `None` makes one.
+    pub id: Option<String>,
+    /// The owner by `kind`: the recording of a loop's call, the call of a
+    /// summary or proposals, the project of a brief.
     pub recording_id: String,
+    pub call_id: Option<String>,
+    pub project_id: Option<String>,
     pub kind: AgentCallKind,
     /// Milliseconds since the Unix epoch, UTC.
     pub started_at: i64,
@@ -514,6 +572,29 @@ pub struct AgentCallInput {
     /// `null`).
     pub rejected: Value,
     pub error: Option<String>,
+    /// The CLI's model and effort.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub trigger: Option<CallTrigger>,
+    /// The last phrase of the client recognized when the call started.
+    pub trigger_segment_id: Option<String>,
+    /// Ids of the transcript's segments that went into the prompt.
+    pub window_segments: Option<Vec<String>>,
+    /// Ids of the slow loop's findings that went into the prompt, as it
+    /// numbers them `D1…Dn`.
+    pub findings_in_prompt: Option<Vec<String>>,
+    /// The slow loop's search queries.
+    pub queries: Option<Value>,
+    /// The CLI's `result` event as it came.
+    pub raw_reply: Option<String>,
+    /// The reply parsed from it.
+    pub reply: Option<Value>,
+    /// The prompt by parts, as it went to the CLI (the journal).
+    pub prompt: Vec<PromptPart>,
+    /// The reply's operations and what became of them (the journal).
+    pub ops: Vec<CallOp>,
+    /// The slow loop's candidates (the journal).
+    pub candidates: Vec<journal::Candidate>,
 }
 
 /// A recorded agent call (read by the tests and `grill-eval`; the windows
@@ -817,11 +898,25 @@ pub fn apply_patch(
 /// [`apply_patch`] at `now` (Unix ms) for every time it writes. The fast
 /// loop passes its host's clock, so a replay on a virtual clock stores the
 /// times of the call it replays (question-quality design.md, decision 3).
+#[cfg(test)]
 pub fn apply_patch_at(
     connection: &Connection,
     recording_id: &str,
     patch: &ValidatedPatch,
     now: i64,
+) -> CommandResult<AppliedPatch> {
+    apply_patch_by(connection, recording_id, patch, now, None)
+}
+
+/// [`apply_patch_at`] by agent call `agent_call_id`: the journal's events
+/// of the questions it creates and answers name it (call-analytics
+/// design.md, decision 4).
+pub fn apply_patch_by(
+    connection: &Connection,
+    recording_id: &str,
+    patch: &ValidatedPatch,
+    now: i64,
+    agent_call_id: Option<&str>,
 ) -> CommandResult<AppliedPatch> {
     let recording = recording_row(connection, recording_id)?;
     if patch.ops.is_empty() {
@@ -837,11 +932,17 @@ pub fn apply_patch_at(
                     let id = create_topic(connection, recording_id, &recording, title, now)?;
                     set_current_topic(connection, recording_id, &id, now)?;
                     applied.topic_ids.push(id.clone());
+                    applied
+                        .subjects
+                        .push(Some((SubjectKind::Topic, id.clone())));
                     current = Some(id);
                 }
                 ValidatedOp::SwitchTopic { topic_id } => {
                     check_topic(connection, recording_id, topic_id)?;
                     set_current_topic(connection, recording_id, topic_id, now)?;
+                    applied
+                        .subjects
+                        .push(Some((SubjectKind::Topic, topic_id.clone())));
                     current = Some(topic_id.clone());
                 }
                 ValidatedOp::SetCardField {
@@ -863,23 +964,52 @@ pub fn apply_patch_at(
                         },
                         now,
                     )?;
+                    let card: String = connection.query_row(
+                        "SELECT id FROM task_cards WHERE topic_id = ?1",
+                        [topic_id],
+                        |row| row.get(0),
+                    )?;
+                    applied.subjects.push(Some((SubjectKind::Card, card)));
                 }
                 ValidatedOp::AddQuestion(new) => {
                     let topic_id = current.as_deref().ok_or_else(no_current_topic)?;
                     let id =
                         add_question(connection, &recording, recording_id, topic_id, new, now)?;
-                    applied.question_ids.push(id);
+                    journal::question_event(
+                        connection,
+                        &id,
+                        recording_id,
+                        QuestionEventKind::Created,
+                        agent_call_id,
+                        now,
+                    )?;
+                    applied.question_ids.push(id.clone());
+                    applied.subjects.push(Some((SubjectKind::Question, id)));
                 }
                 ValidatedOp::MarkAnswered {
                     question_id,
                     evidence,
-                } => mark_answered(connection, recording_id, question_id, evidence, now)?,
+                } => {
+                    mark_answered(connection, recording_id, question_id, evidence, now)?;
+                    journal::question_event(
+                        connection,
+                        question_id,
+                        recording_id,
+                        QuestionEventKind::Answered,
+                        agent_call_id,
+                        now,
+                    )?;
+                    applied
+                        .subjects
+                        .push(Some((SubjectKind::Question, question_id.clone())));
+                }
                 ValidatedOp::StartFinalCheck => {
                     connection.execute(
                         "UPDATE recordings SET final_check_at = coalesce(final_check_at, ?2)
                           WHERE id = ?1",
                         params![recording_id, now],
                     )?;
+                    applied.subjects.push(None);
                 }
             }
         }
@@ -911,6 +1041,7 @@ fn create_topic(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         params![id, recording_id, recording.call_id, title, position, now],
     )?;
+    analytics::topic(connection, &id, now)?;
     Ok(id)
 }
 
@@ -962,6 +1093,7 @@ fn set_card_field(
           WHERE id = ?1",
         params![card.id, Json(serde_json::to_value(fields)?), now],
     )?;
+    analytics::card(connection, topic_id, now)?;
     Ok(())
 }
 
@@ -994,6 +1126,7 @@ fn card_or_new(
             now
         ],
     )?;
+    analytics::card(connection, topic_id, now)?;
     card_of_topic(connection, topic_id)?
         .ok_or_else(|| CommandError::invalid("Карточка темы не создана"))
 }
@@ -1135,6 +1268,21 @@ pub fn act(
                     updated_at = MAX(?4, updated_at + 1)
               WHERE id = ?1",
             params![question_id, status.as_str(), pinned, now],
+        )?;
+        let kind = match action {
+            QuestionAction::Pin => QuestionEventKind::Pinned,
+            QuestionAction::Unpin => QuestionEventKind::Unpinned,
+            QuestionAction::Hide => QuestionEventKind::Hidden,
+            QuestionAction::Asked => QuestionEventKind::Asked,
+            QuestionAction::Restore => QuestionEventKind::Restored,
+        };
+        journal::question_event(
+            connection,
+            question_id,
+            &current.recording_id,
+            kind,
+            None,
+            now,
         )?;
         recompute(connection, &current.recording_id, rules, now)?;
         Ok(current.recording_id.clone())
@@ -1283,13 +1431,26 @@ fn recompute(
     let latest = slots.iter().filter_map(|slot| slot.shown_at).max();
     let first = latest.map_or(now, |latest| now.max(latest + 1));
     let coming = order.iter().filter(|slot| slot.shown_at.is_none());
+    // The journal: shown, back to the queue (gave its place after being
+    // visible too long) or off the screen for another reason (another
+    // topic, a pinned one took its place).
+    let event = |id: &str, kind: QuestionEventKind| {
+        journal::question_event(connection, id, recording_id, kind, None, now).map(|_| ())
+    };
     for (shown_at, slot) in (first..).zip(coming) {
         show(&slot.id, Some(shown_at))?;
+        event(&slot.id, QuestionEventKind::Shown)?;
         changed = true;
     }
     for slot in &slots {
         if slot.shown_at.is_some() && !visible.contains(slot.id.as_str()) {
             show(&slot.id, None)?;
+            let kind = if stale.contains(&slot.id.as_str()) {
+                QuestionEventKind::Requeued
+            } else {
+                QuestionEventKind::Unshown
+            };
+            event(&slot.id, kind)?;
             changed = true;
         }
     }
@@ -1351,7 +1512,35 @@ pub fn insert_agent_call_at(
     call: &AgentCallInput,
     now: i64,
 ) -> CommandResult<String> {
-    recording_row(connection, &call.recording_id)?;
+    // The call, its journal and its events, all or nothing.
+    in_savepoint(connection, || insert_agent_call_in(connection, call, now))
+}
+
+fn insert_agent_call_in(
+    connection: &Connection,
+    call: &AgentCallInput,
+    now: i64,
+) -> CommandResult<String> {
+    let (recording_id, call_owner, project_owner) = match call.kind {
+        AgentCallKind::FastLoop | AgentCallKind::TopicCheck | AgentCallKind::SlowLoop => {
+            recording_row(connection, &call.recording_id)?;
+            (Some(call.recording_id.as_str()), None, None)
+        }
+        AgentCallKind::Summary | AgentCallKind::Proposals => {
+            let owner = call
+                .call_id
+                .as_deref()
+                .ok_or_else(|| CommandError::invalid("Нет звонка вызова агента"))?;
+            (None, Some(owner), None)
+        }
+        AgentCallKind::Brief => {
+            let owner = call
+                .project_id
+                .as_deref()
+                .ok_or_else(|| CommandError::invalid("Нет проекта вызова агента"))?;
+            (None, None, Some(owner))
+        }
+    };
     let outcome = call
         .outcome
         .ok_or_else(|| CommandError::invalid("Нет результата вызова агента"))?;
@@ -1364,15 +1553,20 @@ pub fn insert_agent_call_at(
             ));
         }
     };
-    let id = new_id();
+    let id = call.id.clone().unwrap_or_else(new_id);
+    let list =
+        |items: &Option<Vec<String>>| items.as_ref().map(|items| Json(Value::from(items.clone())));
     connection.execute(
         "INSERT INTO agent_calls
            (id, recording_id, started_at, duration_ms, outcome, input_tokens, output_tokens,
-            cache_read, cache_write, cost_usd, utilization, rejected, error, created_at, kind)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            cache_read, cache_write, cost_usd, utilization, rejected, error, created_at, kind,
+            model, effort, trigger_reason, trigger_segment_id, window_segments,
+            findings_in_prompt, queries, raw_reply, reply, call_id, project_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         params![
             id,
-            call.recording_id,
+            recording_id,
             call.started_at,
             call.duration_ms.max(0),
             outcome.as_str(),
@@ -1385,9 +1579,24 @@ pub fn insert_agent_call_at(
             Json(rejected),
             call.error,
             now,
-            call.kind.as_str()
+            call.kind.as_str(),
+            call.model,
+            call.effort,
+            call.trigger.map(CallTrigger::as_str),
+            call.trigger_segment_id,
+            list(&call.window_segments),
+            list(&call.findings_in_prompt),
+            call.queries.clone().map(Json),
+            call.raw_reply,
+            call.reply.clone().map(Json),
+            call_owner,
+            project_owner,
         ],
     )?;
+    let new_parts = journal::prompt(connection, &id, &call.prompt, now)?;
+    journal::call_ops(connection, &id, &call.ops)?;
+    journal::candidates(connection, &id, &call.candidates)?;
+    analytics::agent_call(connection, &id, &new_parts)?;
     Ok(id)
 }
 
@@ -2170,6 +2379,7 @@ mod tests {
             utilization: Some(0.82),
             rejected: json!([{ "op": 0, "reason": "quoteNotFound" }]),
             error: None,
+            ..AgentCallInput::default()
         };
         let first = insert_agent_call(&connection, &call).unwrap();
         let failed = AgentCallInput {
@@ -2267,5 +2477,134 @@ mod tests {
             (1, 1, 1, 0)
         );
         assert_eq!(get(&connection, &other).unwrap().questions.len(), 1);
+    }
+
+    /* The journal of a question (call-analytics task 2.5) */
+
+    /// The steps of a question in the journal: their kind and the call.
+    fn events(connection: &Connection, question_id: &str) -> Vec<(String, Option<String>)> {
+        connection
+            .prepare(
+                "SELECT kind, agent_call_id FROM question_events
+                  WHERE question_id = ?1 ORDER BY at, rowid",
+            )
+            .unwrap()
+            .query_map([question_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn kinds(connection: &Connection, question_id: &str) -> Vec<String> {
+        events(connection, question_id)
+            .into_iter()
+            .map(|(kind, _)| kind)
+            .collect()
+    }
+
+    /// A question a call created names the call; being shown does not.
+    #[test]
+    fn a_created_question_names_its_call() {
+        let mut connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        let tx = connection.transaction().unwrap();
+        let applied = apply_patch_by(
+            &tx,
+            &id,
+            &ValidatedPatch {
+                ops: vec![ask("Кто отвечает ночью?", 2)],
+            },
+            now_ms(),
+            Some("call-1"),
+        )
+        .unwrap();
+        insert_agent_call_at(
+            &tx,
+            &AgentCallInput {
+                id: Some("call-1".to_owned()),
+                recording_id: id.clone(),
+                outcome: Some(AgentCallOutcome::Ok),
+                ..AgentCallInput::default()
+            },
+            now_ms(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            events(&connection, &applied.question_ids[0]),
+            [
+                ("created".to_owned(), Some("call-1".to_owned())),
+                ("shown".to_owned(), None)
+            ]
+        );
+    }
+
+    /// Spec «Закрепил и открепил»: two events with their times, no call.
+    #[test]
+    fn pinned_and_unpinned_are_two_events() {
+        let connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        apply(&connection, &id, vec![ask("Кто отвечает ночью?", 2)]);
+        let question = id_of(&connection, &id, "Кто отвечает ночью?");
+        act(&connection, &question, QuestionAction::Pin).unwrap();
+        // Repeating an action changes nothing and writes nothing.
+        act(&connection, &question, QuestionAction::Pin).unwrap();
+        act(&connection, &question, QuestionAction::Unpin).unwrap();
+        assert_eq!(
+            events(&connection, &question),
+            [
+                ("created".to_owned(), None),
+                ("shown".to_owned(), None),
+                ("pinned".to_owned(), None),
+                ("unpinned".to_owned(), None),
+            ]
+        );
+    }
+
+    /// Spec «Вытеснен по времени»: the old question went back to the queue
+    /// with no action of the manager and no call.
+    #[test]
+    fn a_question_that_gave_its_place_is_requeued() {
+        let connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        let t0 = now_ms();
+        apply_at(&connection, &id, vec![ask("Старый", 2)], t0);
+        apply_at(
+            &connection,
+            &id,
+            vec![ask("Второй", 2), ask("Третий", 2)],
+            t0 + 5 * MIN,
+        );
+        apply_at(&connection, &id, vec![ask("Новый", 1)], t0 + 9 * MIN);
+        let old = id_of(&connection, &id, "Старый");
+        let last = events(&connection, &old).pop().unwrap();
+        assert_eq!(last, ("requeued".to_owned(), None));
+        let at: i64 = connection
+            .query_row(
+                "SELECT max(at) FROM question_events WHERE question_id = ?1",
+                [&old],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(at, t0 + 9 * MIN);
+        assert_eq!(
+            kinds(&connection, &id_of(&connection, &id, "Новый")),
+            ["created", "shown"]
+        );
+    }
+
+    /// «Скрыт» and «Вернуть»: hidden, then restored and shown again.
+    #[test]
+    fn hidden_then_restored() {
+        let connection = open_in_memory().unwrap();
+        let id = started(&connection);
+        apply(&connection, &id, vec![ask("Кто отвечает ночью?", 2)]);
+        let question = id_of(&connection, &id, "Кто отвечает ночью?");
+        act(&connection, &question, QuestionAction::Hide).unwrap();
+        act(&connection, &question, QuestionAction::Restore).unwrap();
+        assert_eq!(
+            kinds(&connection, &question),
+            ["created", "shown", "hidden", "restored", "shown"]
+        );
     }
 }

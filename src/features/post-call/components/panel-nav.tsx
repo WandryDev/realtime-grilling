@@ -1,9 +1,8 @@
 "use client";
 
+import { NavItem, NavItemLabel } from "@grill/ui/nav-item";
+import { Spinner } from "@grill/ui/spinner";
 import type { ReactNode } from "react";
-
-import { NavItem, NavItemLabel } from "@/components/ui/nav-item";
-import { Spinner } from "@/components/ui/spinner";
 import { AppSidebar } from "@/features/shell/app-sidebar";
 import { cn } from "@/lib/utils";
 

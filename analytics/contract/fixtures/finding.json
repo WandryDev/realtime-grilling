@@ -1,0 +1,21 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000010",
+  "v": 1,
+  "at": 1795000010000,
+  "kind": "finding",
+  "body": {
+    "id": "f-1",
+    "recordingId": "rec-1",
+    "sourceKind": "outline",
+    "sourceName": "Регламент KYC",
+    "sourceUrl": "https://outline.example/doc/kyc",
+    "chunkKey": "src-1#3",
+    "quote": "Проверка длится до трёх рабочих дней",
+    "note": "Дополняет: срок проверки",
+    "questionId": "q-1",
+    "agentCallId": "ac-2",
+    "createdAt": 1795000120000,
+    "hiddenAt": null,
+    "evictedAt": null
+  }
+}

@@ -14,6 +14,8 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   output: "export",
+  // The design system is a workspace package of TypeScript sources.
+  transpilePackages: ["@grill/ui"],
 };
 
 export default nextConfig;

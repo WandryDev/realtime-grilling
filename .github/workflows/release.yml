@@ -203,6 +203,9 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
           APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          # The team's analytics server, baked into the release build
+          # (call-analytics design.md, decision 7); empty sends nothing.
+          GRILL_ANALYTICS_URL: ${{ vars.GRILL_ANALYTICS_URL }}
         with:
           releaseId: ${{ needs.prepare.outputs.release-id }}
           tauriScript: bun run tauri

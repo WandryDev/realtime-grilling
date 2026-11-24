@@ -210,6 +210,7 @@ pub fn create(
         insert_participant(connection, &id, input.project_id.as_deref(), &person_id)?;
     }
     let call = get(connection, &id)?;
+    super::analytics::call(connection, &id, now)?;
     let event = DataChanged::new(
         Entity::Call,
         &id,
@@ -245,6 +246,7 @@ pub fn update(
             now_ms()
         ],
     )?;
+    super::analytics::call(connection, id, now_ms())?;
     let call = get(connection, id)?;
     let event = DataChanged::new(
         Entity::Call,
@@ -424,7 +426,11 @@ pub fn finish_stale(connection: &Connection, now: i64) -> CommandResult<Vec<Stri
       RETURNING id",
     )?;
     let rows = statement.query_map([now], |row| row.get(0))?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let finished: Vec<String> = rows.collect::<Result<_, _>>()?;
+    for id in &finished {
+        super::analytics::call(connection, id, now)?;
+    }
+    Ok(finished)
 }
 
 #[cfg(test)]

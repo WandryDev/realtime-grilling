@@ -1,15 +1,11 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
-import { CallWidgetAddPerson } from "@/components/ui/call-widget";
+import { CallWidgetAddPerson } from "@grill/ui/call-widget";
 import {
   NavItem,
   NavItemError,
   NavItemLabel,
   NavItemRecording,
   NavMenu,
-} from "@/components/ui/nav-item";
+} from "@grill/ui/nav-item";
 import {
   WindowControls,
   WindowTitle,
@@ -17,7 +13,10 @@ import {
   WindowTitlebarEnd,
   WindowTitlebarStart,
   WindowTrafficLights,
-} from "@/components/ui/window-titlebar";
+} from "@grill/ui/window-titlebar";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 const RECORDING_NAME = /идёт запись/u;
 const INTEGRATIONS_ERROR_NAME = /Интеграции.*ошибка подключения/u;

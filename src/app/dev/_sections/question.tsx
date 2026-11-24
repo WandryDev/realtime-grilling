@@ -1,7 +1,4 @@
-import { PinIcon } from "lucide-react";
-import type { ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@grill/ui/badge";
 import {
   Question,
   QuestionAction,
@@ -12,7 +9,7 @@ import {
   QuestionStatus,
   QuestionTitle,
   QuestionTopic,
-} from "@/components/ui/question";
+} from "@grill/ui/question";
 import {
   QuestionHistory,
   QuestionHistoryAnswer,
@@ -24,8 +21,10 @@ import {
   QuestionHistoryQuestion,
   QuestionHistoryRestore,
   QuestionHistoryTime,
-} from "@/components/ui/question-history";
-import { SourceBadge } from "@/components/ui/source-badge";
+} from "@grill/ui/question-history";
+import { SourceBadge } from "@grill/ui/source-badge";
+import { PinIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import {
   ShowcaseGroup,

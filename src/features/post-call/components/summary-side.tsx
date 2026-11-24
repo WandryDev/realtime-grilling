@@ -1,7 +1,7 @@
 "use client";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Counter } from "@/components/ui/counter";
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
+import { Counter } from "@grill/ui/counter";
 import { cn } from "@/lib/utils";
 import { CheckIcon, DocumentIcon } from "../icons";
 import type { FactStatus, KnowledgeTarget, TaskCardOverview } from "../mock";

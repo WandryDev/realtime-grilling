@@ -1,8 +1,7 @@
+import { Badge } from "@grill/ui/badge";
+import { RowStatus } from "@grill/ui/row-status";
 import type { ReactNode } from "react";
-
 import type { CardLens } from "@/bindings";
-import { Badge } from "@/components/ui/badge";
-import { RowStatus } from "@/components/ui/row-status";
 import { CARD_LENS_NAMES } from "@/lib/card-lens";
 import { cn } from "@/lib/utils";
 

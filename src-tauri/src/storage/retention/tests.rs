@@ -314,3 +314,149 @@ fn one_event_per_call_touched() {
     assert!(purged.is_empty());
     assert!(events.is_empty());
 }
+
+/// A fast loop's call of `recording` in the journal: the shared prompt file,
+/// a part with its transcript, an operation, a raw reply and a candidate of
+/// the slow loop. Returns the call's id.
+fn journal_call(fx: &Fixture, recording: &str, transcript: &str) -> String {
+    use crate::storage::journal::{self, CallOp, PromptPart};
+    let recording = recording.to_owned();
+    let transcript = transcript.to_owned();
+    fx.now(move |connection| {
+        // As the loops write it: one transaction, the call's row last.
+        let db = connection.unchecked_transaction()?;
+        let id = crate::storage::new_id();
+        journal::prompt(
+            &db,
+            &id,
+            &[
+                PromptPart::new("file", "Ты помощник на звонке"),
+                PromptPart::new("transcript", transcript),
+            ],
+            NOW,
+        )?;
+        journal::call_ops(
+            &db,
+            &id,
+            &[CallOp {
+                op: "addQuestion".to_owned(),
+                body: json!({ "op": "addQuestion" }),
+                applied: false,
+                reason: Some(json!({ "reason": "duplicate" })),
+                subject: None,
+            }],
+        )?;
+        db.execute(
+            "INSERT INTO slow_loop_candidates
+               (agent_call_id, label, rank, chunk_key, source_kind, source_name, text)
+             VALUES (?1, 'C1', 1, 's#1', 'outline', 'Регламент', 'смена из трёх операторов')",
+            [&id],
+        )?;
+        call_state::insert_agent_call_at(
+            &db,
+            &call_state::AgentCallInput {
+                id: Some(id.clone()),
+                recording_id: recording,
+                outcome: Some(call_state::AgentCallOutcome::Ok),
+                input_tokens: Some(31_000),
+                raw_reply: Some("{\"result\":\"двести звонков\"}".to_owned()),
+                ..call_state::AgentCallInput::default()
+            },
+            NOW,
+        )?;
+        db.commit()?;
+        Ok(id)
+    })
+}
+
+/// Task 1.3: the journal of a call whose transcript went keeps the call,
+/// its tokens and operations, but not the texts; a prompt part another
+/// call with a kept transcript shares stays.
+#[test]
+fn the_journal_loses_its_texts_with_the_transcript() {
+    let fx = Fixture::new("never", "90");
+    let (_, old) = fx.call(91, false);
+    let (_, young) = fx.call(89, false);
+    let old_call = journal_call(&fx, &old, "Клиент: двести звонков в день");
+    let young_call = journal_call(&fx, &young, "Клиент: ночью никто");
+
+    let (purged, _, _) = fx.pass();
+    assert_eq!(purged.transcripts, std::slice::from_ref(&old));
+
+    let text = |sql: &str, id: &str| -> Option<String> {
+        let (sql, id) = (sql.to_owned(), id.to_owned());
+        fx.now(move |db| Ok(db.query_row(&sql, [&id], |row| row.get(0))?))
+    };
+    let part = |call: &str, label: &str| -> Option<String> {
+        let (call, label) = (call.to_owned(), label.to_owned());
+        fx.now(move |db| {
+            Ok(db.query_row(
+                "SELECT t.text FROM agent_call_parts p JOIN prompt_parts t ON t.hash = p.hash
+                  WHERE p.agent_call_id = ?1 AND p.label = ?2",
+                [&call, &label],
+                |row| row.get(0),
+            )?)
+        })
+    };
+
+    // The old call is still there with its tokens and its operation.
+    let tokens: i64 = fx.now({
+        let id = old_call.clone();
+        move |db| {
+            Ok(db.query_row(
+                "SELECT input_tokens FROM agent_calls WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )?)
+        }
+    });
+    assert_eq!(tokens, 31_000);
+    let ops: i64 = fx.now({
+        let id = old_call.clone();
+        move |db| {
+            Ok(db.query_row(
+                "SELECT count(*) FROM agent_call_ops WHERE agent_call_id = ?1",
+                [&id],
+                |row| row.get(0),
+            )?)
+        }
+    });
+    assert_eq!(ops, 1);
+    assert_eq!(
+        text("SELECT raw_reply FROM agent_calls WHERE id = ?1", &old_call),
+        None
+    );
+    assert_eq!(
+        text(
+            "SELECT text FROM slow_loop_candidates WHERE agent_call_id = ?1",
+            &old_call
+        ),
+        None
+    );
+    assert_eq!(part(&old_call, "transcript"), None);
+    // The prompt file is shared with a call that keeps its transcript.
+    assert_eq!(
+        part(&old_call, "file").as_deref(),
+        Some("Ты помощник на звонке")
+    );
+
+    // The young call keeps everything.
+    assert!(
+        text(
+            "SELECT raw_reply FROM agent_calls WHERE id = ?1",
+            &young_call
+        )
+        .is_some()
+    );
+    assert_eq!(
+        part(&young_call, "transcript").as_deref(),
+        Some("Клиент: ночью никто")
+    );
+    assert!(
+        text(
+            "SELECT text FROM slow_loop_candidates WHERE agent_call_id = ?1",
+            &young_call
+        )
+        .is_some()
+    );
+}

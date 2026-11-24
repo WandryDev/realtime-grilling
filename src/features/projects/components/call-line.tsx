@@ -1,7 +1,6 @@
+import { Badge } from "@grill/ui/badge";
+import { Item, ItemGroup } from "@grill/ui/item";
 import Link from "next/link";
-
-import { Badge } from "@/components/ui/badge";
-import { Item, ItemGroup } from "@/components/ui/item";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 

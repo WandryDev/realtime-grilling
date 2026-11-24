@@ -219,10 +219,7 @@ impl Agent for ScriptedAgent {
             if let Some(before) = before {
                 before();
             }
-            reply.map(|patch| AgentReply {
-                patch,
-                usage: Usage::default(),
-            })
+            reply.map(|patch| AgentReply::new(patch, Usage::default()))
         })
     }
 }
@@ -994,4 +991,45 @@ fn a_reply_with_nothing_true_keeps_the_previous_summary() {
     let after = host.summary(&call.call);
     assert_eq!(after.state, SummaryState::Failed);
     assert_eq!(after.content, before.content);
+}
+
+/// Call-analytics spec «Итоги после звонка»: the two calls are in the
+/// journal of the call, with their tokens, prompts and replies.
+#[test]
+fn the_summary_and_the_proposals_are_journaled() {
+    let agent = ScriptedAgent::new(Ok(summary_reply()), Ok(proposals_reply()));
+    let host = TestHost::new(Some(agent));
+    let builds = SummaryBuilds::default();
+    let call = exchange(&host, CallStatus::Finishing);
+
+    build(&host, &builds, &call.call);
+
+    let id = call.call.clone();
+    let rows: Vec<(String, Option<String>, bool, i64, bool)> = host
+        .storage()
+        .read_now(move |db| {
+            let mut statement = db.prepare(
+                "SELECT kind, recording_id, input_tokens IS NOT NULL,
+                        (SELECT count(*) FROM agent_call_parts p WHERE p.agent_call_id = a.id),
+                        raw_reply IS NOT NULL
+                   FROM agent_calls a WHERE call_id = ?1 ORDER BY started_at, kind DESC",
+            )?;
+            let rows = statement.query_map([&id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })
+        .unwrap();
+    let kinds: Vec<&str> = rows.iter().map(|row| row.0.as_str()).collect();
+    assert_eq!(kinds.len(), 2, "{rows:?}");
+    assert!(kinds.contains(&"summary") && kinds.contains(&"proposals"));
+    for (_, recording, tokens, parts, raw) in &rows {
+        assert_eq!((recording, tokens, parts, raw), (&None, &true, &2, &true));
+    }
 }

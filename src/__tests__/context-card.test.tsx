@@ -1,7 +1,3 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
 import {
   ContextCard,
   ContextCardHeader,
@@ -10,7 +6,10 @@ import {
   ContextCardSearching,
   ContextCardSource,
   ContextCardStatus,
-} from "@/components/ui/context-card";
+} from "@grill/ui/context-card";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 describe("ContextCard", () => {
   it("is an article with a labelled open-in-source link", () => {

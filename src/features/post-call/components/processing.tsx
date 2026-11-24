@@ -1,7 +1,7 @@
-import { ClaudeIcon } from "@/components/ui/brand-icons";
-import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
+import { ClaudeIcon } from "@grill/ui/brand-icons";
+import { Progress } from "@grill/ui/progress";
+import { Skeleton } from "@grill/ui/skeleton";
+import { Spinner } from "@grill/ui/spinner";
 import { cn } from "@/lib/utils";
 
 import type { ProcessingStepData } from "../mock";

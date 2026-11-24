@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useSearchParams } from "next/navigation";
 import {
   type FormEvent,
@@ -9,9 +10,7 @@ import {
   useMemo,
   useState,
 } from "react";
-
 import type { Proposal } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import { type CallRecord, useCalls } from "@/data/calls";
 import { updatePerson, usePerson } from "@/data/people";
 import { useProject } from "@/data/projects";

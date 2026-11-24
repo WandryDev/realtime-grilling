@@ -73,7 +73,7 @@ const { ProposalsPage } = await import(
 );
 const { HistoryPage } = await import("@/features/post-call/pages/history-page");
 const { PersonPage } = await import("@/features/projects/pages/person-page");
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshCalls } = await import("@/data/calls");

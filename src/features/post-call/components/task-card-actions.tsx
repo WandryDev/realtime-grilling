@@ -1,10 +1,8 @@
 "use client";
 
-import { type FormEvent, useCallback, useId, useState } from "react";
-import type { TaskCardDecision } from "@/bindings";
-import { Badge } from "@/components/ui/badge";
-import { ClickUpIcon, GitHubIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@grill/ui/badge";
+import { ClickUpIcon, GitHubIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -12,8 +10,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+} from "@grill/ui/dialog";
+import { Input } from "@grill/ui/input";
+import { type FormEvent, useCallback, useId, useState } from "react";
+import type { TaskCardDecision } from "@/bindings";
 
 import { CheckIcon } from "../icons";
 

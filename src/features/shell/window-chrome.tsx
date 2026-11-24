@@ -1,12 +1,8 @@
 "use client";
 
+import { WindowControls, WindowTrafficLights } from "@grill/ui/window-titlebar";
 import { getCurrentWindow, type Window } from "@tauri-apps/api/window";
 import { useMemo } from "react";
-
-import {
-  WindowControls,
-  WindowTrafficLights,
-} from "@/components/ui/window-titlebar";
 import { useWindowChrome } from "@/lib/platform";
 
 /*

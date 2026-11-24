@@ -1,6 +1,6 @@
 "use client";
 
-import { toast } from "@/components/ui/toast";
+import { toast } from "@grill/ui/toast";
 
 /** How long an undo toast stays: the token is still there until it goes. */
 const UNDO_TIMEOUT_MS = 8000;

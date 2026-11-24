@@ -1,21 +1,18 @@
 "use client";
 
-import { CircleAlertIcon } from "lucide-react";
-import { type ComponentProps, useCallback } from "react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ZoomIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
-import {
-  CallWidgetFooter,
-  CallWidgetPeople,
-} from "@/components/ui/call-widget";
+import { Alert, AlertDescription, AlertTitle } from "@grill/ui/alert";
+import { ZoomIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import { CallWidgetFooter, CallWidgetPeople } from "@grill/ui/call-widget";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Spinner } from "@/components/ui/spinner";
+} from "@grill/ui/dropdown-menu";
+import { Spinner } from "@grill/ui/spinner";
+import { CircleAlertIcon } from "lucide-react";
+import { type ComponentProps, useCallback } from "react";
 import { cn } from "@/lib/utils";
 
 import { DismissIcon } from "../icons";

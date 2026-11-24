@@ -1,11 +1,10 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { Effect, Stream } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
-
 import type { WindowLabel } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import { appRuntime, inTauri, runCancelable } from "@/effect/runtime";
 import type { BackendError } from "@/effect/tauri";
 

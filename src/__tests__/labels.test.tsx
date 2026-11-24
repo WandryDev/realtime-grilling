@@ -1,13 +1,9 @@
+import { Badge } from "@grill/ui/badge";
+import { Progress, ProgressValue } from "@grill/ui/progress";
+import { AgentStatus, RecordingIndicator } from "@grill/ui/recording-indicator";
+import { TopicAnchor } from "@grill/ui/topic-anchor";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-
-import { Badge } from "@/components/ui/badge";
-import { Progress, ProgressValue } from "@/components/ui/progress";
-import {
-  AgentStatus,
-  RecordingIndicator,
-} from "@/components/ui/recording-indicator";
-import { TopicAnchor } from "@/components/ui/topic-anchor";
 
 describe("TopicAnchor", () => {
   it("marks only the current topic with aria-current", () => {

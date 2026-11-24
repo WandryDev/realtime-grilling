@@ -51,7 +51,7 @@ const { AudioSection } = await import(
 );
 const { IDLE_SESSION, liveSession } = await import("./helpers/fake-tauri");
 const { refreshSettings } = await import("@/data/settings");
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 
 function model(
   id: "turbo" | "small",

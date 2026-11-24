@@ -45,14 +45,21 @@ use super::{
     validate::{self, Knowledge},
 };
 use crate::{
-    agent::claude_cli::{Agent, AgentError, AgentRequest, CallOptions, OutputKind, Usage},
+    agent::{
+        claude_cli::{Agent, AgentError, AgentRequest, CallOptions, OutputKind, Usage},
+        fast_loop::scheduler::{outcome_of, with_usage},
+    },
     call::CallManager,
     error::CommandError,
     events::EventSink,
     projects::brief::run::{AgentLookup, BriefHost},
     speech::{events::TranscriptRefine, refiner::Refiner},
     storage::{
-        Storage, calls, people, projects,
+        Storage,
+        call_state::{AgentCallInput, AgentCallKind, AgentCallOutcome},
+        calls,
+        journal::{self, PromptPart},
+        new_id, now_ms, people, projects,
         proposals::{self, ProposalDecision},
         summaries::{self, SummaryBuild, SummaryState},
     },
@@ -193,7 +200,16 @@ async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot) {
     };
     let call_id = slot.call_id().to_owned();
     let mut before = None;
-    let outcome = attempt(host.as_ref(), &slot, &stages, &mut before).await;
+    let journaled = Mutex::new(Vec::new());
+    let outcome = attempt(host.as_ref(), &slot, &stages, &mut before, &journaled).await;
+    // The agent's calls into the journal once the build no longer waits on
+    // the database (call-analytics design.md, decision 2).
+    let journaled = journaled
+        .into_inner()
+        .unwrap_or_else(PoisonError::into_inner);
+    for record in journaled {
+        journal::record(host.storage(), record).await;
+    }
     let (last, close) = match outcome {
         Ok(()) => (SummaryStageState::Done, true),
         Err(End::Failed(message)) => {
@@ -302,6 +318,7 @@ async fn attempt<H: SummaryHost>(
     slot: &BuildSlot,
     stages: &Stages,
     before: &mut Option<Before>,
+    journaled: &Mutex<Vec<AgentCallInput>>,
 ) -> Result<(), End> {
     stages.advance(SummaryStage::Transcript);
     let storage = host
@@ -369,7 +386,7 @@ async fn attempt<H: SummaryHost>(
     stages.advance(SummaryStage::Summary);
     let agent = host.agent().await.map_err(End::Failed)?;
     unless_stopped(slot)?;
-    let reply = ask(host, slot, &agent, Ask::Summary, &message).await?;
+    let reply = ask(host, slot, &agent, Ask::Summary, &message, journaled).await?;
     let reply = SummaryReply::from_reply(reply)
         .map_err(|error| failed(format!("Агент ответил не по схеме итогов: {error}")))?;
     let mut checked = validate::summary(reply, &message, pass);
@@ -389,7 +406,7 @@ async fn attempt<H: SummaryHost>(
     let has_project = call.project_id.is_some();
     let proposals = if has_project {
         stages.advance(SummaryStage::Proposals);
-        match ask(host, slot, &agent, Ask::Proposals, &message).await {
+        match ask(host, slot, &agent, Ask::Proposals, &message, journaled).await {
             Ok(reply) => match ProposalsReply::from_reply(reply) {
                 Ok(reply) => Some(reply),
                 Err(error) => {
@@ -504,6 +521,13 @@ enum Ask {
 }
 
 impl Ask {
+    const fn kind(self) -> AgentCallKind {
+        match self {
+            Self::Summary => AgentCallKind::Summary,
+            Self::Proposals => AgentCallKind::Proposals,
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Self::Summary => "summary",
@@ -513,12 +537,14 @@ impl Ask {
 }
 
 /// Runs one agent call and returns its reply, not checked yet.
+/// The call goes to `journaled` for the journal.
 async fn ask<H: SummaryHost>(
     host: &H,
     slot: &BuildSlot,
     agent: &Arc<dyn Agent>,
     ask: Ask,
     message: &SummaryMessage,
+    journaled: &Mutex<Vec<AgentCallInput>>,
 ) -> Result<Value, End> {
     let (rules, closing, schema) = match ask {
         Ask::Summary => (SUMMARY_PROMPT, SUMMARY_CLOSING, summary_schema_argument()),
@@ -535,6 +561,22 @@ async fn ask<H: SummaryHost>(
         .map_err(|error| failed(format!("Не удалось записать промпт итогов: {error}")))?;
     let user_message = message.for_call(closing);
     let chars = user_message.chars().count();
+    // The journal of the team's analytics (call-analytics design.md,
+    // decision 2).
+    let mut record = AgentCallInput {
+        id: Some(new_id()),
+        kind: ask.kind(),
+        call_id: Some(slot.call_id().to_owned()),
+        started_at: now_ms(),
+        model: Some(MODEL.to_owned()),
+        effort: Some(EFFORT.to_owned()),
+        prompt: vec![
+            PromptPart::new("file", rules),
+            PromptPart::new("message", user_message.as_str()),
+        ],
+        ..AgentCallInput::default()
+    };
+    let started = std::time::Instant::now();
     let request = AgentRequest {
         system_prompt_file: prompt.0.clone(),
         user_message,
@@ -550,6 +592,23 @@ async fn ask<H: SummaryHost>(
     };
     let reply = agent.run(request, slot.arm()).await;
     drop(prompt);
+    record.duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    match &reply {
+        Ok(reply) => {
+            with_usage(&mut record, &reply.usage);
+            record.outcome = Some(AgentCallOutcome::Ok);
+            record.raw_reply = Some(reply.raw.clone());
+            record.reply = Some(reply.patch.clone());
+        }
+        Err(error) => {
+            record.outcome = Some(outcome_of(error));
+            record.error = Some(error.to_string());
+        }
+    }
+    journaled
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(record);
     match reply {
         Ok(reply) => {
             log_cost(slot.call_id(), ask, &reply.usage, chars, message.shortened);
@@ -561,8 +620,8 @@ async fn ask<H: SummaryHost>(
     }
 }
 
-/// The cost and the time of a call (design.md, risks): not in
-/// `agent_calls`, which keeps the recordings' calls.
+/// The cost and the time of a call (design.md, risks), in the app's log
+/// besides the journal.
 fn log_cost(call_id: &str, ask: Ask, usage: &Usage, chars: usize, shortened: bool) {
     let cost = usage
         .cost_usd

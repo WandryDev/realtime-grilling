@@ -125,13 +125,17 @@ impl Rig {
     }
 
     /// The client says `text` now: both loops hear it.
-    async fn client(&self, text: &str) {
+    async fn client(&self, text: &str) -> String {
         let start_ms = i64::try_from(self.t0.elapsed().as_millis()).unwrap();
-        self.host
+        let segment = self
+            .host
             .db(|db| say(db, &self.recording, OTHERS, start_ms, text));
-        self.fast_loop.phrase(&self.recording, OTHERS);
-        self.slow_loop.phrase(&self.recording, OTHERS, text);
+        self.fast_loop
+            .phrase_with_id(&self.recording, OTHERS, &segment.id);
+        self.slow_loop
+            .phrase(&self.recording, OTHERS, text, Some(&segment.id));
         settle().await;
+        segment.id
     }
 
     async fn until(&self, seconds: u64) {
@@ -451,6 +455,39 @@ async fn an_invented_quote_is_journaled() {
     let call = &rig.slow_calls()[0];
     assert_eq!(call.outcome, AgentCallOutcome::Empty);
     assert_eq!(call.rejected[0]["reason"], "quoteNotFound");
+    // Spec «Кандидат отброшен»: the journal has the candidate and the
+    // finding rejected with its reason.
+    let candidates: Vec<(String, String, String)> = rig.host.db(|db| {
+        db.prepare(
+            "SELECT label, source_kind, source_name FROM slow_loop_candidates
+              WHERE agent_call_id = ?1 ORDER BY rank",
+        )
+        .unwrap()
+        .query_map([&call.id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    });
+    let op: (i64, String) = rig.host.db(|db| {
+        db.query_row(
+            "SELECT applied, json_extract(reason, '$.reason') FROM agent_call_ops
+              WHERE agent_call_id = ?1",
+            [&call.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+    });
+    assert_eq!(
+        candidates[0],
+        (
+            "C1".to_owned(),
+            "outline".to_owned(),
+            "Регламент смены".to_owned()
+        )
+    );
+    assert_eq!(op, (0, "quoteNotFound".to_owned()));
 }
 
 /// Spec «Лимит подписки»: both loops stop until the limit resets.
@@ -566,4 +603,147 @@ async fn a_hanging_slow_call_times_out() {
     rig.client(ABOUT_SHIFTS).await;
     rig.until(200).await;
     assert_eq!(rig.slow_starts(), [60, 152], "a minute after the timeout");
+}
+
+/// Call-analytics task 2.2: the slow loop's call says why it ran and
+/// names the client's last phrase: the minute's `interval`, then
+/// `topicChanged` after the fast loop's new topic.
+#[tokio::test(start_paused = true)]
+async fn the_slow_call_journals_its_trigger() {
+    let rig = Rig::new(true, [nothing(), nothing()]).await;
+    let first = rig.client(ABOUT_SHIFTS).await;
+    rig.until(66).await;
+    rig.fast_agent.push(Step::patch(json!({ "ops": [
+        { "op": "topic", "action": "create", "title": "Смены операторов" }
+    ] })));
+    rig.until(70).await;
+    let second = rig.client("Теперь о сменах").await;
+    rig.until(90).await;
+    let triggers: Vec<(String, Option<String>)> = rig.host.db(|db| {
+        db.prepare(
+            "SELECT trigger_reason, trigger_segment_id FROM agent_calls
+              WHERE recording_id = ?1 AND kind = 'slowLoop' ORDER BY started_at",
+        )
+        .unwrap()
+        .query_map([&rig.recording], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    });
+    assert_eq!(
+        triggers,
+        [
+            ("interval".to_owned(), Some(first)),
+            ("topicChanged".to_owned(), Some(second)),
+        ]
+    );
+}
+
+/// Spec «Находка из Outline»: the journal links the phrase that triggered
+/// the slow call, its queries, the candidate, the finding, the fast loop's
+/// calls that were given it, and the question that cited it.
+#[tokio::test(start_paused = true)]
+async fn a_finding_from_outline_is_chained_in_the_journal() {
+    let rig = Rig::new(
+        true,
+        [found("В смене три оператора", json!(["старший смены"]))],
+    )
+    .await;
+    let trigger = rig.client(ABOUT_SHIFTS).await;
+    rig.until(66).await;
+    let finding = rig.findings()[0].id.clone();
+    let slow = rig.slow_calls()[0].id.clone();
+    rig.client("Иногда операторы уходят на перерыв").await;
+    rig.until(95).await;
+    rig.client("Тогда старший смены их подменяет").await;
+    rig.until(125).await;
+    // The third fast call after the finding cites it.
+    let start_ms = i64::try_from(rig.t0.elapsed().as_millis()).unwrap();
+    let said = rig.host.db(|db| {
+        say(
+            db,
+            &rig.recording,
+            OTHERS,
+            start_ms,
+            "У нас пять операторов в смену, иногда шесть",
+        )
+    });
+    let evidence =
+        json!({ "source": "segment", "id": said.id, "quote": "пять операторов в смену" });
+    rig.fast_agent.push(Step::patch(json!({ "ops": [
+        { "op": "topic", "action": "create", "title": "Смены" },
+        {
+            "op": "question", "title": "Кто распределяет звонки между линиями?",
+            "description": "В регламенте — старший смены", "cardField": "scenarios",
+            "gapType": "empty", "priority": 2,
+            "evidence": [evidence, { "source": "document", "id": "D1", "quote": "в смене три оператора" }]
+        }
+    ] })));
+    rig.fast_loop
+        .phrase_with_id(&rig.recording, OTHERS, &said.id);
+    rig.slow_loop
+        .phrase(&rig.recording, OTHERS, "пять операторов", Some(&said.id));
+    settle().await;
+    rig.until(160).await;
+
+    let question = rig
+        .host
+        .db(|db| call_state::get(db, &rig.recording))
+        .unwrap()
+        .questions[0]
+        .id
+        .clone();
+    rig.host.db(|db| {
+        let one = |sql: &str, id: &str| -> String {
+            db.query_row(sql, [id], |row| row.get(0)).unwrap()
+        };
+        // The slow call: its trigger, its queries, its candidate, its finding.
+        assert_eq!(
+            one("SELECT trigger_segment_id FROM agent_calls WHERE id = ?1", &slow),
+            trigger
+        );
+        assert!(
+            one("SELECT json_extract(queries, '$.client') FROM agent_calls WHERE id = ?1", &slow)
+                .contains("операторы смены")
+        );
+        assert_eq!(
+            one(
+                "SELECT source_name FROM slow_loop_candidates WHERE agent_call_id = ?1 AND label = 'C1'",
+                &slow
+            ),
+            "Регламент смены"
+        );
+        assert_eq!(
+            one(
+                "SELECT agent_call_id FROM agent_call_ops
+                  WHERE subject_id = ?1 AND op = 'finding' AND applied = 1",
+                &finding
+            ),
+            slow
+        );
+        // The fast loop's calls that were given it.
+        let given: i64 = db
+            .query_row(
+                "SELECT count(*) FROM agent_calls, json_each(agent_calls.findings_in_prompt)
+                  WHERE kind = 'fastLoop' AND json_each.value = ?1",
+                [&finding],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(given >= 3, "{given}");
+        // The question that cited it came from one of them.
+        let creator = one(
+            "SELECT agent_call_id FROM agent_call_ops
+              WHERE subject_id = ?1 AND op = 'question' AND applied = 1",
+            &question,
+        );
+        assert!(
+            one("SELECT findings_in_prompt FROM agent_calls WHERE id = ?1", &creator)
+                .contains(&finding)
+        );
+        assert_eq!(
+            one("SELECT question_id FROM context_findings WHERE id = ?1", &finding),
+            question
+        );
+    });
 }

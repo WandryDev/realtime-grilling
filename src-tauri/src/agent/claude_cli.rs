@@ -142,6 +142,24 @@ pub struct AgentReply {
     /// An object with `ops`, not checked against the schema yet.
     pub patch: Value,
     pub usage: Usage,
+    /// The CLI's `result` event as it came, for the journal.
+    pub raw: String,
+}
+
+impl AgentReply {
+    /// A reply as the CLI's `result` event with `patch` as its structured
+    /// output (the fakes of the tests).
+    #[cfg(test)]
+    pub fn new(patch: Value, usage: Usage) -> Self {
+        let raw = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "structured_output": patch,
+        })
+        .to_string();
+        Self { patch, usage, raw }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -494,6 +512,7 @@ impl Events {
         Ok(AgentReply {
             patch,
             usage: usage(&result, duration, rate_limit),
+            raw: result.to_string(),
         })
     }
 }

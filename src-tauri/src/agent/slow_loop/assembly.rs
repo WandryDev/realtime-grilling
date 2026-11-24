@@ -20,13 +20,17 @@ use rusqlite::Connection;
 
 use super::search::{Candidate, PATH_SEPARATOR};
 use crate::{
-    agent::fast_loop::{
-        assembly::{one_line, segment_line, transcript_window},
-        validate::document_numbers,
+    agent::{
+        fast_loop::{
+            assembly::{one_line, segment_line, transcript_window},
+            validate::document_numbers,
+        },
+        sections::Sections,
     },
     error::CommandResult,
     storage::{
         call_state::{CallState, QuestionStatus},
+        journal::PromptPart,
         projects, recordings,
         transcript::{TranscriptChannel, TranscriptSegment},
     },
@@ -158,13 +162,27 @@ fn candidate_line(number: usize, candidate: &Candidate) -> String {
 
 /// The message of a call: the state, the transcript window, the previous
 /// queries and the candidates (numbered `C1…` in their order).
+#[cfg(test)]
 pub fn user_message(
     state: &CallState,
     segments: &[TranscriptSegment],
     queries: &[String],
     candidates: &[Candidate],
 ) -> String {
-    let mut text = String::from("# Темы\n\n");
+    crate::agent::sections::join(&user_message_parts(state, segments, queries, candidates))
+}
+
+/// [`user_message`] by parts (call-analytics design.md, decision 2):
+/// `topics`, `card`, `questions`, `findings`, `transcript`, `queries`,
+/// `candidates`, `output`.
+pub fn user_message_parts(
+    state: &CallState,
+    segments: &[TranscriptSegment],
+    queries: &[String],
+    candidates: &[Candidate],
+) -> Vec<PromptPart> {
+    let mut text = Sections::new("topics");
+    text.push_str("# Темы\n\n");
     if state.topics.is_empty() {
         text.push_str("Тем пока нет.\n");
     }
@@ -181,6 +199,7 @@ pub fn user_message(
         ));
     }
 
+    text.section("card");
     text.push_str("\n# Карточка текущей темы\n\n");
     match state.current_card() {
         Some(card) if !card.fields.is_empty() => {
@@ -196,6 +215,7 @@ pub fn user_message(
         _ => text.push_str("Полей пока нет.\n"),
     }
 
+    text.section("questions");
     text.push_str("\n# Открытые вопросы\n\n");
     let open: Vec<_> = state
         .questions
@@ -213,6 +233,7 @@ pub fn user_message(
         ));
     }
 
+    text.section("findings");
     text.push_str("\n# Уже показанные находки\n\n");
     let shown = document_numbers(state);
     if shown.is_empty() {
@@ -227,6 +248,7 @@ pub fn user_message(
         ));
     }
 
+    text.section("transcript");
     text.push_str("\n# Расшифровка за последние 3 минуты\n\n");
     let window = transcript_window(segments, TRANSCRIPT_WINDOW);
     if window.is_empty() {
@@ -237,6 +259,7 @@ pub fn user_message(
         text.push('\n');
     }
 
+    text.section("queries");
     text.push_str("\n# Твои запросы из прошлого вызова\n\n");
     if queries.is_empty() {
         text.push_str("Нет.\n");
@@ -245,6 +268,7 @@ pub fn user_message(
         text.push_str(&format!("- {}\n", one_line(query)));
     }
 
+    text.section("candidates");
     text.push_str("\n# Кандидаты\n");
     for (index, candidate) in candidates.iter().enumerate() {
         text.push('\n');
@@ -253,9 +277,10 @@ pub fn user_message(
         text.push_str(candidate.text.trim());
         text.push('\n');
     }
+    text.section("output");
     text.push('\n');
     text.push_str(STRUCTURED_OUTPUT);
-    text
+    text.into_parts()
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+import { toast } from "@grill/ui/toast";
 import {
   Cause,
   Effect,
@@ -8,9 +9,7 @@ import {
   Stream,
 } from "effect";
 import { useSyncExternalStore } from "react";
-
 import type { DataChanged } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import { BackendError } from "@/effect/tauri";
 
 import { DataEvents } from "./services/data-events";

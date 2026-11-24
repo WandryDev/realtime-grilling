@@ -1,10 +1,6 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-
-import { AvatarFallback } from "@/components/ui/avatar";
-import { Bubble } from "@/components/ui/bubble";
-import { Marker, MarkerAction, MarkerContent } from "@/components/ui/marker";
+import { AvatarFallback } from "@grill/ui/avatar";
+import { Bubble } from "@grill/ui/bubble";
+import { Marker, MarkerAction, MarkerContent } from "@grill/ui/marker";
 import {
   Message,
   MessageAvatar,
@@ -13,8 +9,11 @@ import {
   MessageHeader,
   MessageSpeaking,
   MessageTyping,
-} from "@/components/ui/message";
-import { TopicDivider } from "@/components/ui/topic-divider";
+} from "@grill/ui/message";
+import { TopicDivider } from "@grill/ui/topic-divider";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 describe("Message", () => {
   it("marks the speaker as talking with a ring and a visible label", () => {

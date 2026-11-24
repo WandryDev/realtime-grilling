@@ -1,5 +1,22 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
+import { Checkbox } from "@grill/ui/checkbox";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@grill/ui/dialog";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@grill/ui/input-group";
+import { Spinner } from "@grill/ui/spinner";
 import { ChevronRightIcon } from "lucide-react";
 import {
   type ChangeEvent,
@@ -9,25 +26,7 @@ import {
   useMemo,
   useState,
 } from "react";
-
 import type { BrowseNode, SelectionItem, SelectionItemView } from "@/bindings";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
-import { Spinner } from "@/components/ui/spinner";
 import type { SaveSelectionResult } from "@/data/connector-selections";
 import { MAX_CONNECTOR_DOCUMENTS } from "@/data/services/connectors";
 import { SearchIcon } from "@/features/shell/icons";

@@ -1,6 +1,5 @@
+import { Spinner } from "@grill/ui/spinner";
 import type { ComponentProps } from "react";
-
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 import { CheckIcon } from "../icons";

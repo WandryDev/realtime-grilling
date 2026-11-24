@@ -1,7 +1,6 @@
+import { Button } from "@grill/ui/button";
 import type { ReactNode } from "react";
 import { useId } from "react";
-
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GrillAppIcon } from "./grill-app-icon";
 

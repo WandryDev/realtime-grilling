@@ -135,12 +135,12 @@ Most formatting and common issues are automatically fixed by Biome. Run `bunx ul
 
 # shadcn components
 
-`src/components/ui/*` are owned, restyled components (the Grill design system), not upstream copies. `shadcn add` must never replace them.
+`packages/ui/src/components/*` (the workspace package `@grill/ui`) are owned, restyled components (the Grill design system), not upstream copies. Grill and the analytics web import them as `@grill/ui/<component>`; the theme is `@grill/ui/theme.css`. `shadcn add` writes there (`components.json` → `ui: @grill/ui`) and must never replace them.
 
 - Preview first: `bunx --bun shadcn@latest add <component> --dry-run` or `--diff`. The dry run marks any existing file that differs from the registry as `~ overwrite`: that is what *would* change, not what `add` does without `-o`.
 - Without `-o`, `add` keeps an existing file: it asks "overwrite?" (default No, also with `--yes`). Answer No and port the wanted changes from `--diff` by hand.
 - Never run `add` with `-o` / `--overwrite` or `--all`.
-- If a file got overwritten anyway, restore it from git: `git restore src/components/ui/<file>`.
+- If a file got overwritten anyway, restore it from git: `git restore packages/ui/src/components/<file>`.
 
 # Effect
 

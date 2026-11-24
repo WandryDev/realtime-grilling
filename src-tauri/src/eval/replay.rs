@@ -589,7 +589,7 @@ pub async fn run(
             stopped = Some(format!("Не удалось записать фразу {}: {error}", segment.id));
             break;
         }
-        fast_loop.phrase(&recording_id, segment.channel);
+        fast_loop.phrase_with_id(&recording_id, segment.channel, &segment.id);
         phrases.push(Phrase {
             id: segment.id.clone(),
             channel: segment.channel,

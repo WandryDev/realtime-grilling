@@ -1,6 +1,6 @@
-import { Button } from "@/components/ui/button";
-import { CallWidgetFooter } from "@/components/ui/call-widget";
-import { Progress, ProgressLabel } from "@/components/ui/progress";
+import { Button } from "@grill/ui/button";
+import { CallWidgetFooter } from "@grill/ui/call-widget";
+import { Progress, ProgressLabel } from "@grill/ui/progress";
 import { cn } from "@/lib/utils";
 
 import { WidgetCard } from "../components/widget-card";

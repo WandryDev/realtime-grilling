@@ -1,6 +1,5 @@
+import { Badge } from "@grill/ui/badge";
 import type { ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
 import { CheckIcon } from "@/features/onboarding/components/icons";
 import { cn } from "@/lib/utils";
 

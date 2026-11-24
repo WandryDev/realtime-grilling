@@ -1,8 +1,7 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useCallback, useEffect, useState } from "react";
-
-import { toast } from "@/components/ui/toast";
 import {
   getSettings,
   resetShortcuts,

@@ -1,0 +1,14 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000009",
+  "v": 1,
+  "at": 1795000009000,
+  "kind": "questionEvent",
+  "body": {
+    "id": "qe-1",
+    "questionId": "q-1",
+    "recordingId": "rec-1",
+    "step": "pinned",
+    "agentCallId": null,
+    "at": 1795000300000
+  }
+}

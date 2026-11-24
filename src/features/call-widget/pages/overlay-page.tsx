@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import {
   type ComponentProps,
   useCallback,
@@ -8,9 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-
 import type { CallState } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import {
   type CallSession,
   CURRENT_CALL_ID,

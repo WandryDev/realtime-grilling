@@ -1,11 +1,7 @@
 "use client";
 
-import { FileTextIcon, UploadIcon } from "lucide-react";
-import { type MouseEvent, useCallback, useId } from "react";
-
-import type { ProjectSource } from "@/bindings";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@grill/ui/badge";
+import { Button } from "@grill/ui/button";
 import {
   Item,
   ItemActions,
@@ -13,8 +9,11 @@ import {
   ItemDescription,
   ItemMedia,
   ItemTitle,
-} from "@/components/ui/item";
-import { Spinner } from "@/components/ui/spinner";
+} from "@grill/ui/item";
+import { Spinner } from "@grill/ui/spinner";
+import { FileTextIcon, UploadIcon } from "lucide-react";
+import { type MouseEvent, useCallback, useId } from "react";
+import type { ProjectSource } from "@/bindings";
 import { cn } from "@/lib/utils";
 
 import { CloseIcon } from "../icons";

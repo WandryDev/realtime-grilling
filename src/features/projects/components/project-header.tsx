@@ -1,7 +1,6 @@
+import { Alert, AlertDescription, AlertTitle } from "@grill/ui/alert";
+import { Button } from "@grill/ui/button";
 import type { ReactNode } from "react";
-
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { MoreIcon, PencilIcon } from "../icons";

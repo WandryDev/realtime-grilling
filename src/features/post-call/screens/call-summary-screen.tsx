@@ -5,8 +5,8 @@ import {
   AlertAction,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+} from "@grill/ui/alert";
+import { Button } from "@grill/ui/button";
 
 import {
   CallPageHeader,

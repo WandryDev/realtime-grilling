@@ -1,9 +1,8 @@
 "use client";
 
+import { buttonVariants } from "@grill/ui/button";
 import type { VariantProps } from "class-variance-authority";
 import type { ComponentProps } from "react";
-
-import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { usePostCallLinks } from "./links";

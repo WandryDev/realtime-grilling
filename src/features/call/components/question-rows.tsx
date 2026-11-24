@@ -1,8 +1,6 @@
 "use client";
 
-import { type KeyboardEvent, useCallback } from "react";
-
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@grill/ui/badge";
 import {
   Question,
   QuestionAction,
@@ -12,8 +10,9 @@ import {
   QuestionStatus,
   QuestionTitle,
   QuestionTopic,
-} from "@/components/ui/question";
-import { SourceBadge } from "@/components/ui/source-badge";
+} from "@grill/ui/question";
+import { SourceBadge } from "@grill/ui/source-badge";
+import { type KeyboardEvent, useCallback } from "react";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";

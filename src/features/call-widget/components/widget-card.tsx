@@ -1,6 +1,5 @@
+import { CallWidget } from "@grill/ui/call-widget";
 import type { ComponentProps } from "react";
-
-import { CallWidget } from "@/components/ui/call-widget";
 import { cn } from "@/lib/utils";
 
 /*

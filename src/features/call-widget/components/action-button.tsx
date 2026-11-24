@@ -1,4 +1,4 @@
-import { Button, type ButtonProps } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@grill/ui/button";
 import { linkButtonProps } from "@/lib/link-button";
 
 import { FloatingLink } from "./floating-link";

@@ -1,7 +1,6 @@
+import { Button } from "@grill/ui/button";
+import { Progress } from "@grill/ui/progress";
 import type { ReactNode } from "react";
-
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import {
   AgentCard,
   AgentCardHeader,

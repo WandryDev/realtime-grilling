@@ -1,10 +1,9 @@
 "use client";
 
+import { Button } from "@grill/ui/button";
+import { Field, FieldError, FieldLabel } from "@grill/ui/field";
+import { Input } from "@grill/ui/input";
 import { type ChangeEvent, type FormEvent, useCallback, useState } from "react";
-
-import { Button } from "@/components/ui/button";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ExternalArrowIcon } from "./icons";
 

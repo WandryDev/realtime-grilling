@@ -1,7 +1,5 @@
 "use client";
 
-import { useCallback } from "react";
-
 import {
   QuestionHistory,
   QuestionHistoryAnswer,
@@ -13,7 +11,8 @@ import {
   QuestionHistoryQuestion,
   QuestionHistoryRestore,
   QuestionHistoryTime,
-} from "@/components/ui/question-history";
+} from "@grill/ui/question-history";
+import { useCallback } from "react";
 
 import { useCallActions } from "../call-actions";
 import type { HistoryEntry, TopicHistoryData } from "../types";

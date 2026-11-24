@@ -1,0 +1,24 @@
+{
+  "id": "0193f2a1-7c4e-7b1a-9f02-000000000007",
+  "v": 1,
+  "at": 1795000007000,
+  "kind": "card",
+  "body": {
+    "id": "card-1",
+    "topicId": "topic-1",
+    "recordingId": "rec-1",
+    "fields": [
+      {
+        "evidence": [
+          {
+            "id": "seg-2",
+            "quote": "звонок встаёт в очередь",
+            "source": "segment"
+          }
+        ],
+        "field": "edgeCases",
+        "value": "Все операторы заняты"
+      }
+    ]
+  }
+}

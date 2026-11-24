@@ -840,3 +840,122 @@ fn the_hints_leave_the_prefix_alone_and_the_baseline_has_none() {
     );
     assert_eq!(with.context, without.context);
 }
+
+/* Snapshots (call-analytics task 2.1): the prompt stays byte for byte */
+
+/// A call at 9.5 minutes: a topic with its card, an open and a hidden
+/// question, a finding of the slow loop, the pause line and the transcript.
+fn rich_call(db: &Connection) -> String {
+    use crate::storage::context_findings::{self, FindingSourceKind, NewFinding};
+    let id = recording(db);
+    topic_with_a_question(db, &id);
+    let applied = call_state::apply_patch_at(
+        db,
+        &id,
+        &ValidatedPatch {
+            ops: vec![question("Нужна ли запись разговоров?", 2)],
+        },
+        wall(2.5),
+    )
+    .unwrap();
+    call_state::act(
+        db,
+        &applied.question_ids[0],
+        call_state::QuestionAction::Hide,
+    )
+    .unwrap();
+    context_findings::insert_at(
+        db,
+        &id,
+        &NewFinding {
+            source_id: None,
+            source_kind: FindingSourceKind::Outline,
+            source_name: "Регламент смены".to_owned(),
+            source_url: None,
+            chunk_key: "reg#0".to_owned(),
+            quote: "В смене три оператора".to_owned(),
+            note: "Подтверждает: смена".to_owned(),
+            question_id: None,
+            agent_call_id: None,
+        },
+        wall(3.0),
+    )
+    .unwrap();
+    say(db, &id, TranscriptChannel::Me, 4 * MINUTE, "А ночью?");
+    say(
+        db,
+        &id,
+        TranscriptChannel::Others,
+        4 * MINUTE + 20_000,
+        "Ещё есть ночная смена",
+    );
+    id
+}
+
+#[test]
+fn the_prefix_snapshot() {
+    let db = database();
+    let id = rich_call(&db);
+    crate::agent::fast_loop::testing::assert_snapshot(
+        "fast_prefix.txt",
+        &build_prefix(&db, &id).unwrap().text,
+    );
+}
+
+#[test]
+fn the_message_snapshot() {
+    let db = database();
+    let id = rich_call(&db);
+    crate::agent::fast_loop::testing::assert_snapshot(
+        "fast_message.txt",
+        &message_at(&db, &id, 9.5),
+    );
+    call_state::apply_patch(
+        &db,
+        &id,
+        &ValidatedPatch {
+            ops: vec![ValidatedOp::StartFinalCheck],
+        },
+    )
+    .unwrap();
+    crate::agent::fast_loop::testing::assert_snapshot(
+        "fast_message_final.txt",
+        &message_at(&db, &id, 9.5),
+    );
+    let empty = recording(&db);
+    crate::agent::fast_loop::testing::assert_snapshot(
+        "fast_message_empty.txt",
+        &message_at(&db, &empty, 1.0),
+    );
+}
+
+/// The journal gets the message by its parts; the CLI their concatenation.
+#[test]
+fn the_message_comes_by_labelled_parts() {
+    let db = database();
+    let id = rich_call(&db);
+    let prefix = build_prefix(&db, &id).unwrap();
+    let assembled = assemble(&db, &id, &prefix, wall(9.5), Some(QUIET_MINUTES)).unwrap();
+    let labels: Vec<&str> = assembled
+        .parts
+        .iter()
+        .map(|part| part.label.as_str())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "mode",
+            "topics",
+            "card",
+            "questions",
+            "findings",
+            "quiet",
+            "transcript",
+            "output"
+        ]
+    );
+    assert_eq!(
+        crate::agent::sections::join(&assembled.parts),
+        assembled.user_message
+    );
+}

@@ -1,29 +1,28 @@
 "use client";
 
-import { type ComponentProps, type ReactNode, useCallback } from "react";
-
-import { ChoiceField } from "@/components/ui/choice-field";
-import { Progress, type ProgressTone } from "@/components/ui/progress";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { ChoiceField } from "@grill/ui/choice-field";
+import { Progress, type ProgressTone } from "@grill/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@grill/ui/radio-group";
 import {
   SegmentedControl,
   SegmentedControlItem,
-} from "@/components/ui/segmented-control";
+} from "@grill/ui/segmented-control";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@grill/ui/select";
 import {
   SettingRow,
   SettingRowContent,
   SettingRowControl,
   SettingRowDescription,
   SettingRowTitle,
-} from "@/components/ui/setting-row";
-import { Switch } from "@/components/ui/switch";
+} from "@grill/ui/setting-row";
+import { Switch } from "@grill/ui/switch";
+import { type ComponentProps, type ReactNode, useCallback } from "react";
 import type {
   BooleanSettingKey,
   SettingChange,

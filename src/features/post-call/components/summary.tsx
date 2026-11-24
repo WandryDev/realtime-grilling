@@ -1,9 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { ClickUpIcon } from "@/components/ui/brand-icons";
+import { Badge } from "@grill/ui/badge";
+import { ClickUpIcon } from "@grill/ui/brand-icons";
 import {
   QuestionHistoryAnswer,
   QuestionHistoryContent,
@@ -12,7 +10,8 @@ import {
   QuestionHistoryNote,
   QuestionHistoryQuestion,
   QuestionHistoryTime,
-} from "@/components/ui/question-history";
+} from "@grill/ui/question-history";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 import { CalendarIcon, ClockIcon, PeopleIcon } from "../icons";

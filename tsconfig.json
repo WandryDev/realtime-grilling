@@ -22,7 +22,10 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@grill/ui/hooks/*": ["./packages/ui/src/hooks/*"],
+      "@grill/ui/*": ["./packages/ui/src/components/*"],
+      "@grill/ui": ["./packages/ui/src/components"]
     }
   },
   "include": [
@@ -33,5 +36,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "src-tauri", "spikes"]
+  "exclude": ["node_modules", "src-tauri", "spikes", "analytics", "packages"]
 }

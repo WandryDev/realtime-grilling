@@ -1,5 +1,8 @@
 "use client";
 
+import { ChoiceField, ChoiceFieldLabel } from "@grill/ui/choice-field";
+import { Field, FieldError, FieldLabel } from "@grill/ui/field";
+import { RadioGroup, RadioGroupItem } from "@grill/ui/radio-group";
 import { ExternalLinkIcon } from "lucide-react";
 import {
   type FormEvent,
@@ -9,11 +12,7 @@ import {
   useRef,
   useState,
 } from "react";
-
 import type { Workspace } from "@/bindings";
-import { ChoiceField, ChoiceFieldLabel } from "@/components/ui/choice-field";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { connectWithKey } from "@/data/integrations";
 
 import { handleServiceLink } from "./api";

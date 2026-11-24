@@ -1,8 +1,7 @@
+import { Badge, type BadgeVariant } from "@grill/ui/badge";
+import { ClaudeIcon } from "@grill/ui/brand-icons";
+import { Spinner } from "@grill/ui/spinner";
 import type { ComponentProps, ReactNode } from "react";
-
-import { Badge, type BadgeVariant } from "@/components/ui/badge";
-import { ClaudeIcon } from "@/components/ui/brand-icons";
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { CheckIcon, CrossIcon, PendingCircleIcon } from "./icons";
 

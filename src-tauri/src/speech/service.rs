@@ -229,10 +229,15 @@ impl<R: Runtime> SpeechHost for AppSpeechHost<R> {
             && phrase.pass == TranscriptPass::Live
         {
             if let Some(fast_loop) = self.app.try_state::<FastLoop>() {
-                fast_loop.phrase(&phrase.recording_id, phrase.channel);
+                fast_loop.phrase_with_id(&phrase.recording_id, phrase.channel, &phrase.id);
             }
             if let Some(slow_loop) = self.app.try_state::<SlowLoop>() {
-                slow_loop.phrase(&phrase.recording_id, phrase.channel, &phrase.text);
+                slow_loop.phrase(
+                    &phrase.recording_id,
+                    phrase.channel,
+                    &phrase.text,
+                    Some(&phrase.id),
+                );
             }
         }
     }

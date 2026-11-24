@@ -1,6 +1,5 @@
+import { Button } from "@grill/ui/button";
 import type { ReactNode } from "react";
-
-import { Button } from "@/components/ui/button";
 import { MainSidebar } from "@/features/shell/app-sidebar";
 import {
   MainWindow,

@@ -1,6 +1,6 @@
 "use client";
 
-import { Appear, AppearScope } from "@/components/ui/appear";
+import { Appear, AppearScope } from "@grill/ui/appear";
 
 import { CallActionsProvider } from "../call-actions";
 import { FinishingCard, MicReleasedPanel } from "../components/call-overlays";

@@ -1,8 +1,7 @@
+import { Badge } from "@grill/ui/badge";
+import { Button } from "@grill/ui/button";
+import { Spinner } from "@grill/ui/spinner";
 import type { ComponentProps, ReactNode } from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 import { SmallCheckIcon } from "../icons";

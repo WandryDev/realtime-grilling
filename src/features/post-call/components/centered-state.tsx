@@ -1,11 +1,10 @@
-import type { ReactNode } from "react";
-
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
-} from "@/components/ui/empty";
+} from "@grill/ui/empty";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /*

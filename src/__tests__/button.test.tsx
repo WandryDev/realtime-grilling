@@ -1,8 +1,7 @@
+import { Button } from "@grill/ui/button";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-
-import { Button } from "@/components/ui/button";
 
 const LOADING_NAME = /Запускаю/u;
 

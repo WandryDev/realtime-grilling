@@ -1,0 +1,38 @@
+# The team's analytics server and its database (call-analytics design.md,
+# decision 10). The server has no sign-in: it is published only on this
+# machine's loopback by default. To reach it from the company's network,
+# put the machine's internal address (or the VPN's) in ANALYTICS_BIND —
+# never a public one.
+#
+#   ANALYTICS_BIND=10.0.0.5 docker compose -f analytics/docker-compose.yml up -d
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: analytics/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://analytics:analytics@postgres:5432/analytics
+    ports:
+      - "${ANALYTICS_BIND:-127.0.0.1}:${ANALYTICS_PORT:-8787}:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: analytics
+      POSTGRES_DB: analytics
+    volumes:
+      - analytics-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U analytics" ]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  analytics-data:

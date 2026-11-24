@@ -1,11 +1,10 @@
+import { Alert, AlertDescription, AlertTitle } from "@grill/ui/alert";
+import { Button } from "@grill/ui/button";
+import { IntegrationRow } from "@grill/ui/integration-row";
+import { Progress } from "@grill/ui/progress";
+import { Spinner } from "@grill/ui/spinner";
+import { Tabs, TabsCount, TabsList, TabsTrigger } from "@grill/ui/tabs";
 import { type ComponentProps, type ReactNode, useId } from "react";
-
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { IntegrationRow } from "@/components/ui/integration-row";
-import { Progress } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PlusIcon } from "@/features/shell/icons";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";

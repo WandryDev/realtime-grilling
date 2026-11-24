@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@grill/ui/button";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,

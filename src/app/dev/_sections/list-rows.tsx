@@ -1,26 +1,22 @@
-import type { ReactNode } from "react";
-
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@grill/ui/avatar";
 import {
   ClaudeIcon,
   ClickUpIcon,
   GitHubIcon,
   OutlineIcon,
-} from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
-import { CallRow } from "@/components/ui/call-row";
-import {
-  IntegrationCode,
-  IntegrationRow,
-} from "@/components/ui/integration-row";
+} from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
+import { CallRow } from "@grill/ui/call-row";
+import { IntegrationCode, IntegrationRow } from "@grill/ui/integration-row";
 import {
   PersonChip,
   PersonChipAdd,
   PersonChipRemove,
-} from "@/components/ui/person-chip";
-import { ProfileRow } from "@/components/ui/profile-row";
-import { ProjectRow } from "@/components/ui/project-row";
-import { SetupStep } from "@/components/ui/setup-step";
+} from "@grill/ui/person-chip";
+import { ProfileRow } from "@grill/ui/profile-row";
+import { ProjectRow } from "@grill/ui/project-row";
+import { SetupStep } from "@grill/ui/setup-step";
+import type { ReactNode } from "react";
 import {
   ShowcaseGroup,
   ShowcaseSection,

@@ -1,8 +1,7 @@
+import { Button } from "@grill/ui/button";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-
-import { Button } from "@/components/ui/button";
 import { ActionButton } from "@/features/call-widget/components/action-button";
 import { StepBackButton } from "@/features/onboarding/components/step-links";
 import { linkButtonProps } from "@/lib/link-button";

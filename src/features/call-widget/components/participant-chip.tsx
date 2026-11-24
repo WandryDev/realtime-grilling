@@ -1,10 +1,6 @@
+import { CallWidgetAddPerson, CallWidgetPerson } from "@grill/ui/call-widget";
+import { PersonChipRemove } from "@grill/ui/person-chip";
 import type { ComponentProps } from "react";
-
-import {
-  CallWidgetAddPerson,
-  CallWidgetPerson,
-} from "@/components/ui/call-widget";
-import { PersonChipRemove } from "@/components/ui/person-chip";
 import { cn } from "@/lib/utils";
 
 /*

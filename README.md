@@ -34,12 +34,12 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Компоненты shadcn. Файлы в `src/components/ui` — наш код: их перестилизовали под дизайн Grill, обновлять из registry их нельзя.
+Компоненты shadcn. Файлы в `packages/ui/src/components` (пакет `@grill/ui`) — наш код: их перестилизовали под дизайн Grill, обновлять из registry их нельзя. Grill и веб аналитики импортируют их как `@grill/ui/<component>`, тему — как `@grill/ui/theme.css`.
 
 - Сначала посмотрите, что изменится: `bunx --bun shadcn@latest add <component> --dry-run` (или `--diff`). Существующий файл, который отличается от registry, dry-run помечает `~ overwrite`. Это то, что *изменилось бы*, а не то, что сделает `add` без `-o`.
 - `add` без `-o` не перезаписывает существующий файл: спрашивает «overwrite?» (по умолчанию «нет»). Отвечайте «нет»; нужные правки из `--diff` переносите руками.
 - Никогда не запускайте `add` с `-o` / `--overwrite` и `--all`.
-- Если файл всё-таки затёрт, верните его через git: `git restore src/components/ui/<file>`.
+- Если файл всё-таки затёрт, верните его через git: `git restore packages/ui/src/components/<file>`.
 
 ## Микрофон, системный звук и подпись для разработки (macOS)
 

@@ -1,6 +1,4 @@
-import type { ReactNode } from "react";
-
-import { Button } from "@/components/ui/button";
+import { Button } from "@grill/ui/button";
 import {
   Empty,
   EmptyContent,
@@ -8,7 +6,8 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components/ui/empty";
+} from "@grill/ui/empty";
+import type { ReactNode } from "react";
 import { PlusIcon } from "@/features/shell/icons";
 import { linkButtonProps } from "@/lib/link-button";
 import { routes } from "@/lib/routes";

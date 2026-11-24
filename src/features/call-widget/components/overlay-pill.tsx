@@ -1,14 +1,10 @@
-import { Button } from "@/components/ui/button";
-import { Counter } from "@/components/ui/counter";
+import { Button } from "@grill/ui/button";
+import { Counter } from "@grill/ui/counter";
 import {
   RecordingIndicator,
   type RecordingLevel,
-} from "@/components/ui/recording-indicator";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@grill/ui/recording-indicator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@grill/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { ExpandIcon } from "../icons";

@@ -1,10 +1,9 @@
 "use client";
 
+import { AppWindowPanel } from "@grill/ui/app-window";
+import { AgentStatus } from "@grill/ui/recording-indicator";
+import { TopicAnchor } from "@grill/ui/topic-anchor";
 import { type MouseEvent, type ReactNode, useCallback } from "react";
-
-import { AppWindowPanel } from "@/components/ui/app-window";
-import { AgentStatus } from "@/components/ui/recording-indicator";
-import { TopicAnchor } from "@/components/ui/topic-anchor";
 import { cn } from "@/lib/utils";
 
 import { useCallActions } from "../call-actions";

@@ -58,7 +58,7 @@ const { getProjects, updateProject, useProjects } = await import(
 );
 const { usePeople } = await import("@/data/people");
 const { AppFrame } = await import("@/features/shell/app-frame");
-const { toast } = await import("@/components/ui/toast");
+const { toast } = await import("@grill/ui/toast");
 const { setCallPeople, useCalls } = await import("@/data/calls");
 
 const CALL_ID = "019a0000-0000-7000-8000-0000000000c1";

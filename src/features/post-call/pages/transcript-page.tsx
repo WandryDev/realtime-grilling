@@ -1,10 +1,9 @@
 "use client";
 
+import { toast } from "@grill/ui/toast";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import type { CallRecording, RecordingPeaks } from "@/bindings";
-import { toast } from "@/components/ui/toast";
 import {
   deleteCallAudio,
   recordingAudioUrl,

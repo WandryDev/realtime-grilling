@@ -1,8 +1,7 @@
 "use client";
 
+import { Tabs, TabsCount, TabsList, TabsTrigger } from "@grill/ui/tabs";
 import { type ReactNode, useCallback } from "react";
-
-import { Tabs, TabsCount, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import {
   CallPageHeader,

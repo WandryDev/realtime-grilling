@@ -1,6 +1,5 @@
+import { Spinner } from "@grill/ui/spinner";
 import type { ReactNode } from "react";
-
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /** 20px spinner with what we wait for and what happens next. */

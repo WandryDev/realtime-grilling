@@ -1,6 +1,5 @@
+import { Button } from "@grill/ui/button";
 import { EllipsisIcon, XIcon } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
 
 import {
   ShowcaseGroup,

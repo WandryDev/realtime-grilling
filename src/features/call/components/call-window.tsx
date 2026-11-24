@@ -1,5 +1,15 @@
 "use client";
 
+import { AppWindow, AppWindowBody } from "@grill/ui/app-window";
+import { Button } from "@grill/ui/button";
+import { RecordingIndicator } from "@grill/ui/recording-indicator";
+import {
+  WindowSubtitle,
+  WindowTitle,
+  WindowTitlebar,
+  WindowTitlebarEnd,
+  WindowTitlebarStart,
+} from "@grill/ui/window-titlebar";
 import {
   createContext,
   type ReactNode,
@@ -7,17 +17,6 @@ import {
   useEffect,
   useMemo,
 } from "react";
-
-import { AppWindow, AppWindowBody } from "@/components/ui/app-window";
-import { Button } from "@/components/ui/button";
-import { RecordingIndicator } from "@/components/ui/recording-indicator";
-import {
-  WindowSubtitle,
-  WindowTitle,
-  WindowTitlebar,
-  WindowTitlebarEnd,
-  WindowTitlebarStart,
-} from "@/components/ui/window-titlebar";
 import {
   WindowChromeEnd,
   WindowChromeStart,

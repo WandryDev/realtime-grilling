@@ -321,10 +321,7 @@ impl Agent for FakeAgent {
                 () = wait => {}
                 _ = cancel => return Err(AgentError::Cancelled),
             }
-            step.reply.map(|patch| AgentReply {
-                patch,
-                usage: step.usage,
-            })
+            step.reply.map(|patch| AgentReply::new(patch, step.usage))
         })
     }
 }
@@ -414,4 +411,60 @@ pub fn add_source(
             .unwrap(),
     };
     id
+}
+
+/// The ids (UUIDs) of `text` as `<id1>`, `<id2>`… in the order they first
+/// appear: a snapshot of a prompt stays the same between runs.
+pub fn stable_ids(text: &str) -> String {
+    fn is_uuid(candidate: &str) -> bool {
+        candidate.len() == 36
+            && candidate.char_indices().all(|(index, char)| match index {
+                8 | 13 | 18 | 23 => char == '-',
+                _ => char.is_ascii_hexdigit(),
+            })
+    }
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(candidate) = rest.get(..36)
+            && is_uuid(candidate)
+        {
+            let index = match seen.iter().position(|id| id == candidate) {
+                Some(index) => index,
+                None => {
+                    seen.push(candidate.to_owned());
+                    seen.len() - 1
+                }
+            };
+            out.push_str(&format!("<id{}>", index + 1));
+            rest = &rest[36..];
+            continue;
+        }
+        let char = rest.chars().next().unwrap();
+        out.push(char);
+        rest = &rest[char.len_utf8()..];
+    }
+    out
+}
+
+/// Compares `text` (its ids made stable) with `src/agent/snapshots/<name>`;
+/// writes the file when it is missing or `UPDATE_SNAPSHOTS` is set. A prompt
+/// must stay byte for byte the same unless it is meant to change: the CLI's
+/// cache rests on it (call-analytics task 2.1).
+pub fn assert_snapshot(name: &str, text: &str) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/agent/snapshots")
+        .join(name);
+    let text = stable_ids(text);
+    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() || !path.exists() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        expected == text,
+        "{name} changed; run with UPDATE_SNAPSHOTS=1 if that is meant.\n--- expected\n{expected}\n--- got\n{text}"
+    );
 }

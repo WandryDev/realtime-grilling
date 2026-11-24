@@ -1,6 +1,5 @@
+import { Progress } from "@grill/ui/progress";
 import type { ComponentProps, ReactNode } from "react";
-
-import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { IconTile } from "./icon-tile";
 

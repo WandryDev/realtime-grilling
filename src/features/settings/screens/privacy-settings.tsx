@@ -1,8 +1,8 @@
 "use client";
 
+import { ClaudeIcon } from "@grill/ui/brand-icons";
+import { Button } from "@grill/ui/button";
 import type { DataSummary } from "@/bindings";
-import { ClaudeIcon } from "@/components/ui/brand-icons";
-import { Button } from "@/components/ui/button";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,

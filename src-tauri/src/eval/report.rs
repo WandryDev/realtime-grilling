@@ -309,12 +309,21 @@ pub fn results(
         .collect();
     let calls = call_state::agent_calls(connection, recording_id)?
         .into_iter()
-        .map(|call| ReportCall {
-            kind: match call.kind {
+        .filter_map(|call| {
+            // A recording has only the loops' calls; the others belong to a
+            // call or a project.
+            let kind = match call.kind {
                 call_state::AgentCallKind::FastLoop => CallKind::FastLoop,
                 call_state::AgentCallKind::TopicCheck => CallKind::TopicCheck,
                 call_state::AgentCallKind::SlowLoop => CallKind::SlowLoop,
-            },
+                call_state::AgentCallKind::Summary
+                | call_state::AgentCallKind::Proposals
+                | call_state::AgentCallKind::Brief => return None,
+            };
+            Some((kind, call))
+        })
+        .map(|(kind, call)| ReportCall {
+            kind,
             at_ms: since(call.started_at),
             duration_ms: call.duration_ms,
             outcome: call.outcome,
