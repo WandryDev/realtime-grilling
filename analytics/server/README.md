@@ -24,6 +24,27 @@ docker compose -f analytics/docker-compose.yml up -d
 ANALYTICS_BIND=10.0.0.5 docker compose -f analytics/docker-compose.yml up -d
 ```
 
+### Coolify (Railpack)
+
+Сервер и веб — одно приложение: сервер отдаёт статический экспорт веба
+со своего адреса. Сборку описывает `railpack.json` в корне репозитория:
+ставит зависимости, собирает `analytics/web` и запускает сервер на
+`0.0.0.0:8787`. Без него Railpack принял бы корень за Next-сайт самого
+Grill и отдал бы его через Caddy.
+
+- **Build Pack:** Railpack, **Base Directory:** `/`, поля Install / Build /
+  Start Command пустые — всё в `railpack.json`.
+- **Ports Exposes:** `8787`.
+- **Переменные:** `DATABASE_URL` — Internal URL ресурса Postgres (на том же
+  сервере Coolify).
+- **Health check:** `GET /api/projects` — отвечает 200, когда есть связь с
+  базой.
+- **Watch Paths**, чтобы коммиты самого Grill не пересобирали сервер:
+  `analytics/**`, `packages/ui/**`, `package.json`, `bun.lock`,
+  `railpack.json`.
+- **Без публичного домена**: адрес только во внутренней сети или за VPN
+  (см. «Без входа» выше).
+
 Без Docker, с уже запущенным Postgres:
 
 ```sh

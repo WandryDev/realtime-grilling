@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1793011967495,
+  "lastScanned": 1795435010022,
   "projectRoot": "/Users/dev_wandry/projects/realtime-grilling",
   "techStack": {
     "languages": [
@@ -23,41 +23,61 @@
     ],
     "frameworks": [
       {
+        "name": "next",
+        "version": "16.4.2",
+        "category": "fullstack"
+      },
+      {
         "name": "react",
-        "version": "19.1.0",
+        "version": "19.3.1",
         "category": "frontend"
       },
       {
         "name": "react-dom",
-        "version": "19.1.0",
+        "version": "19.3.1",
         "category": "frontend"
       },
       {
-        "name": "vite",
-        "version": "8.0.16",
-        "category": "build"
+        "name": "@playwright/test",
+        "version": "1.64.1",
+        "category": "testing"
+      },
+      {
+        "name": "vitest",
+        "version": "5.0.5",
+        "category": "testing"
       }
     ],
     "packageManager": "npm",
     "runtime": null
   },
   "build": {
-    "buildCommand": "bun run build 2>&1 | tail -20 && ls out | head; cargo --version 2>&1",
-    "testCommand": null,
+    "buildCommand": "npm run build",
+    "testCommand": "npm test",
     "lintCommand": null,
     "devCommand": "npm run dev",
     "scripts": {
-      "dev": "vite",
-      "build": "tsc && vite build",
-      "preview": "vite preview",
-      "tauri": "tauri"
+      "build": "next build",
+      "changeset": "changeset",
+      "check": "ultracite check",
+      "dev": "next dev",
+      "e2e": "playwright test",
+      "e2e:install": "playwright install chromium webkit",
+      "eval": "cargo run -q --release --manifest-path src-tauri/Cargo.toml --example grill-eval --features eval --",
+      "fix": "ultracite fix",
+      "icons": "tauri icon src-tauri/app-icon.svg && rm -rf src-tauri/icons/android src-tauri/icons/ios src-tauri/icons/64x64.png",
+      "tauri": "tauri",
+      "test": "vitest run",
+      "test:watch": "vitest",
+      "typecheck": "tsc --noEmit",
+      "version": "changeset version && bun scripts/sync-version.ts"
     }
   },
   "conventions": {
-    "namingStyle": null,
+    "namingStyle": "camelCase",
     "importStyle": null,
     "testPattern": null,
-    "fileOrganization": null
+    "fileOrganization": "feature-based"
   },
   "structure": {
     "isMonorepo": false,
@@ -65,9 +85,13 @@
     "mainDirectories": [
       "docs",
       "public",
+      "scripts",
       "src"
     ],
-    "gitBranches": null
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
   },
   "customNotes": [],
   "directoryMap": {
@@ -75,72 +99,153 @@
       "path": "docs",
       "purpose": "Documentation",
       "fileCount": 2,
-      "lastAccessed": 1793011967241,
+      "lastAccessed": 1795435009957,
       "keyFiles": [
         "concept.md",
         "references.md"
       ]
     },
+    "e2e": {
+      "path": "e2e",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1795435009957,
+      "keyFiles": [
+        "flows.ts",
+        "main-flow.spec.ts",
+        "same-name-projects.spec.ts"
+      ]
+    },
+    "openspec": {
+      "path": "openspec",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1795435009958,
+      "keyFiles": [
+        "config.yaml"
+      ]
+    },
+    "out": {
+      "path": "out",
+      "purpose": "Build output",
+      "fileCount": 25,
+      "lastAccessed": 1795435009959,
+      "keyFiles": [
+        "404.html",
+        "__next.__PAGE__.txt",
+        "__next._full.txt",
+        "__next._tree.txt",
+        "_not-found.html"
+      ]
+    },
     "public": {
       "path": "public",
       "purpose": "Public files",
-      "fileCount": 2,
-      "lastAccessed": 1793011967438,
+      "fileCount": 0,
+      "lastAccessed": 1795435009986,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 3,
+      "lastAccessed": 1795435009988,
       "keyFiles": [
-        "tauri.svg",
-        "vite.svg"
+        "make-speech-check.sh",
+        "serve-out.ts",
+        "sync-version.ts"
       ]
+    },
+    "spikes": {
+      "path": "spikes",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1795435009988,
+      "keyFiles": []
     },
     "src": {
       "path": "src",
       "purpose": "Source code",
-      "fileCount": 4,
-      "lastAccessed": 1793011967451,
+      "fileCount": 1,
+      "lastAccessed": 1795435009989,
       "keyFiles": [
-        "App.css",
-        "App.tsx",
-        "main.tsx",
-        "vite-env.d.ts"
+        "bindings.ts"
       ]
     },
     "src-tauri": {
       "path": "src-tauri",
       "purpose": null,
-      "fileCount": 4,
-      "lastAccessed": 1793011967456,
+      "fileCount": 12,
+      "lastAccessed": 1795435009991,
       "keyFiles": [
+        "Cargo.lock",
         "Cargo.toml",
-        "build.rs",
-        "tauri.conf.json"
+        "Entitlements.plist",
+        "Info.plist",
+        "app-icon.svg"
       ]
     },
-    "src/assets": {
-      "path": "src/assets",
-      "purpose": "Static assets",
+    "test-results": {
+      "path": "test-results",
+      "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1793011967456,
+      "lastAccessed": 1795435009992,
+      "keyFiles": []
+    },
+    "src/__tests__": {
+      "path": "src/__tests__",
+      "purpose": "Test files",
+      "fileCount": 74,
+      "lastAccessed": 1795435010015,
       "keyFiles": [
-        "react.svg"
+        "agent-state.test.ts",
+        "app-call-widget.test.tsx",
+        "app-call.test.tsx"
       ]
     },
-    "src-tauri/src": {
-      "path": "src-tauri/src",
-      "purpose": "Source code",
-      "fileCount": 2,
-      "lastAccessed": 1793011967460,
+    "src/app": {
+      "path": "src/app",
+      "purpose": "Application code",
+      "fileCount": 4,
+      "lastAccessed": 1795435010016,
       "keyFiles": [
-        "lib.rs",
-        "main.rs"
+        "favicon.ico",
+        "globals.css",
+        "layout.tsx"
+      ]
+    },
+    "src/components": {
+      "path": "src/components",
+      "purpose": "UI components",
+      "fileCount": 1,
+      "lastAccessed": 1795435010018,
+      "keyFiles": [
+        "theme-provider.tsx"
+      ]
+    },
+    "src/data": {
+      "path": "src/data",
+      "purpose": "Data files",
+      "fileCount": 18,
+      "lastAccessed": 1795435010019,
+      "keyFiles": [
+        "call-history.ts",
+        "call-records.ts",
+        "call-session.ts"
+      ]
+    },
+    "src/lib": {
+      "path": "src/lib",
+      "purpose": "Library code",
+      "fileCount": 13,
+      "lastAccessed": 1795435010020,
+      "keyFiles": [
+        "card-lens.ts",
+        "clock.ts",
+        "highlighter.tsx"
       ]
     }
   },
-  "hotPaths": [
-    {
-      "path": "README.md",
-      "accessCount": 1,
-      "lastAccessed": 1793012197264,
-      "type": "file"
-    }
-  ],
+  "hotPaths": [],
   "userDirectives": []
 }
