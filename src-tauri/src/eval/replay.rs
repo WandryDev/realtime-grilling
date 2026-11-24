@@ -329,7 +329,9 @@ impl LoopHost for ReplayHost {
                 AgentLoopState::Error { message, .. } => {
                     eprintln!("{} вызов не удался: {message}", clock(at_ms));
                 }
-                AgentLoopState::NeedsLogin | AgentLoopState::RateLimited { .. } => {
+                AgentLoopState::NeedsLogin
+                | AgentLoopState::RateLimited { .. }
+                | AgentLoopState::GrillLimit { .. } => {
                     eprintln!("{} агент недоступен", clock(at_ms));
                 }
                 AgentLoopState::Idle => {}

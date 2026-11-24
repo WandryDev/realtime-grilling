@@ -14,13 +14,16 @@ use std::{
 use serde_json::{Value, json};
 
 use super::{
-    CANCELLED, SummaryStage, SummaryStageState,
+    CANCELLED, GRILL_LIMIT, SummaryStage, SummaryStageState,
     builds::{Stop, SummaryBuilds},
     run,
     run_tests::{ScriptedAgent, TestHost, block_on},
 };
 use crate::{
-    agent::claude_cli::{Agent, ClaudeCodeCli},
+    agent::{
+        claude_cli::{Agent, ClaudeCodeCli, WindowShare, WindowShares},
+        limit::{LimitPolicy, MeasureSource, Metered},
+    },
     call::{
         CallHost, CallManager, CallRecorder, CallSettings, CallStart, DbWork, windows::WindowStep,
     },
@@ -172,7 +175,7 @@ impl CallHost for Wired {
     fn tray(&self, _in_call: bool) {}
 
     fn summary_start(&self, call_id: &str) {
-        run::start(&self.host, &self.builds, call_id);
+        run::start(&self.host, &self.builds, call_id, LimitPolicy::Respect);
     }
 
     fn summary_cancel(&self, call_id: &str) {
@@ -259,6 +262,7 @@ impl App {
         let session = block_on(self.calls.start(CallStart {
             project_id: Some(project),
             participant_ids: None,
+            ..CallStart::default()
         }))
         .unwrap();
         session.call_id.unwrap()
@@ -482,4 +486,116 @@ fn a_window_closing_the_call_first_does_not_stop_the_build() {
     // The window can start a new call meanwhile and after.
     let _ = app.start();
     assert_eq!(app.calls.current().status, CallSessionStatus::Live);
+}
+
+/* Лимит Grill (agent-limit-guard design.md, decision 7) */
+
+/// A call with the limit event of CLI 2.1.316: the session at 44 %.
+fn events_with_limit(output: &Value) -> String {
+    let limit = json!({
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed", "resetsAt": 4_102_444_800_u64, "rateLimitType": "five_hour",
+            "unifiedWindows": {
+                "five_hour": { "utilization": 0.44, "resetsAt": 4_102_444_800_u64, "status": "allowed" },
+                "seven_day": { "utilization": 0.2, "resetsAt": 4_102_444_800_u64, "status": "allowed" }
+            }
+        }
+    });
+    format!("{limit}\n{}", events(output))
+}
+
+/// The session at `used` (0–1), resetting far ahead.
+fn session_at(app: &App, used: f64) {
+    app.host.limit.observe(
+        MeasureSource::Usage,
+        WindowShares {
+            session: Some(WindowShare {
+                used,
+                resets_at: Some(4_102_444_800_000),
+            }),
+            week: None,
+        },
+        now_ms(),
+    );
+}
+
+impl App {
+    /// The fake's agent, measuring the host's limit as `Metered` does in
+    /// the app.
+    fn metered(fake: &Fake) -> Self {
+        let app = Self::new(None);
+        let agent: Arc<dyn Agent> = Arc::new(Metered {
+            agent: fake.agent("play", 0),
+            limit: app.host.limit.clone(),
+        });
+        *app.host.agent.lock().unwrap() = Some(agent);
+        app
+    }
+
+    fn summary_state(&self, call_id: &str) -> (SummaryState, Option<String>) {
+        let summary = self.host.summary(call_id);
+        (summary.state, summary.error)
+    }
+}
+
+/// «Звонок закончился за порогом», then «Окно сбросилось»: the call is
+/// «завершён» without an agent call; once the threshold lets go the summary
+/// is built by itself.
+#[test]
+fn at_the_threshold_the_summary_waits_and_builds_once_it_lets_go() {
+    let fake = Fake::new(&events(&reply()), &events(&json!({ "proposals": [] })));
+    let app = App::metered(&fake);
+    session_at(&app, 0.93);
+    let call = app.start();
+    app.finish(&call);
+    app.settle(&call);
+    assert_eq!(app.status(&call), CallStatus::Finished);
+    assert_eq!(
+        app.summary_state(&call),
+        (SummaryState::Failed, Some(GRILL_LIMIT.to_owned()))
+    );
+    assert_eq!(fake.runs(), 0, "no agent call");
+
+    tauri::async_runtime::spawn(run::build_when_limit_lets_go(
+        Arc::clone(&app.host),
+        app.builds.clone(),
+        app.host.limit.clone(),
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(fake.runs(), 0, "still at the threshold");
+    // The session reset: the next poll says 3 %.
+    session_at(&app, 0.03);
+    wait_until("the summary was not built", SLOW_START * 4, || {
+        app.summary_state(&call).0 == SummaryState::Ready
+    });
+    assert_eq!(fake.runs(), 2);
+}
+
+/// «Собрать сверх лимита»; a call that went past the threshold still waits.
+#[test]
+fn a_call_over_the_limit_still_waits_and_over_the_limit_builds_at_once() {
+    let fake = Fake::new(
+        &events_with_limit(&reply()),
+        &events(&json!({ "proposals": [] })),
+    );
+    let app = App::metered(&fake);
+    session_at(&app, 0.95);
+    let call = app.start();
+    let recording = app.calls.current().recording_id.unwrap();
+    app.host.limit.allow_over(&recording);
+    app.finish(&call);
+    app.settle(&call);
+    assert_eq!(
+        app.summary_state(&call),
+        (SummaryState::Failed, Some(GRILL_LIMIT.to_owned()))
+    );
+
+    let running = run::start(&app.host, &app.builds, &call, LimitPolicy::Over).unwrap();
+    block_on(running).unwrap();
+    assert_eq!(app.summary_state(&call).0, SummaryState::Ready);
+    assert_eq!(fake.runs(), 2);
+    // Its limit event measured the session (agent-limit-guard task 1.5).
+    let session = app.host.limit.view().session.unwrap();
+    assert_eq!((session.used, session.source), (44, MeasureSource::Call));
 }

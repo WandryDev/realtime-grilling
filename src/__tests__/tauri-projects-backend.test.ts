@@ -41,7 +41,7 @@ function run<A, E>(effect: Effect.Effect<A, E, Backend>) {
 async function startBuild() {
   const fiber = Effect.runFork(
     ProjectsBackend.use((backend) =>
-      Stream.runCollect(backend.buildBrief(PROJECT))
+      Stream.runCollect(backend.buildBrief(PROJECT, false))
     ).pipe(Effect.provide(ProjectsBackend.layerTauri))
   );
   await vi.waitFor(() => {
@@ -74,7 +74,7 @@ describe("ProjectsBackend.layerTauri", () => {
   it("follows the stages of its project to the saved brief", async () => {
     const fiber = await startBuild();
     expect(fake.invoked.at(-1)).toEqual({
-      args: { projectId: PROJECT },
+      args: { overLimit: false, projectId: PROJECT },
       command: "brief_build",
     });
 
@@ -146,7 +146,7 @@ describe("ProjectsBackend.layerTauri", () => {
       message: "Проект не найден",
     });
     const exit = await run(
-      ProjectsBackend.use((backend) => backend.refreshBrief(PROJECT))
+      ProjectsBackend.use((backend) => backend.refreshBrief(PROJECT, false))
     );
     expect(Exit.isFailure(exit)).toBe(true);
     expect(JSON.stringify(exit)).toContain("BriefError");

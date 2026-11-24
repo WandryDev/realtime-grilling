@@ -14,6 +14,8 @@ import {
   OverlayFooter,
   OverlayHeader,
   OverlayHeading,
+  OverlayLimit,
+  type OverlayLimitNotice,
   OverlayListening,
   OverlayMainQuestion,
   OverlayQuestion,
@@ -67,6 +69,7 @@ export function CompactOverlay({
   mainQuestionId,
   finalCheckMore = OVERLAY.finalCheckMore,
   hiddenFromShare = true,
+  limitNotice,
   newQuestion,
   onCollapse,
   onDismissNewQuestion,
@@ -103,6 +106,8 @@ export function CompactOverlay({
    * экрана»): the footer says "не видно в демонстрации".
    */
   hiddenFromShare?: boolean;
+  /** A threshold of Grill stopped the agent (agent-limit-guard). */
+  limitNotice?: OverlayLimitNotice;
   /**
    * The card under the collapsed pill. Defaults to the main question
    * (previews); null hides it.
@@ -206,6 +211,7 @@ export function CompactOverlay({
             question={question}
           />
         ))}
+        <OverlayLimit notice={limitNotice} />
         <OverlayFooter hiddenFromShare={hiddenFromShare}>
           {finalCheck && finalCheckMore > 0 ? (
             <span className="text-muted-foreground text-sm">

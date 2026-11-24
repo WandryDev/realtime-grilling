@@ -487,6 +487,30 @@ export const CALL_SCREENS: Record<CallScreenState, CallScreenData> = {
       ],
     },
   },
+  "grill-limit": {
+    ...MAIN,
+    call: { ...CALL, time: "41:05" },
+    questions: {
+      ...QUESTIONS,
+      agent: { label: "лимит Grill", state: "listening", tone: "muted" },
+      banner: {
+        actions: [
+          {
+            id: "over-limit",
+            label: "Продолжить сверх лимита",
+            variant: "secondary",
+          },
+        ],
+        description:
+          "Новых вопросов пока нет: остаток лимита подписки бережём для вас. Запись и расшифровка идут, после сброса или «Продолжить сверх лимита» догоню пропущенное.",
+        hint: { text: "сброс в 14:09" },
+        icon: "claude",
+        title: "Лимит Grill: сессия 91 % из 90 %",
+      },
+      current: FROZEN_CRM_TOPIC,
+      frozen: true,
+    },
+  },
   "limit-reached": {
     ...MAIN,
     call: { ...CALL, time: "33:10" },

@@ -8,6 +8,7 @@ pub mod discover;
 pub mod fast_loop;
 pub mod halt;
 pub mod install;
+pub mod limit;
 pub mod login;
 pub mod process;
 pub mod sections;

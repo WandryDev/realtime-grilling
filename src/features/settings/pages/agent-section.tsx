@@ -2,13 +2,14 @@
 
 import { toast } from "@grill/ui/toast";
 import { useCallback, useEffect, useState } from "react";
-import type { AgentState, AgentUsage } from "@/bindings";
+import type { AgentState } from "@/bindings";
+import { refreshAgentLimit, useAgentLimit } from "@/data/agent-limit";
 import { updateSetting, useSettings } from "@/data/settings";
 
 import { publishAgentState } from "../agent-status";
-import { checkAgent, isAbortError, readAgentUsage } from "../api";
+import { checkAgent, isAbortError } from "../api";
 import { AgentLoginDialog, AgentPathDialog } from "../dialogs/agent-dialogs";
-import { AGENT_UTILIZATION_LOW } from "../mock";
+import { AGENT_LIMIT_REACHED } from "../mock";
 import { AgentSettings } from "../screens/agent-settings";
 import { showErrorToast } from "../toasts";
 import { useAbortSignal } from "../use-abort-signal";
@@ -16,15 +17,15 @@ import { useAbortSignal } from "../use-abort-signal";
 /**
  * Settings → Агент in the app: what Claude Code answers (`agent_status`)
  * on open and on «Проверить снова», another CLI path checked before it is
- * saved, «Войти» through the onboarding login, and the last known share
- * of the limit (`agent_usage`). `limitLow` (?demo=limit-low): less than
- * one call left in the window.
+ * saved, «Войти» through the onboarding login, and the share of the
+ * limit of both windows (`agent_limit_get`, polled again by «Проверить
+ * снова»). `limitLow` (?demo=limit-low): the session past its threshold.
  */
 export function AgentSection({ limitLow = false }: { limitLow?: boolean }) {
   const values = useSettings();
   const nextSignal = useAbortSignal();
   const [agent, setShownAgent] = useState<AgentState | null>(null);
-  const [usage, setUsage] = useState<AgentUsage | null>(null);
+  const limit = useAgentLimit();
   const [checking, setChecking] = useState(false);
   const [pathOpen, setPathOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -58,23 +59,15 @@ export function AgentSection({ limitLow = false }: { limitLow?: boolean }) {
 
   useEffect(() => {
     readAgent();
-    readAgentUsage(nextSignal()).then(
-      (read) =>
-        setUsage(
-          limitLow && read
-            ? { ...read, utilization: AGENT_UTILIZATION_LOW }
-            : read
-        ),
-      (error: unknown) => {
-        if (!isAbortError(error)) {
-          showErrorToast("Не получилось прочитать лимит подписки", error);
-        }
-      }
-    );
-  }, [limitLow, nextSignal, readAgent]);
+  }, [readAgent]);
 
+  // «Проверить снова» asks Claude Code again and polls the limit; the
+  // share follows `SubscriptionLimitChanged` either way.
   const recheck = useCallback(() => {
     readAgent();
+    refreshAgentLimit().catch((error: unknown) => {
+      showErrorToast("Не получилось проверить лимит подписки", error);
+    });
   }, [readAgent]);
 
   const signedIn = useCallback(async () => {
@@ -87,12 +80,12 @@ export function AgentSection({ limitLow = false }: { limitLow?: boolean }) {
       <AgentSettings
         agent={agent}
         checking={checking}
+        limit={limitLow ? AGENT_LIMIT_REACHED : limit}
         onChange={updateSetting}
         onChangePath={openPathDialog}
         onCheck={recheck}
         onSignIn={openLoginDialog}
         signingIn={loginOpen}
-        usage={usage}
         values={values}
       />
       <AgentPathDialog

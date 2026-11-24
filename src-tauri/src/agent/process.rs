@@ -297,8 +297,20 @@ pub enum RunError {
 
 /// Runs until the process exits (not until its pipes close) or kills its
 /// tree after `timeout`.
-pub async fn run(mut command: Command, timeout: Duration) -> Result<Output, RunError> {
+pub async fn run(command: Command, timeout: Duration) -> Result<Output, RunError> {
+    run_in(command, timeout, &TreeSlot::default()).await
+}
+
+/// [`run`], its tree kept in `slot` while it runs, so the app's exit can
+/// kill it.
+pub async fn run_in(
+    mut command: Command,
+    timeout: Duration,
+    slot: &TreeSlot,
+) -> Result<Output, RunError> {
     let (mut child, tree) = spawn(&mut command).map_err(RunError::Spawn)?;
+    let tree = Arc::new(tree);
+    let _held = slot.hold(Arc::clone(&tree));
     let stdout = Collected::start(child.stdout.take());
     let stderr = Collected::start(child.stderr.take());
     let status = tokio::select! {

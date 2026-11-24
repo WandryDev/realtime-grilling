@@ -18,7 +18,10 @@ use super::{
     *,
 };
 use crate::{
-    agent::claude_cli::Agent,
+    agent::{
+        claude_cli::{Agent, WindowShare, WindowShares},
+        limit::{LimitHit, LimitPolicy, MeasureSource, SubscriptionLimit},
+    },
     events::{DataChanged, EventSink, testing::RecordingSink},
     projects::{
         brief_inputs::{self, BriefInputs, BriefPerson},
@@ -511,6 +514,8 @@ pub struct TestHost {
     pub progress: Mutex<Vec<BriefProgress>>,
     pub agent: Mutex<Option<Arc<dyn Agent>>>,
     pub lookups: AtomicUsize,
+    /// Its thresholds stop the build; no measures by default.
+    pub limit: SubscriptionLimit,
 }
 
 impl TestHost {
@@ -525,6 +530,7 @@ impl TestHost {
             progress: Mutex::new(Vec::new()),
             agent: Mutex::new(agent),
             lookups: AtomicUsize::new(0),
+            limit: SubscriptionLimit::default(),
         })
     }
 
@@ -640,6 +646,10 @@ impl BriefHost for TestHost {
 
     fn prompt_dir(&self) -> std::path::PathBuf {
         self.data.path().join("agent/briefs")
+    }
+
+    fn grill_limit(&self) -> Option<LimitHit> {
+        self.limit.reached()
     }
 }
 
@@ -892,7 +902,14 @@ fn a_cancel_after_the_reply_but_before_the_save_keeps_the_old_brief() {
         });
         is_held.recv().unwrap();
     }));
-    let running = run::start(&host, &builds, &project.id, Some(agent.clone())).unwrap();
+    let running = run::start(
+        &host,
+        &builds,
+        &project.id,
+        Some(agent.clone()),
+        LimitPolicy::Respect,
+    )
+    .unwrap();
     // Past the last check before stage 5: the reply is in.
     wait_until("stage 5 did not start", || {
         host.progress()
@@ -937,7 +954,7 @@ fn prepare_skips_inputs_that_just_failed() {
     assert_eq!(host.lookups.load(Ordering::SeqCst), lookups);
 
     // «Собрать» by hand retries.
-    let running = run::start(&host, &builds, &project.id, None).unwrap();
+    let running = run::start(&host, &builds, &project.id, None, LimitPolicy::Respect).unwrap();
     block_on(running).unwrap();
     assert_eq!(agent.calls(), 2);
     assert!(!block_on(prepare(&host, &builds, &project.id)).unwrap());
@@ -969,7 +986,14 @@ fn a_build_is_journaled_with_its_project() {
     let builds = BriefBuilds::default();
     let project = host.project();
     let agent = QuickAgent::new(Ok(reply()));
-    let running = run::start(&host, &builds, &project.id, Some(agent)).unwrap();
+    let running = run::start(
+        &host,
+        &builds,
+        &project.id,
+        Some(agent),
+        LimitPolicy::Respect,
+    )
+    .unwrap();
     block_on(running).unwrap();
 
     let id = project.id.clone();
@@ -1005,4 +1029,75 @@ fn a_build_is_journaled_with_its_project() {
             1
         )]
     );
+}
+
+/* Лимит Grill (agent-limit-guard design.md, decision 8) */
+
+/// The week at `used` (0–1), resetting far ahead.
+fn week_at(host: &TestHost, used: f64) {
+    host.limit.observe(
+        MeasureSource::Usage,
+        WindowShares {
+            session: None,
+            week: Some(WindowShare {
+                used,
+                resets_at: Some(4_102_444_800_000),
+            }),
+        },
+        crate::storage::now_ms(),
+    );
+}
+
+/// Spec project-brief «Мастер за порогом»: the build stops before the
+/// agent with `grillLimit`; «Собрать сверх лимита» builds it at once.
+#[test]
+fn at_the_threshold_the_brief_is_not_built_unless_over_the_limit() {
+    let agent = QuickAgent::new(Ok(reply()));
+    let host = TestHost::new(Some(agent.clone()));
+    let builds = BriefBuilds::default();
+    let project = host.project();
+    week_at(&host, 0.85);
+
+    let running = run::start(&host, &builds, &project.id, None, LimitPolicy::Respect).unwrap();
+    block_on(running).unwrap();
+    assert_eq!(agent.calls(), 0);
+    let last = host.progress().pop().unwrap();
+    assert_eq!(
+        last.state,
+        BriefStageState::Failed {
+            message: run::GRILL_LIMIT.to_owned()
+        }
+    );
+    assert_eq!(host.get(&project.id).brief_state, BriefState::None);
+    let id = project.id.clone();
+    let fingerprint = block_on(
+        host.storage
+            .read(move |db| brief_inputs::fingerprint(db, &id)),
+    )
+    .unwrap();
+    assert!(
+        !builds.failed_lately(&project.id, &fingerprint),
+        "the inputs did not fail: no back-off"
+    );
+
+    let running = run::start(&host, &builds, &project.id, None, LimitPolicy::Over).unwrap();
+    block_on(running).unwrap();
+    assert_eq!(agent.calls(), 1);
+    assert_eq!(host.get(&project.id).brief_state, BriefState::Fresh);
+}
+
+/// Spec project-brief «Бриф устарел перед звонком»: no refresh starts, the
+/// agent is not even asked.
+#[test]
+fn at_the_threshold_prepare_leaves_the_brief_as_it_is() {
+    let agent = QuickAgent::new(Ok(reply()));
+    let host = TestHost::new(Some(agent.clone()));
+    let builds = BriefBuilds::default();
+    let project = host.project();
+    week_at(&host, 0.81);
+    assert!(!block_on(prepare(&host, &builds, &project.id)).unwrap());
+    assert_eq!(host.lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(agent.calls(), 0);
+    week_at(&host, 0.05);
+    assert!(block_on(prepare(&host, &builds, &project.id)).unwrap());
 }

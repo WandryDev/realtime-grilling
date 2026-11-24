@@ -4,7 +4,6 @@ import { Cause, Effect, Exit, Stream } from "effect";
 
 import type {
   AgentState,
-  AgentUsage,
   AudioInputs,
   DataSummary,
   RecordingsInfo,
@@ -151,16 +150,6 @@ export function checkAgent(
 ): Promise<AgentState> {
   return run(
     SettingsBackend.use((backend) => backend.checkAgent(path)),
-    signal
-  );
-}
-
-/** The last known share of the subscription limit, `null` without one. */
-export function readAgentUsage(
-  signal?: AbortSignal
-): Promise<AgentUsage | null> {
-  return run(
-    SettingsBackend.use((backend) => backend.agentUsage),
     signal
   );
 }

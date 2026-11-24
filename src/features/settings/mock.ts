@@ -5,6 +5,7 @@ import type {
   ModelId,
   RecordingsInfo,
   SpeechModel,
+  SubscriptionLimitView,
   UpdateStatus,
 } from "@/bindings";
 import type { StoredBenchmark } from "@/data/settings";
@@ -162,15 +163,58 @@ export const AGENT: AgentState = {
   version: "2.1.14",
 };
 
-/** The share of the subscription limit of the demo, 0–1. */
-export const AGENT_UTILIZATION = 0.38;
+/** The demo's last measure of the limit, 12 November 12:41. */
+const DEMO_MEASURED_AT = new Date(2026, 10, 12, 12, 41).getTime();
+const DEMO_SESSION_RESET = new Date(2026, 10, 12, 15, 10).getTime();
+const DEMO_WEEK_RESET = new Date(2026, 10, 16, 0, 59).getTime();
 
-/** From this share up the limit turns red: less than one call left. */
-export const AGENT_LIMIT_LOW = 0.9;
+/** The share of the limit of the static screens: well below the thresholds. */
+export const AGENT_LIMIT: SubscriptionLimitView = {
+  checking: false,
+  outlook: { kind: "ok" },
+  session: {
+    measuredAt: DEMO_MEASURED_AT,
+    resetsAt: DEMO_SESSION_RESET,
+    source: "usage",
+    used: 38,
+  },
+  thresholds: { session: 90, week: 80 },
+  week: {
+    measuredAt: DEMO_MEASURED_AT,
+    resetsAt: DEMO_WEEK_RESET,
+    source: "usage",
+    used: 21,
+  },
+};
 
-/** The demo's limit in ?demo=limit-low. */
-export const AGENT_UTILIZATION_LOW = 0.94;
+/** ?demo=limit-low: the session past its threshold of 90 %. */
+export const AGENT_LIMIT_REACHED: SubscriptionLimitView = {
+  ...AGENT_LIMIT,
+  outlook: {
+    hit: {
+      resetsAt: DEMO_SESSION_RESET,
+      threshold: 90,
+      used: 94,
+      window: "session",
+    },
+    kind: "reached",
+  },
+  session: {
+    measuredAt: DEMO_MEASURED_AT,
+    resetsAt: DEMO_SESSION_RESET,
+    source: "call",
+    used: 94,
+  },
+};
 
+/** «Лимит Grill»: the threshold of a window, or none. */
+export const AGENT_LIMIT_OPTIONS: SelectOption[] = [
+  { label: "Без ограничения", value: "off" },
+  { label: "90 %", value: "90" },
+  { label: "80 %", value: "80" },
+  { label: "70 %", value: "70" },
+  { label: "50 %", value: "50" },
+];
 export const QUESTION_FREQUENCY: SelectOption[] = [
   { label: "Реже", value: "rare" },
   { label: "Обычно", value: "normal" },

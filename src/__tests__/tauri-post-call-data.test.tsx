@@ -134,7 +134,7 @@ describe("post-call data services in Tauri", () => {
     const patch = { decision: "accepted" } as const;
     const exits = await Promise.all([
       run(SummaryData.use((data) => data.get(CALL))),
-      run(SummaryData.use((data) => data.build(CALL))),
+      run(SummaryData.use((data) => data.build(CALL, false))),
       run(SummaryData.use((data) => data.cancel(CALL))),
       run(ProposalsData.use((data) => data.list(CALL))),
       run(ProposalsData.use((data) => data.forPerson("person"))),
@@ -153,7 +153,7 @@ describe("post-call data services in Tauri", () => {
     ).toBe(true);
     expect(fake.invoked.map(({ args, command }) => [command, args])).toEqual([
       ["summary_get", { callId: CALL }],
-      ["summary_build", { callId: CALL }],
+      ["summary_build", { callId: CALL, overLimit: false }],
       ["summary_cancel", { callId: CALL }],
       ["proposals_list", { callId: CALL }],
       ["proposals_for_person", { personId: "person" }],
@@ -192,7 +192,7 @@ describe("post-call data services in Tauri", () => {
     );
     const kinds = await Promise.all(
       [
-        SummaryData.use((data) => data.build(CALL)),
+        SummaryData.use((data) => data.build(CALL, false)),
         ProposalsData.use((data) => data.undo("p1")),
         CallRecordsData.use((data) => data.peaks(RECORDING, 10)),
         CallRecordsData.use((data) => data.transcript(CALL)),

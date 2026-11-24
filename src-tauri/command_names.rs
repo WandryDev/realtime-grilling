@@ -63,7 +63,9 @@ pub const APP_COMMANDS: &[&str] = &[
     "agent_login_submit",
     "agent_login_cancel",
     "agent_check_path",
-    "agent_usage",
+    "agent_limit_get",
+    "agent_limit_refresh",
+    "agent_limit_override",
     "audio_level_start",
     "audio_level_stop",
     // The microphones (settings-real task 2.1).

@@ -44,6 +44,10 @@ pub const REFINE_SILENCE: Duration = Duration::from_secs(60);
 /// The `error` of a summary whose build was stopped («Остановить», or the
 /// call went back to live or away).
 pub const CANCELLED: &str = "cancelled";
+/// The `error` of a summary that waits for a threshold of Grill: its agent
+/// stages didn't run (agent-limit-guard design.md, decision 7). Built by
+/// itself once the threshold lets go, or by «Собрать сверх лимита».
+pub const GRILL_LIMIT: &str = "grillLimit";
 
 /// The JSON Schema of call A's reply.
 pub const SUMMARY_SCHEMA: &str = include_str!("summary.schema.json");

@@ -65,12 +65,6 @@ describe("SettingsBackend.layerMock", () => {
       const recordings = yield* backend.recordingsInfo;
       assert.strictEqual(summary.projects, 4);
       assert.strictEqual(recordings.calls, 38);
-      assert.strictEqual(
-        yield* backend.agentUsage.pipe(
-          Effect.map((usage) => usage?.utilization)
-        ),
-        0.38
-      );
     }).pipe(Effect.provide(SettingsBackend.layerMock))
   );
 });

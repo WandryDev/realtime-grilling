@@ -9,11 +9,13 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{
     agent::{
+        claude_cli::{WindowShare, WindowShares},
         fast_loop::{
             events::AgentLoopState,
             scheduler::{FastLoop, LoopConfig},
             testing::{FakeAgent, Provider, Step, TestHost, add_source, database, recording, say},
         },
+        limit::{Clock, LimitThresholds, MeasureSource},
         slow_loop::app,
     },
     storage::call_state::AgentCall,
@@ -57,6 +59,15 @@ impl Rig {
     /// A recording of a project with the regulation in Outline (or without
     /// a source), its live pass started in both loops.
     async fn new(sources: bool, slow: impl IntoIterator<Item = Step>) -> Self {
+        Self::limited(sources, slow, &SubscriptionLimit::default()).await
+    }
+
+    /// Both loops with the thresholds of `limit`.
+    async fn limited(
+        sources: bool,
+        slow: impl IntoIterator<Item = Step>,
+        limit: &SubscriptionLimit,
+    ) -> Self {
         let db = database();
         let recording = recording(&db);
         if sources {
@@ -73,17 +84,21 @@ impl Rig {
         let slow_agent = FakeAgent::new(slow);
         let fast_agent = FakeAgent::new([]);
         let dir = tempfile::tempdir().unwrap();
+        let mut fast_config = LoopConfig::new(dir.path().join("agent"));
+        fast_config.limit = limit.clone();
         let fast_loop = FastLoop::new(
             host.clone(),
             Provider::ready(fast_agent.clone()),
             tokio::runtime::Handle::current(),
-            LoopConfig::new(dir.path().join("agent")),
+            fast_config,
         );
+        let mut slow_config = SlowConfig::new(dir.path().join("agent"));
+        slow_config.limit = limit.clone();
         let slow_loop = SlowLoop::new(
             host.clone(),
             Provider::ready(slow_agent.clone()),
             tokio::runtime::Handle::current(),
-            SlowConfig::new(dir.path().join("agent")),
+            slow_config,
             fast_loop.halt(),
         );
         app::connect(&fast_loop, &slow_loop);
@@ -746,4 +761,40 @@ async fn a_finding_from_outline_is_chained_in_the_journal() {
             question
         );
     });
+}
+
+/// Spec agent-slow-loop «Порог Grill»: the week reaches its threshold
+/// during the call; the slow loop is silent until «Продолжить сверх
+/// лимита», then searches again.
+#[tokio::test(start_paused = true)]
+async fn the_threshold_of_grill_stops_the_slow_loop_until_going_over() {
+    let start = 1_795_000_000_000;
+    let limit = SubscriptionLimit::new(Clock::paused(start), LimitThresholds::default());
+    let rig = Rig::limited(true, [nothing(), nothing()], &limit).await;
+    rig.client(ABOUT_SHIFTS).await;
+    rig.until(30).await;
+    limit.observe(
+        MeasureSource::Call,
+        WindowShares {
+            session: None,
+            week: Some(WindowShare {
+                used: 0.81,
+                resets_at: Some(start + 90 * 3_600_000),
+            }),
+        },
+        limit.now(),
+    );
+    rig.client(ABOUT_SHIFTS).await;
+    rig.until(200).await;
+    assert!(rig.slow_starts().is_empty(), "silent at the threshold");
+    assert!(
+        matches!(rig.fast_state(), AgentLoopState::GrillLimit { .. }),
+        "{:?}",
+        rig.fast_state()
+    );
+
+    limit.allow_over(&rig.recording);
+    settle().await;
+    assert_eq!(rig.slow_starts(), [200]);
+    assert_eq!(rig.fast_starts(), [0, 200], "both go on");
 }

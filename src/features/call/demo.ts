@@ -24,6 +24,10 @@ export const callDemo: DemoGroup = {
       label: "Ошибка: лимит подписки",
     },
     {
+      href: withDemo(CALL, "grill-limit"),
+      label: "Лимит Grill: агент на пороге",
+    },
+    {
       href: withDemo(CALL, "transcript-lag"),
       label: "Ошибка: расшифровка отстаёт",
     },

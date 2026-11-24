@@ -787,6 +787,18 @@ pub fn interrupt_building(connection: &Connection, now: i64) -> CommandResult<Ve
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The calls whose summary waits for a threshold of Grill (`failed` /
+/// `error`), the oldest first (agent-limit-guard design.md, decision 7).
+pub fn failed_with(connection: &Connection, error: &str) -> CommandResult<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT call_id FROM call_summaries
+          WHERE state = 'failed' AND error = ?1
+          ORDER BY updated_at, call_id",
+    )?;
+    let rows = statement.query_map(params![error], |row| row.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Sets the decision and/or the title of a card of the saved summary
 /// (decision 7). `NotFound` for an unknown call or a card the saved summary
 /// does not have, `Invalid` for a blank title. Sends `call` / `updated`.

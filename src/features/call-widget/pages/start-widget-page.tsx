@@ -2,6 +2,7 @@
 
 import { Button } from "@grill/ui/button";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLimitOutlook } from "@/data/agent-limit";
 import { type CallStartFailure, startCall } from "@/data/call-session";
 import { NO_PROJECT_CALL, useCalls } from "@/data/calls";
 import { usePeople } from "@/data/people";
@@ -249,30 +250,38 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
     () => openRoute(routes.onboarding("permissions")),
     [openRoute]
   );
-  const start = useCallback(async () => {
-    setStarting(true);
-    setError(null);
-    const started = await startCall({
-      participantIds: participants.map((person) => person.id),
-      projectId,
-    });
-    setStarting(false);
-    if (!started.ok) {
-      setError(startError(started, openSettings));
-      setPhase("prompt");
-      return;
-    }
-    if (inTauri) {
-      // The backend hid this window and showed the overlay (or the call
-      // window); the next call is offered from this one.
-      setChoice({});
-      setPhase("prompt");
-      return;
-    }
-    setCallPeople(participants);
-    setBrief(null);
-    setPhase("launching");
-  }, [openSettings, participants, projectId]);
+  const limit = useLimitOutlook();
+  const start = useCallback(
+    async (overLimit: boolean) => {
+      setStarting(true);
+      setError(null);
+      const started = await startCall({
+        participantIds: participants.map((person) => person.id),
+        projectId,
+        // «Начать сверх лимита»: the first call of the agent goes past it.
+        ...(overLimit ? { overLimit: true } : {}),
+      });
+      setStarting(false);
+      if (!started.ok) {
+        setError(startError(started, openSettings));
+        setPhase("prompt");
+        return;
+      }
+      if (inTauri) {
+        // The backend hid this window and showed the overlay (or the call
+        // window); the next call is offered from this one.
+        setChoice({});
+        setPhase("prompt");
+        return;
+      }
+      setCallPeople(participants);
+      setBrief(null);
+      setPhase("launching");
+    },
+    [openSettings, participants, projectId]
+  );
+  const startNow = useCallback(() => start(false), [start]);
+  const startOverLimit = useCallback(() => start(true), [start]);
   const collapse = useCallback(() => setPhase("collapsed"), []);
   const expand = useCallback(() => setPhase("prompt"), []);
   const hide = useCallback(() => {
@@ -309,6 +318,7 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
           briefNote={updatingBrief ? "Обновляю бриф…" : undefined}
           callHref={routes.call()}
           launch={launch}
+          limit={limit}
           onAddParticipant={addParticipant}
           onDismiss={collapse}
           onExpand={expand}
@@ -316,7 +326,8 @@ function StartWidgetFlow({ initialPhase }: { initialPhase: Phase }) {
           onMinimize={minimize}
           onProjectChange={changeProject}
           onRemoveParticipant={removeParticipant}
-          onStart={start}
+          onStart={startNow}
+          onStartOverLimit={startOverLimit}
           overlayHref={routes.overlay()}
           participants={participants}
           projectId={projectId}

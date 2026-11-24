@@ -73,6 +73,18 @@ const THEME_VALUES: &[&str] = &["light", "dark", "system"];
 /// `theme` when nothing (or nothing readable) is stored.
 pub const DEFAULT_THEME: &str = "light";
 
+/// The thresholds of Grill on the subscription limit (agent-limit-guard
+/// design.md, decision 6): a percent as a string or `"off"` («Без
+/// ограничения»), one of [`AGENT_LIMIT_VALUES`].
+pub const AGENT_LIMIT_SESSION: &str = "agentLimitSession";
+pub const AGENT_LIMIT_WEEK: &str = "agentLimitWeek";
+const AGENT_LIMIT_VALUES: &[&str] = &[OFF, "90", "80", "70", "50"];
+const OFF: &str = "off";
+/// `agentLimitSession` when nothing is stored.
+pub const DEFAULT_AGENT_LIMIT_SESSION: u32 = 90;
+/// `agentLimitWeek` when nothing is stored.
+pub const DEFAULT_AGENT_LIMIT_WEEK: u32 = 80;
+
 /// Every key the app stores; anything else is `Invalid`.
 pub const KNOWN_KEYS: &[&str] = &[
     ONBOARDING_COMPLETED,
@@ -93,6 +105,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     AUDIO_RETENTION,
     TRANSCRIPT_RETENTION,
     THEME,
+    AGENT_LIMIT_SESSION,
+    AGENT_LIMIT_WEEK,
 ];
 
 const AUDIO_RETENTION_VALUES: &[&str] = &["7", "30", "90", NEVER];
@@ -144,6 +158,14 @@ pub fn defaults() -> SettingsMap {
             json!(DEFAULT_TRANSCRIPT_RETENTION),
         ),
         (THEME.to_owned(), json!(DEFAULT_THEME)),
+        (
+            AGENT_LIMIT_SESSION.to_owned(),
+            json!(DEFAULT_AGENT_LIMIT_SESSION.to_string()),
+        ),
+        (
+            AGENT_LIMIT_WEEK.to_owned(),
+            json!(DEFAULT_AGENT_LIMIT_WEEK.to_string()),
+        ),
         (
             SHORTCUTS.to_owned(),
             json!({
@@ -234,6 +256,7 @@ fn valid_value(key: &str, value: &Value) -> bool {
         AUDIO_RETENTION => one_of(value, AUDIO_RETENTION_VALUES),
         TRANSCRIPT_RETENTION => one_of(value, TRANSCRIPT_RETENTION_VALUES),
         THEME => one_of(value, THEME_VALUES),
+        AGENT_LIMIT_SESSION | AGENT_LIMIT_WEEK => one_of(value, AGENT_LIMIT_VALUES),
         _ => false,
     }
 }
@@ -291,6 +314,22 @@ pub fn shortcuts(settings: &SettingsMap) -> Shortcuts {
         .get(SHORTCUTS)
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
+}
+
+/// A threshold of Grill (`agentLimitSession`, `agentLimitWeek`) in
+/// percents; `None` for «Без ограничения». A missing or unknown value is
+/// the default.
+pub fn agent_limit(settings: &SettingsMap, key: &str) -> Option<u32> {
+    let default = if key == AGENT_LIMIT_WEEK {
+        DEFAULT_AGENT_LIMIT_WEEK
+    } else {
+        DEFAULT_AGENT_LIMIT_SESSION
+    };
+    match settings.get(key).and_then(Value::as_str) {
+        Some(OFF) => None,
+        Some(value) if AGENT_LIMIT_VALUES.contains(&value) => value.parse().ok(),
+        _ => Some(default),
+    }
 }
 
 /// `micBusyBehavior`; a missing (or unreadable) value is `widget`.
@@ -532,6 +571,9 @@ mod tests {
             (THEME, json!("light")),
             (THEME, json!("dark")),
             (THEME, json!("system")),
+            (AGENT_LIMIT_SESSION, json!("off")),
+            (AGENT_LIMIT_SESSION, json!("50")),
+            (AGENT_LIMIT_WEEK, json!("90")),
         ];
         for (key, value) in good {
             assert!(validate(&one(key, value.clone())).is_ok(), "{key} {value}");
@@ -551,6 +593,9 @@ mod tests {
             (TRANSCRIPT_RETENTION, json!("6m")),
             (TRANSCRIPT_RETENTION, json!("30")),
             (THEME, json!("blue")),
+            (AGENT_LIMIT_SESSION, json!("95")),
+            (AGENT_LIMIT_SESSION, json!(90)),
+            (AGENT_LIMIT_WEEK, json!(null)),
         ];
         for (key, value) in bad {
             assert!(invalid(&one(key, value.clone())), "{key} {value}");
@@ -726,5 +771,31 @@ mod tests {
         assert!(validate(&off).is_ok());
         let bad = SettingsMap::from([(COMPACT_OVERLAY.to_owned(), json!("yes"))]);
         assert!(validate(&bad).is_err());
+    }
+
+    #[test]
+    fn agent_limits_default_to_90_and_80_and_take_off() {
+        let connection = crate::storage::open_in_memory().unwrap();
+        let stored = get(&connection).unwrap();
+        assert_eq!(stored[AGENT_LIMIT_SESSION], json!("90"));
+        assert_eq!(stored[AGENT_LIMIT_WEEK], json!("80"));
+        let error = put(&connection, &one(AGENT_LIMIT_WEEK, json!("85"))).unwrap_err();
+        assert!(matches!(error, CommandError::Invalid { .. }));
+        put(&connection, &one(AGENT_LIMIT_WEEK, json!("off"))).unwrap();
+        assert_eq!(
+            agent_limit(&get(&connection).unwrap(), AGENT_LIMIT_WEEK),
+            None
+        );
+        assert_eq!(agent_limit(&stored, AGENT_LIMIT_SESSION), Some(90));
+        assert_eq!(agent_limit(&stored, AGENT_LIMIT_WEEK), Some(80));
+        assert_eq!(agent_limit(&SettingsMap::new(), AGENT_LIMIT_WEEK), Some(80));
+        let set = SettingsMap::from([
+            (AGENT_LIMIT_SESSION.to_owned(), json!("off")),
+            (AGENT_LIMIT_WEEK.to_owned(), json!("50")),
+        ]);
+        assert_eq!(agent_limit(&set, AGENT_LIMIT_SESSION), None);
+        assert_eq!(agent_limit(&set, AGENT_LIMIT_WEEK), Some(50));
+        let odd = SettingsMap::from([(AGENT_LIMIT_SESSION.to_owned(), json!("42"))]);
+        assert_eq!(agent_limit(&odd, AGENT_LIMIT_SESSION), Some(90));
     }
 }

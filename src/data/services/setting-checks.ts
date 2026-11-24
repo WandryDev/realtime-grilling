@@ -31,6 +31,8 @@ const isFlag = (value: Value) => typeof value === "boolean";
  * check (`valid_value`). Any other key is refused.
  */
 const SETTING_CHECKS: Record<string, (value: Value) => boolean> = {
+  agentLimitSession: oneOf("off", "90", "80", "70", "50"),
+  agentLimitWeek: oneOf("off", "90", "80", "70", "50"),
   agentPath: (value) =>
     value === null ||
     (typeof value === "string" &&

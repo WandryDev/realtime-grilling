@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
 
-use crate::storage::call_state::CallState;
+use crate::{agent::limit::LimitHit, storage::call_state::CallState};
 
 /// The call state of a recording changed (a patch was applied, a quick
 /// action or `questionCount` changed the list): read `call_state_get`
@@ -40,6 +40,9 @@ pub enum AgentLoopState {
         #[serde(rename = "resetsAt")]
         resets_at: Option<i64>,
     },
+    /// A threshold of Grill is reached (agent-limit-guard): no calls until
+    /// it lets go or «Продолжить сверх лимита» (`agent_limit_override`).
+    GrillLimit { hit: LimitHit },
 }
 
 /// The agent's state for a recording, with the last known share of the

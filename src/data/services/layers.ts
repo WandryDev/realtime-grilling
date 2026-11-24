@@ -1,5 +1,6 @@
 import { Layer } from "effect";
 
+import { AgentLimitData } from "./agent-limit";
 import { CallRecordsData } from "./call-records";
 import { CallsData } from "./calls";
 import { Connectors } from "./connectors";
@@ -19,6 +20,7 @@ import { SummaryData } from "./summaries";
  */
 
 export const DataLayerTauri = Layer.mergeAll(
+  AgentLimitData.layerTauri,
   CallRecordsData.layerTauri,
   CallsData.layerTauri,
   Connectors.layerTauri,
@@ -32,6 +34,7 @@ export const DataLayerTauri = Layer.mergeAll(
 );
 
 export const DataLayerMock = Layer.mergeAll(
+  AgentLimitData.layerMock,
   CallRecordsData.layerMock,
   CallsData.layerMock,
   Connectors.layerMock,

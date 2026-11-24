@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import type { LimitOutlook } from "@/bindings";
 import { DesktopScene } from "@/features/call-widget/components/desktop-scene";
 import { CompactOverlay } from "@/features/call-widget/screens/compact-overlay";
 import { MicReleasedWidget } from "@/features/call-widget/screens/mic-released-widget";
 import { StartWidget } from "@/features/call-widget/screens/start-widget";
 import { ScreenFlow, ScreenFrame } from "../_components/screen-frame";
+import { StartNoAccessDemo } from "../_components/widget-demos";
 
 export const metadata: Metadata = {
   title: "Grill, звонок, виджеты",
@@ -23,6 +25,11 @@ const SCREENS = [
     id: "start-no-access",
     title: "01 Виджет старта — нет доступа к микрофону",
   },
+  { id: "start-limit-near", title: "01 Виджет старта — лимит почти заполнен" },
+  {
+    id: "start-limit-reached",
+    title: "01 Виджет старта — лимит Grill исчерпан",
+  },
   {
     id: "mic-released",
     title: "05 Микрофон освободился — приложение в фоне",
@@ -37,6 +44,7 @@ const SCREENS = [
     id: "overlay-levels",
     title: "06 Компактный оверлей — уровни и канал без доступа",
   },
+  { id: "overlay-grill-limit", title: "06 Компактный оверлей — лимит Grill" },
 ];
 
 const [
@@ -45,18 +53,33 @@ const [
   startLaunch,
   startPill,
   startNoAccess,
+  startLimitNear,
+  startLimitReached,
   micReleased,
   overlay,
   overlayFinalCheck,
   overlayCollapsed,
   overlayLevels,
+  overlayGrillLimit,
 ] = SCREENS;
 
-const NO_ACCESS_ERROR = {
-  description:
-    "Разрешите Grill доступ к микрофону в системных настройках и нажмите «Начать» ещё раз.",
-  onOpenSettings: () => undefined,
-  title: "Нет доступа к микрофону",
+/** 12:00 on the demo's Monday: the session resets at 14:09, the week on 1 December. */
+const SESSION_RESET = new Date(2026, 10, 24, 14, 9).getTime();
+const WEEK_RESET = new Date(2026, 11, 1, 0, 59).getTime();
+
+const LIMIT_NEAR: LimitOutlook = {
+  hit: { resetsAt: SESSION_RESET, threshold: 90, used: 84, window: "session" },
+  kind: "near",
+};
+
+const LIMIT_REACHED: LimitOutlook = {
+  hit: { resetsAt: WEEK_RESET, threshold: 80, used: 81, window: "week" },
+  kind: "reached",
+};
+
+const GRILL_LIMIT_NOTICE = {
+  hint: "сброс в 14:09",
+  title: "Лимит Grill: сессия 91 % из 90 %",
 };
 
 const LEVELS_WITH_WARNING = {
@@ -128,7 +151,31 @@ export default function CallWidgetsPage() {
         width={WIDTH}
       >
         <DesktopScene className="size-full" clock="Пн 12:00">
-          <StartWidget startError={NO_ACCESS_ERROR} state="prompt" />
+          <StartNoAccessDemo />
+        </DesktopScene>
+      </ScreenFrame>
+
+      <ScreenFrame
+        height={HEIGHT}
+        id={startLimitNear.id}
+        note="До порога Grill меньше 10 п. п. (тут сессия 84 % из 90 %) → предупреждение над кнопками, «Начать» работает как обычно. Показ виджета запускает внеочередной опрос /usage, плашка обновится через ~5 с."
+        title={startLimitNear.title}
+        width={WIDTH}
+      >
+        <DesktopScene className="size-full" clock="Пн 12:00">
+          <StartWidget limit={LIMIT_NEAR} state="prompt" />
+        </DesktopScene>
+      </ScreenFrame>
+
+      <ScreenFrame
+        height={HEIGHT}
+        id={startLimitReached.id}
+        note="Порог пройден (неделя 81 % из 80 %) → главная кнопка «Начать без агента»: запись и расшифровка идут, вопросов нет. «Начать сверх лимита» начинает звонок так, будто уже выбрали «Продолжить сверх лимита»."
+        title={startLimitReached.title}
+        width={WIDTH}
+      >
+        <DesktopScene className="size-full" clock="Пн 12:00">
+          <StartWidget limit={LIMIT_REACHED} state="prompt" />
         </DesktopScene>
       </ScreenFrame>
 
@@ -194,6 +241,23 @@ export default function CallWidgetsPage() {
       >
         <DesktopScene className="size-full" clock="Пн 12:24" sharing>
           <CompactOverlay recording={LEVELS_WITH_WARNING} state="default" />
+        </DesktopScene>
+      </ScreenFrame>
+
+      <ScreenFrame
+        height={HEIGHT}
+        id={overlayGrillLimit.id}
+        note="Агент стоит на пороге Grill → под вопросами плашка с окном, долей, порогом и сбросом. «Продолжить сверх лимита» действует до конца этого звонка, итоги и бриф всё равно ждут."
+        title={overlayGrillLimit.title}
+        width={WIDTH}
+      >
+        <DesktopScene className="size-full" clock="Пн 12:41" sharing>
+          <CompactOverlay
+            agentLabel="лимит Grill"
+            agentTone="muted"
+            limitNotice={GRILL_LIMIT_NOTICE}
+            state="default"
+          />
         </DesktopScene>
       </ScreenFrame>
     </ScreenFlow>

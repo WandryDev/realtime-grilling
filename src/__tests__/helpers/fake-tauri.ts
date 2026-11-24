@@ -16,6 +16,7 @@ import type {
   RecordingStatus,
   SelectionItem,
   SourceAddResult,
+  SubscriptionLimitView,
   Value,
   Workspace,
 } from "@/bindings";
@@ -91,6 +92,12 @@ export interface FakeTauri {
   readonly handlers: Map<string, Set<Handler>>;
   invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
   readonly invoked: { args?: Record<string, unknown>; command: string }[];
+  /**
+   * What `agent_limit_get` and `agent_limit_refresh` answer: no measures,
+   * the default thresholds. `setLimit` changes it and sends
+   * `SubscriptionLimitChanged`.
+   */
+  limit: SubscriptionLimitView;
   listen: (event: string, handler: Handler) => Promise<() => void>;
   /** What `mic_activity_get` answers. */
   micActivity: MicActivityChanged;
@@ -105,6 +112,7 @@ export interface FakeTauri {
   recording: RecordingStatus;
   /** The backend's call in progress, as `call_current` answers it. */
   session: CallSession;
+  setLimit: (limit: SubscriptionLimitView) => void;
   /** Sets the call in progress and sends it to every window. */
   setSession: (session: CallSession) => void;
 }
@@ -119,6 +127,15 @@ export function liveSession(session: Partial<CallSession> = {}): CallSession {
     ...session,
   };
 }
+
+/** The share of the limit before any measure. */
+export const NO_LIMIT_DATA: SubscriptionLimitView = {
+  checking: false,
+  outlook: { kind: "ok" },
+  session: null,
+  thresholds: { session: 90, week: 80 },
+  week: null,
+};
 
 /** The commands of the `CallManager`. */
 const CALL_COMMANDS = new Set([
@@ -948,6 +965,11 @@ export function createFakeTauri(): FakeTauri {
         };
       case "agent_usage":
         return null;
+      case "agent_limit_get":
+      case "agent_limit_refresh":
+        return fake.limit;
+      case "agent_limit_override":
+        return null;
       case "updates_get":
         return { current: "0.3.0", state: { status: "disabled" } };
       case "calls_delete": {
@@ -1059,6 +1081,7 @@ export function createFakeTauri(): FakeTauri {
       }
     },
     invoked,
+    limit: NO_LIMIT_DATA,
     listen: (event, handler) => {
       const set = handlers.get(event) ?? new Set<Handler>();
       set.add(handler);
@@ -1072,6 +1095,10 @@ export function createFakeTauri(): FakeTauri {
     recordFailure: null,
     recording: IDLE_RECORDING,
     session: IDLE_SESSION,
+    setLimit: (limit) => {
+      fake.limit = limit;
+      emit("subscription-limit-changed", { limit });
+    },
     setSession: (session) => {
       fake.session = session;
       emit("call-session-changed", { session });

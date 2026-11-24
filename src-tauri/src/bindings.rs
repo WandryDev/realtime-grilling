@@ -12,6 +12,7 @@ use crate::{
     agent::{
         fast_loop::events::{AgentStatus, CallStateChanged},
         install::AgentInstallProgress,
+        limit::SubscriptionLimitChanged,
     },
     audio::{
         AudioInputsChanged, AudioInputsStopped, AudioLevel, AudioLevelStopped,
@@ -102,7 +103,9 @@ pub fn builder() -> Builder<tauri::Wry> {
             commands::agent_login_submit,
             commands::agent_login_cancel,
             commands::agent_check_path,
-            commands::agent_usage,
+            commands::agent_limit_get,
+            commands::agent_limit_refresh,
+            commands::agent_limit_override,
             commands::audio_level_start,
             commands::audio_level_stop,
             commands::audio_inputs_get,
@@ -167,6 +170,7 @@ pub fn builder() -> Builder<tauri::Wry> {
             RecordingLevels,
             ShortcutPressed,
             SpeechModelChanged,
+            SubscriptionLimitChanged,
             SummaryProgress,
             TranscriptDropped,
             TranscriptLag,

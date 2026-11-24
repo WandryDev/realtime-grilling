@@ -3,7 +3,6 @@ import { Context, Effect, Layer, Queue, Random, Stream } from "effect";
 
 import {
   type AgentState,
-  type AgentUsage,
   type AudioInputs,
   commands,
   type DataSummary,
@@ -18,13 +17,7 @@ import {
 } from "@/effect/tauri";
 import { tauriAudioLevel } from "@/features/onboarding/backend";
 
-import {
-  AGENT,
-  AGENT_UTILIZATION,
-  DATA_SUMMARY,
-  MICROPHONES,
-  RECORDINGS,
-} from "./mock";
+import { AGENT, DATA_SUMMARY, MICROPHONES, RECORDINGS } from "./mock";
 
 /*
  * Backend contract of every Settings operation that needs the system
@@ -74,8 +67,6 @@ export class SettingsBackend extends Context.Service<
     readonly checkAgent: (
       path?: string
     ) => Effect.Effect<AgentState, BackendError>;
-    /** The last known share of the subscription limit, `null` without one. */
-    readonly agentUsage: Effect.Effect<AgentUsage | null, BackendError>;
     /** «Удалить всё»: what it deletes. */
     readonly dataSummary: Effect.Effect<DataSummary, BackendError>;
     /**
@@ -87,7 +78,6 @@ export class SettingsBackend extends Context.Service<
   }
 >()("grill/features/settings/SettingsBackend") {
   static readonly layerTauri = Layer.succeed(SettingsBackend, {
-    agentUsage: call(() => commands.agentUsage()),
     audioInputs: currentThenChanges(
       (emit, end) =>
         Effect.gen(function* () {
@@ -130,10 +120,6 @@ export class SettingsBackend extends Context.Service<
    * are `mockMicrophones` below.
    */
   static readonly layerMock = Layer.succeed(SettingsBackend, {
-    agentUsage: Effect.sync(() => ({
-      measuredAt: Date.now() - MOCK_USAGE_AGE_MS,
-      utilization: AGENT_UTILIZATION,
-    })),
     audioInputs: Stream.callback<AudioInputs, BackendError>((queue) =>
       Effect.acquireRelease(
         Effect.sync(() =>
@@ -179,7 +165,6 @@ export class SettingsBackend extends Context.Service<
 /* ---------------------------------------------------------------------- */
 
 const MOCK_AGENT_CHECK_MS = 600;
-const MOCK_USAGE_AGE_MS = 20 * 60_000;
 
 const MOCK_INPUTS: AudioInputs = {
   devices: MICROPHONES,

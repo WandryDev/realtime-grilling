@@ -23,6 +23,10 @@ pub fn show<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+    if label == WIDGET {
+        // Its warning reads the share of the limit: a fresh one, please.
+        crate::agent::limit::app::refresh_soon(app);
+    }
 }
 
 /// Hides a window; it stops listening to the level meters.

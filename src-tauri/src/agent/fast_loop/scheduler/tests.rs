@@ -9,10 +9,11 @@ use tokio::time::Instant;
 use super::*;
 use crate::{
     agent::{
-        claude_cli::Usage,
+        claude_cli::{Usage, WindowShare, WindowShares},
         fast_loop::testing::{
             FakeAgent, Provider, Reported, Step, TestHost, database, recording, say, set_setting,
         },
+        limit::{Clock, LimitThresholds, LimitWindow, Metered},
     },
     storage::{
         call_state::AgentCallOutcome,
@@ -50,20 +51,40 @@ impl Rig {
     }
 
     async fn with(steps: impl IntoIterator<Item = Step>, ready: bool) -> Self {
+        Self::build(steps, ready, None).await
+    }
+
+    /// With the thresholds of `limit`, which every reply of the agent
+    /// measures (as `Metered` does in the app).
+    async fn limited(steps: impl IntoIterator<Item = Step>, limit: &SubscriptionLimit) -> Self {
+        Self::build(steps, true, Some(limit.clone())).await
+    }
+
+    async fn build(
+        steps: impl IntoIterator<Item = Step>,
+        ready: bool,
+        limit: Option<SubscriptionLimit>,
+    ) -> Self {
         let db = database();
         let recording = recording(&db);
         let host = TestHost::new(db);
         let agent = FakeAgent::new(steps);
-        let provider = if ready {
-            Provider::ready(agent.clone())
-        } else {
-            Provider::not_ready(AgentLoopState::NeedsLogin)
+        let provider = match (&limit, ready) {
+            (Some(limit), _) => Provider::ready(Arc::new(Metered {
+                agent: agent.clone(),
+                limit: limit.clone(),
+            })),
+            (None, true) => Provider::ready(agent.clone()),
+            (None, false) => Provider::not_ready(AgentLoopState::NeedsLogin),
         };
         let dir = tempfile::tempdir().unwrap();
-        let fast_loop = crate::agent::fast_loop::testing::fast_loop(
+        let mut config = LoopConfig::new(dir.path().join("agent"));
+        config.limit = limit.unwrap_or_default();
+        let fast_loop = FastLoop::new(
             host.clone(),
             provider.clone(),
-            dir.path().join("agent"),
+            tokio::runtime::Handle::current(),
+            config,
         );
         let rig = Self {
             host,
@@ -640,6 +661,7 @@ async fn the_limit_share_and_the_usage_are_kept() {
         cost_usd: Some(0.04),
         utilization: Some(0.82),
         resets_at: None,
+        ..Usage::default()
     };
     let rig = Rig::new([step]).await;
     rig.say(OTHERS, "Фраза").await;
@@ -1763,4 +1785,194 @@ async fn the_queue_leaves_the_calls_on_time() {
         .unwrap()
     });
     assert!(queued > 0, "the calls were queued");
+}
+
+/* Лимит Grill (agent-limit-guard) */
+
+/// The limit's wall clock at the start of a test.
+const LIMIT_START: i64 = 1_795_000_000_000;
+/// The session resets an hour after the start.
+const SESSION_RESET: i64 = LIMIT_START + 3_600_000;
+
+fn grill_limit() -> SubscriptionLimit {
+    SubscriptionLimit::new(Clock::paused(LIMIT_START), LimitThresholds::default())
+}
+
+/// A reply whose limit event says the session is at `session` (0–1).
+fn measured(session: f64) -> Step {
+    let mut step = Step::empty();
+    step.usage = Usage {
+        windows: WindowShares {
+            session: Some(WindowShare {
+                used: session,
+                resets_at: Some(SESSION_RESET),
+            }),
+            week: Some(WindowShare {
+                used: 0.2,
+                resets_at: Some(LIMIT_START + 90 * 3_600_000),
+            }),
+        },
+        ..Usage::default()
+    };
+    step
+}
+
+fn session_hit(used: u32, threshold: u32) -> AgentLoopState {
+    AgentLoopState::GrillLimit {
+        hit: LimitHit {
+            window: LimitWindow::Session,
+            used,
+            threshold,
+            resets_at: Some(SESSION_RESET),
+        },
+    }
+}
+
+/// Spec agent-limit «Сессия дошла до порога во время звонка», agent-fast-loop
+/// «Лимит Grill»: the reply's 91 % stops the calls at once; the phrases are
+/// still stored, none makes a call.
+#[tokio::test(start_paused = true)]
+async fn a_reply_over_the_threshold_stops_the_calls() {
+    let limit = grill_limit();
+    let rig = Rig::limited([measured(0.91)], &limit).await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(6).await;
+    assert_eq!(rig.state(), session_hit(91, 90));
+    rig.say(OTHERS, "Ещё фраза").await;
+    rig.until(120).await;
+    rig.say(OTHERS, "И ещё").await;
+    assert_eq!(rig.starts(), [0]);
+    assert_eq!(rig.state(), session_hit(91, 90));
+    rig.fast_loop.retry(&rig.recording).unwrap();
+    settle().await;
+    assert_eq!(
+        rig.starts(),
+        [0],
+        "«Повторить» doesn't go past the threshold"
+    );
+}
+
+/// Spec agent-fast-loop «Возврат после паузы», agent-limit «Продолжить
+/// сверх лимита»: after 5 minutes at the threshold the next call reads what
+/// was said meanwhile; the recording goes on past it.
+#[tokio::test(start_paused = true)]
+async fn going_over_resumes_with_the_talk_of_the_pause() {
+    let limit = grill_limit();
+    let rig = Rig::limited([measured(0.91), measured(0.93)], &limit).await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(60).await;
+    rig.say(OTHERS, "Сказано во время паузы").await;
+    rig.until(360).await;
+    assert_eq!(rig.starts(), [0]);
+
+    limit.allow_over(&rig.recording);
+    settle().await;
+    assert_eq!(rig.starts(), [0, 360], "the client spoke during the pause");
+    let message = rig.agent.received(1).request.user_message;
+    assert!(message.contains("Сказано во время паузы"), "{message}");
+    rig.until(370).await;
+    assert_eq!(rig.state(), AgentLoopState::Idle, "93 % no longer stops it");
+    assert_eq!(rig.triggers()[1].0, "haltReset");
+}
+
+/// Spec agent-limit «Окно сбросилось»: at the session's reset the calls go
+/// again.
+#[tokio::test(start_paused = true)]
+async fn the_reset_of_the_window_resumes_the_calls() {
+    let limit = grill_limit();
+    tokio::spawn(limit.clone().watch_resets());
+    let rig = Rig::limited([measured(0.95)], &limit).await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(600).await;
+    rig.say(OTHERS, "Пока на пороге").await;
+    assert_eq!(rig.starts(), [0]);
+    rig.until(3_601).await;
+    assert_eq!(rig.starts(), [0, 3_600]);
+    rig.until(3_606).await;
+    assert_eq!(rig.state(), AgentLoopState::Idle);
+}
+
+/// Spec agent-limit «Менеджер поднял порог», app-settings «Порог изменён
+/// во время звонка».
+#[tokio::test(start_paused = true)]
+async fn a_new_threshold_acts_at_once() {
+    let limit = grill_limit();
+    let rig = Rig::limited([measured(0.75)], &limit).await;
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(6).await;
+    assert_eq!(rig.state(), AgentLoopState::Idle);
+
+    limit.set_thresholds(LimitThresholds {
+        session: Some(70),
+        week: Some(80),
+    });
+    settle().await;
+    assert_eq!(rig.state(), session_hit(75, 70));
+    rig.say(OTHERS, "Фраза за порогом").await;
+    rig.until(60).await;
+    assert_eq!(rig.starts(), [0]);
+
+    limit.set_thresholds(LimitThresholds {
+        session: None,
+        week: Some(80),
+    });
+    settle().await;
+    assert_eq!(rig.starts(), [0, 60], "«Без ограничения»");
+}
+
+/// Spec agent-limit «Подписка исчерпана»: past the threshold of Grill the
+/// real limit still stops the calls.
+#[tokio::test(start_paused = true)]
+async fn past_the_threshold_the_real_limit_still_stops() {
+    let limit = grill_limit();
+    let resets_at = now_ms() + 120_000;
+    let rig = Rig::limited(
+        [
+            measured(0.97),
+            Step::fail(AgentError::RateLimited {
+                resets_at: Some(resets_at),
+            }),
+        ],
+        &limit,
+    )
+    .await;
+    limit.allow_over(&rig.recording);
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(21).await;
+    rig.say(OTHERS, "Ещё").await;
+    rig.until(27).await;
+    assert_eq!(rig.starts(), [0, 21]);
+    assert_eq!(
+        rig.state(),
+        AgentLoopState::RateLimited {
+            resets_at: Some(resets_at)
+        }
+    );
+}
+
+/// «Начать без агента»: a threshold reached before the call stops it from
+/// the start; the next recording has no «сверх лимита» of the last.
+#[tokio::test(start_paused = true)]
+async fn a_recording_started_at_the_threshold_waits_from_the_start() {
+    let limit = grill_limit();
+    limit.observe(
+        crate::agent::limit::MeasureSource::Usage,
+        measured(0.92).usage.windows,
+        LIMIT_START,
+    );
+    let rig = Rig::limited([], &limit).await;
+    assert_eq!(rig.state(), session_hit(92, 90));
+    rig.say(OTHERS, "Фраза").await;
+    rig.until(60).await;
+    assert_eq!(rig.agent.calls(), 0);
+
+    limit.allow_over(&rig.recording);
+    settle().await;
+    assert_eq!(rig.starts(), [60]);
+    rig.fast_loop.live_finished(&rig.recording);
+    settle().await;
+    assert!(
+        limit.blocks(&rig.recording).is_some(),
+        "the flag went with it"
+    );
 }

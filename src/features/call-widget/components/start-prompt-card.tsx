@@ -13,6 +13,8 @@ import {
 import { Spinner } from "@grill/ui/spinner";
 import { CircleAlertIcon } from "lucide-react";
 import { type ComponentProps, useCallback } from "react";
+import type { LimitOutlook } from "@/bindings";
+import { nearTitle, reachedTitle, resetLine } from "@/lib/agent-limit";
 import { cn } from "@/lib/utils";
 
 import { DismissIcon } from "../icons";
@@ -170,20 +172,82 @@ function StartErrorAlert({ error }: { error: StartError }) {
   );
 }
 
+const OK: LimitOutlook = { kind: "ok" };
+
+/** «Сброс в 14:09.» */
+function resetSentence(resetsAt: number | null) {
+  const line = resetLine(resetsAt);
+  return `${line.charAt(0).toUpperCase()}${line.slice(1)}.`;
+}
+
+/*
+ * The warning of the thresholds of Grill (agent-limit-guard design.md,
+ * decision 9): less than 10 points to a threshold, or one reached; nothing
+ * otherwise.
+ */
+function LimitAlert({
+  limit,
+  onStartOverLimit,
+  starting,
+}: {
+  limit: LimitOutlook;
+  onStartOverLimit?: () => void;
+  starting: boolean;
+}) {
+  if (limit.kind === "ok") {
+    return null;
+  }
+  const { hit } = limit;
+  if (limit.kind === "near") {
+    return (
+      <Alert variant="warning">
+        <CircleAlertIcon aria-hidden="true" />
+        <AlertTitle>{nearTitle(hit)}</AlertTitle>
+        <AlertDescription>
+          {resetSentence(hit.resetsAt)} Агент может встать посреди звонка,
+          запись и расшифровка продолжатся.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return (
+    <Alert variant="warning">
+      <CircleAlertIcon aria-hidden="true" />
+      <AlertTitle>{reachedTitle(hit)}</AlertTitle>
+      <AlertDescription className="flex flex-col items-start gap-2">
+        {resetSentence(hit.resetsAt)} Без агента звонок запишется и
+        расшифруется, но вопросов не будет.
+        <Button
+          disabled={starting}
+          onClick={onStartOverLimit}
+          size="sm"
+          variant="secondary"
+        >
+          Начать сверх лимита
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /*
  * "Начать звонок?": the meeting app took the microphone. Project and people
- * come from the last call; `projectOpen` shows the project list open.
+ * come from the last call; `projectOpen` shows the project list open. At a
+ * threshold of Grill "Начать" starts without the agent, and «Начать сверх
+ * лимита» starts with it.
  */
 export function StartPromptCard({
   addablePeople,
   app,
   briefNote,
   className,
+  limit = OK,
   onAddParticipant,
   onDismiss,
   onProjectChange,
   onRemoveParticipant,
   onStart,
+  onStartOverLimit,
   participants,
   projectId,
   projectOpen = false,
@@ -197,12 +261,16 @@ export function StartPromptCard({
   app: string;
   /** "Обновляю бриф…": the project's brief is being refreshed. */
   briefNote?: string;
+  /** The outlook of the thresholds of Grill; `ok` shows nothing. */
+  limit?: LimitOutlook;
   onAddParticipant?: (id: string) => void;
   /** × and "Не сейчас": collapse into the pill. */
   onDismiss?: () => void;
   onProjectChange?: (projectId: string | null) => void;
   onRemoveParticipant?: (id: string) => void;
   onStart?: () => void;
+  /** «Начать сверх лимита»: the start as if «Продолжить сверх лимита». */
+  onStartOverLimit?: () => void;
   participants: Participant[];
   projectId: string | null;
   projectOpen?: boolean;
@@ -249,6 +317,11 @@ export function StartPromptCard({
         onRemove={onRemoveParticipant}
         participants={participants}
       />
+      <LimitAlert
+        limit={limit}
+        onStartOverLimit={onStartOverLimit}
+        starting={starting}
+      />
       {startError ? <StartErrorAlert error={startError} /> : null}
       <CallWidgetFooter className="items-center pt-0.5">
         <Button
@@ -261,7 +334,7 @@ export function StartPromptCard({
             aria-hidden="true"
             className="bg-recording size-[7px] shrink-0 rounded-full"
           />
-          Начать
+          {limit.kind === "reached" ? "Начать без агента" : "Начать"}
         </Button>
         <Button
           className="px-4"

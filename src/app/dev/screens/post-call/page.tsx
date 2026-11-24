@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-
 import { CallDetailsScreen } from "@/features/post-call/screens/call-details-screen";
 import { CallHistoryScreen } from "@/features/post-call/screens/call-history-screen";
 import { CallSummaryScreen } from "@/features/post-call/screens/call-summary-screen";
 import { ProposalsReviewScreen } from "@/features/post-call/screens/proposals-review-screen";
 import { TaskCardsScreen } from "@/features/post-call/screens/task-cards-screen";
+import { SummaryGrillLimitDemo } from "../_components/limit-demos";
 import { ScreenFlow, ScreenFrame } from "../_components/screen-frame";
 
 export const metadata: Metadata = {
@@ -68,6 +68,10 @@ const SCREENS = [
   { id: "summary-processing", title: "01 Сборка итогов — идёт обработка" },
   { id: "summary-toast", title: "07 Мини-флоу — тост «Итоги сохранены»" },
   { id: "summary-ready", title: "02 Итоги звонка — готово" },
+  {
+    id: "summary-grill-limit",
+    title: "02 Итоги звонка — не собраны, лимит Grill",
+  },
   { id: "task-cards", title: "03 Карточки задач — раскрыт источник" },
   {
     id: "proposals-partial",
@@ -123,6 +127,15 @@ export default function PostCallScreensPage() {
         width={WIDTH}
       >
         <CallSummaryScreen className="w-full" />
+      </ScreenFrame>
+      <ScreenFrame
+        height={HEIGHT}
+        id="summary-grill-limit"
+        note="Звонок закончился, а сессия за порогом Grill (93 % из 90 %) → итоги не собираются, звонок «завершён». Вопросы и карточки из базы видны как обычно. После сброса окна Grill соберёт итоги сам, если приложение открыто; «Собрать сверх лимита» собирает сразу. Звонок, шедший сверх лимита, всё равно ждёт."
+        title={titleOf("summary-grill-limit")}
+        width={WIDTH}
+      >
+        <SummaryGrillLimitDemo className="size-full" />
       </ScreenFrame>
       <ScreenFrame
         height="auto"

@@ -203,6 +203,51 @@ export function OverlayMainQuestion({
 }
 
 /** Where the main question would be: the agent is still listening. */
+/** A threshold of Grill stopped the agent: what it is, and the way past it. */
+export interface OverlayLimitNotice {
+  /** «сброс в 14:09». */
+  hint: string;
+  onContinue?: () => void;
+  /** «Лимит Grill: сессия 91 % из 90 %». */
+  title: string;
+}
+
+/** The notice of a threshold of Grill, with «Продолжить сверх лимита». */
+export function OverlayLimit({
+  className,
+  notice,
+}: {
+  className?: string;
+  /** None: the agent is not stopped by a threshold. */
+  notice?: OverlayLimitNotice;
+}) {
+  if (!notice) {
+    return null;
+  }
+  return (
+    <section
+      aria-label="Лимит Grill"
+      className={cn(
+        "bg-surface mx-2 flex flex-col gap-2 rounded-md p-3",
+        className
+      )}
+    >
+      <p className="text-sm font-medium">{notice.title}</p>
+      <p className="text-muted-foreground text-sm">
+        Вопросы стоят, запись идёт, {notice.hint}
+      </p>
+      <Button
+        className="self-start"
+        onClick={notice.onContinue}
+        size="sm"
+        variant="secondary"
+      >
+        Продолжить сверх лимита
+      </Button>
+    </section>
+  );
+}
+
 export function OverlayListening({ className }: { className?: string }) {
   return (
     <p className={cn("text-muted-foreground px-4 py-3 text-base", className)}>

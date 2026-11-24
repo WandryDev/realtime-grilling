@@ -60,6 +60,10 @@ pub struct CallStart {
     pub project_id: Option<String>,
     #[specta(optional)]
     pub participant_ids: Option<Vec<String>>,
+    /// «Начать сверх лимита»: the thresholds of Grill don't stop the
+    /// call's agent (agent-limit-guard design.md, decision 9).
+    #[specta(optional)]
+    pub over_limit: Option<bool>,
 }
 
 /// The recorder as the call sees it: `RecordingManager` in the app, a fake

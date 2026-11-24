@@ -66,6 +66,7 @@ export function projectSectionId(section: string) {
  */
 export function ProjectScreen({
   anchor,
+  briefNotice,
   briefState = "fresh",
   className,
   data,
@@ -88,6 +89,8 @@ export function ProjectScreen({
 }: {
   /** Active anchor; with `onAnchorChange` the anchors scroll the page. */
   anchor?: string;
+  /** Over the brief: why the last build didn't build it. */
+  briefNotice?: ReactNode;
   briefState?: BriefState;
   className?: string;
   data?: ProjectPageData;
@@ -161,6 +164,7 @@ export function ProjectScreen({
           <BriefSection
             brief={page.brief}
             id={projectSectionId("brief")}
+            notice={briefNotice}
             onRefresh={onRefreshBrief}
             onStop={onStopRefresh}
             state={briefState}

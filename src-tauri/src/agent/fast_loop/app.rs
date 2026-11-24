@@ -11,7 +11,12 @@ use super::{
     scheduler::{AgentProvider, DbWork, FastLoop, LoopConfig, LoopHost, ProvideFuture},
 };
 use crate::{
-    agent::{self, AgentState, claude_cli::ClaudeCodeCli, discover::SearchEnv},
+    agent::{
+        self, AgentState,
+        claude_cli::ClaudeCodeCli,
+        discover::SearchEnv,
+        limit::{self, Metered, SubscriptionLimit},
+    },
     error::{CommandError, CommandResult},
     storage::{self, Storage, call_state, context_findings},
 };
@@ -93,21 +98,26 @@ impl<R: Runtime> AgentProvider for CliProvider<R> {
             let cli = agent::ready_cli(&storage, &app, &SearchEnv::from_process(), &cwd)
                 .await
                 .map_err(not_ready)?;
-            let agent: Arc<dyn agent::claude_cli::Agent> =
-                Arc::new(ClaudeCodeCli::new(cli, work_dir(&app)));
+            let agent: Arc<dyn agent::claude_cli::Agent> = Arc::new(Metered {
+                agent: Arc::new(ClaudeCodeCli::new(cli, work_dir(&app))),
+                limit: limit::app::of(&app),
+            });
             Ok(agent)
         })
     }
 }
 
-/// The fast loop of the app, on Tauri's runtime. The prefix files a crash
-/// or a forced quit left behind are removed: no recording is live yet.
-pub fn for_app<R: Runtime>(app: &AppHandle<R>) -> FastLoop {
+/// The fast loop of the app, on Tauri's runtime, stopping at the
+/// thresholds of `limit`. The prefix files a crash or a forced quit left
+/// behind are removed: no recording is live yet.
+pub fn for_app<R: Runtime>(app: &AppHandle<R>, limit: &SubscriptionLimit) -> FastLoop {
+    let mut config = LoopConfig::new(work_dir(app));
+    config.limit = limit.clone();
     let fast_loop = FastLoop::new(
         Arc::new(AppLoopHost { app: app.clone() }),
         Arc::new(CliProvider { app: app.clone() }),
         tauri::async_runtime::handle().inner().clone(),
-        LoopConfig::new(work_dir(app)),
+        config,
     );
     let removed = fast_loop.sweep_prompts();
     if removed > 0 {

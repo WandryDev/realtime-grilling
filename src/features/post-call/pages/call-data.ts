@@ -6,12 +6,15 @@ import type {
   CallSummary,
   CardFact,
   CardLens,
+  LimitOutlook,
   NextQuestion as NextQuestionRecord,
   SummaryCard,
   SummaryContent,
   SummaryProgress,
   SummaryStage,
 } from "@/bindings";
+import { GRILL_LIMIT } from "@/data/services/summaries";
+import { hitSentence } from "@/lib/agent-limit";
 import { CARD_LENS_LABELS } from "@/lib/card-lens";
 import { clockTime } from "@/lib/clock";
 import { plural } from "@/lib/plural";
@@ -140,8 +143,23 @@ export function processingSteps(
 
 /* ---------------------------------------------------------- Итоги звонка */
 
+/**
+ * What «Итоги не собраны: достигнут лимит Grill» says under it: the
+ * threshold reached now and its reset, after which the backend builds the
+ * summary itself; once none is reached, only that.
+ */
+export function grillLimitDetail(outlook: LimitOutlook) {
+  if (outlook.kind !== "reached") {
+    return "Порог лимита Grill больше не достигнут.";
+  }
+  return `${hitSentence(outlook.hit)} После сброса Grill соберёт итоги сам, если приложение будет открыто.`;
+}
+
 /** Why a summary is not there, as «Итоги не собраны: …» says it. */
 export function failureReason(error: string | null) {
+  if (error === GRILL_LIMIT) {
+    return "достигнут лимит Grill";
+  }
   if (error === "interrupted") {
     return "сборку прервал перезапуск приложения";
   }
