@@ -135,6 +135,32 @@ pub struct Usage {
     pub utilization: Option<f64>,
     /// When the limit window resets, Unix ms.
     pub resets_at: Option<i64>,
+    /// The session and the week window each, as the limit event said
+    /// (agent-limit-guard design.md, decision 3).
+    pub windows: WindowShares,
+}
+
+/// One window of the subscription limit as a source saw it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowShare {
+    /// 0–1.
+    pub used: f64,
+    /// Unix ms, when known.
+    pub resets_at: Option<i64>,
+}
+
+/// The two windows the thresholds watch: the 5-hour session and the week
+/// (all models). `None`: the source didn't say.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WindowShares {
+    pub session: Option<WindowShare>,
+    pub week: Option<WindowShare>,
+}
+
+impl WindowShares {
+    pub const fn is_empty(&self) -> bool {
+        self.session.is_none() && self.week.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -337,6 +363,7 @@ struct RateLimit {
     rejected: bool,
     utilization: Option<f64>,
     resets_at: Option<i64>,
+    windows: WindowShares,
 }
 
 impl RateLimit {
@@ -361,10 +388,21 @@ impl RateLimit {
             .or_else(|| fullest.and_then(|(_, window)| window.get("resetsAt")))
             .and_then(Value::as_i64)
             .map(unix_ms);
+        let window = |name: &str| {
+            let window = info.pointer(&format!("/unifiedWindows/{name}"))?;
+            Some(WindowShare {
+                used: window.get("utilization")?.as_f64()?,
+                resets_at: window.get("resetsAt").and_then(Value::as_i64).map(unix_ms),
+            })
+        };
         Self {
             rejected: info.get("status").and_then(Value::as_str) == Some("rejected"),
             utilization,
             resets_at,
+            windows: WindowShares {
+                session: window("five_hour"),
+                week: window("seven_day"),
+            },
         }
     }
 }
@@ -569,6 +607,7 @@ fn usage(result: &Value, duration: Duration, rate_limit: RateLimit) -> Usage {
         cost_usd: result.get("total_cost_usd").and_then(Value::as_f64),
         utilization: rate_limit.utilization,
         resets_at: rate_limit.resets_at,
+        windows: rate_limit.windows,
     }
 }
 

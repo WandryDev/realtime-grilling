@@ -17,6 +17,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useLimitOutlook } from "@/data/agent-limit";
 import { useCallSession } from "@/data/call-session";
 import {
   addPerson,
@@ -42,8 +43,9 @@ import {
   useBriefProgress,
   useDocumentDrop,
 } from "../api";
-import { BRIEF_BUILD_STAGES } from "../backend";
+import { BRIEF_BUILD_STAGES, GRILL_LIMIT } from "../backend";
 import { useProjectCallLines } from "../call-lines";
+import { BriefLimitNotice } from "../components/brief-limit-notice";
 import {
   DocumentsBlock,
   SoonIntegrations,
@@ -103,6 +105,7 @@ function ProjectView({ id }: { id: string | null }) {
   const calls = useProjectCallLines(id);
   const build = useBriefBuild(id);
   const progress = useBriefProgress(id);
+  const outlook = useLimitOutlook();
   const session = useCallSession();
   const demo = useDemoState(PROJECT_DEMO_STATES);
 
@@ -126,6 +129,15 @@ function ProjectView({ id }: { id: string | null }) {
   const building = build?.status === "building";
   const briefState: BriefState =
     forcedState ?? (project ? pageBriefState(project, building) : "none");
+  // The last build, here or in another window, a threshold of Grill held
+  // back; shown while the brief waits and the threshold is still reached.
+  const heldByLimit =
+    (build?.status === "failed" && build.error === GRILL_LIMIT) ||
+    (progress?.running === false && progress.error === GRILL_LIMIT);
+  const limitNotice =
+    heldByLimit &&
+    outlook.kind === "reached" &&
+    (briefState === "none" || briefState === "outdated");
   let buildStage = 0;
   if (building) {
     buildStage = build.stage;
@@ -152,6 +164,17 @@ function ProjectView({ id }: { id: string | null }) {
     }
     setForcedState(null);
     startBriefBuild(project.id, project.name, { background: true });
+  }, [project]);
+
+  const handleBuildOverLimit = useCallback(() => {
+    if (!project) {
+      return;
+    }
+    setForcedState(null);
+    startBriefBuild(project.id, project.name, {
+      background: true,
+      overLimit: true,
+    });
   }, [project]);
 
   const handleStopBuild = useCallback(() => {
@@ -351,6 +374,14 @@ function ProjectView({ id }: { id: string | null }) {
   return (
     <ProjectScreen
       anchor={anchor}
+      briefNotice={
+        limitNotice ? (
+          <BriefLimitNotice
+            onOverLimit={handleBuildOverLimit}
+            outlook={outlook}
+          />
+        ) : undefined
+      }
       briefState={briefState}
       className="h-svh"
       data={data}

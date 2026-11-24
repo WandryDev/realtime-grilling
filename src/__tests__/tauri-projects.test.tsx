@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   renderHook,
@@ -66,7 +67,9 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.search,
 }));
 
-const { fakeProject, fakeSource } = await import("./helpers/fake-tauri");
+const { fakeProject, fakeSource, NO_LIMIT_DATA } = await import(
+  "./helpers/fake-tauri"
+);
 const { ProjectPage } = await import("@/features/projects/pages/project-page");
 const { NewProjectPage } = await import(
   "@/features/projects/pages/new-project-page"
@@ -76,6 +79,7 @@ const { refreshPeople } = await import("@/data/people");
 const { refreshSources } = await import("@/data/sources");
 const { toast } = await import("@grill/ui/toast");
 const { useAddDocuments } = await import("@/features/projects/api");
+const { resetLine } = await import("@/lib/agent-limit");
 const { DESCRIPTION_LIMIT_HINT, DESCRIPTION_MAX_CHARS, NOTES_MAX_CHARS } =
   await import("@/data/project-limits");
 
@@ -146,6 +150,7 @@ beforeEach(async () => {
   fake.db.sources.length = 0;
   fake.db.calls.length = 0;
   await reload();
+  act(() => fake.setLimit(NO_LIMIT_DATA));
   fake.invoked.length = 0;
 });
 
@@ -161,7 +166,9 @@ describe("project page: the brief", () => {
     );
 
     await waitFor(() =>
-      expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
+      expect(invokedWith("brief_build")).toEqual([
+        { overLimit: false, projectId: PROJECT },
+      ])
     );
     progress(1, { status: "running" });
     progress(1, { status: "done" });
@@ -257,7 +264,9 @@ describe("project page: the brief", () => {
     expect(await screen.findByText("Бриф мог устареть")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Обновить бриф" }));
     await waitFor(() =>
-      expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
+      expect(invokedWith("brief_build")).toEqual([
+        { overLimit: false, projectId: PROJECT },
+      ])
     );
   });
 
@@ -312,7 +321,9 @@ describe("project page: the brief", () => {
       await screen.findByRole("button", { name: "Собрать бриф" })
     );
     await waitFor(() =>
-      expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
+      expect(invokedWith("brief_build")).toEqual([
+        { overLimit: false, projectId: PROJECT },
+      ])
     );
 
     stagesDone(1, 3);
@@ -348,7 +359,9 @@ describe("project page: the brief", () => {
       await screen.findByRole("button", { name: "Собрать бриф" })
     );
     await waitFor(() =>
-      expect(invokedWith("brief_build")).toEqual([{ projectId: PROJECT }])
+      expect(invokedWith("brief_build")).toEqual([
+        { overLimit: false, projectId: PROJECT },
+      ])
     );
     stagesDone(1, 1);
     progress(2, { status: "running" });
@@ -686,7 +699,9 @@ describe("new project wizard", () => {
         },
       },
     ]);
-    expect(invokedWith("brief_build")).toEqual([{ projectId: draft }]);
+    expect(invokedWith("brief_build")).toEqual([
+      { overLimit: false, projectId: draft },
+    ]);
 
     // The exact events of run.rs: every stage runs, then is done.
     progress(1, { status: "running" }, draft);
@@ -832,5 +847,116 @@ describe("new project wizard", () => {
       screen.getByRole("button", { name: "Собрать ещё раз" })
     ).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Бриф готов" })).toBeNull();
+  });
+});
+
+describe("the brief at a threshold of Grill", () => {
+  const LIMIT_TITLE = "Бриф не собран: достигнут лимит Grill";
+  const resetsAt = Date.now() + 26 * HOUR_MS;
+
+  /** The week at 85 % of its 80 % threshold. */
+  function weekReached() {
+    act(() =>
+      fake.setLimit({
+        ...NO_LIMIT_DATA,
+        outlook: {
+          hit: { resetsAt, threshold: 80, used: 85, window: "week" },
+          kind: "reached",
+        },
+      })
+    );
+  }
+
+  /** What run.rs sends when the threshold holds the build back. */
+  function heldBack(projectId: string) {
+    stagesDone(1, 1, projectId);
+    progress(2, { status: "running" }, projectId);
+    progress(2, { message: "grillLimit", status: "failed" }, projectId);
+  }
+
+  async function wizardHeldBack() {
+    weekReached();
+    render(<NewProjectPage />);
+    fireEvent.change(screen.getByLabelText("Название"), {
+      target: { value: "Пекарня" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: NEXT }));
+    fireEvent.click(screen.getByRole("button", { name: NEXT }));
+    fireEvent.click(screen.getByRole("button", { name: NEXT }));
+    fireEvent.click(screen.getByRole("button", { name: "Собрать бриф" }));
+    await waitFor(() => expect(invokedWith("brief_build")).toHaveLength(1));
+    const created = fake.db.projects.at(-1)?.id ?? "";
+    heldBack(created);
+    return created;
+  }
+
+  it("the wizard tells the threshold and builds past it", async () => {
+    const add = vi.spyOn(toast, "add");
+    const created = await wizardHeldBack();
+
+    expect(await screen.findByText(LIMIT_TITLE)).toBeTruthy();
+    expect(
+      screen.getByText(`Неделя 85 % из 80 %, ${resetLine(resetsAt)}.`, {
+        exact: false,
+      })
+    ).toBeTruthy();
+    expect(screen.queryByText("Не удалось собрать бриф")).toBeNull();
+    expect(add).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Собрать сверх лимита" })
+    );
+    await waitFor(() =>
+      expect(invokedWith("brief_build")).toEqual([
+        { overLimit: false, projectId: created },
+        { overLimit: true, projectId: created },
+      ])
+    );
+  });
+
+  it("Мастер за порогом: the project is saved, its page offers «Собрать сверх лимита»", async () => {
+    const created = await wizardHeldBack();
+    expect(await screen.findByText(LIMIT_TITLE)).toBeTruthy();
+    expect(fake.db.projects.find((item) => item.id === created)?.brief).toBe(
+      null
+    );
+
+    cleanup();
+    nav.search = new URLSearchParams(`id=${created}`);
+    render(<ProjectPage />);
+    const notice = (await screen.findByText(LIMIT_TITLE)).closest(
+      "[data-slot=alert]"
+    );
+    expect(notice?.textContent).toContain("Неделя 85 % из 80 %");
+    fireEvent.click(
+      within(notice as HTMLElement).getByRole("button", {
+        name: "Собрать сверх лимита",
+      })
+    );
+    await waitFor(() =>
+      expect(invokedWith("brief_build").at(-1)).toEqual({
+        overLimit: true,
+        projectId: created,
+      })
+    );
+  });
+
+  it("the project page drops the notice once the threshold let go", async () => {
+    weekReached();
+    openProjectPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Собрать бриф" })
+    );
+    await waitFor(() =>
+      expect(invokedWith("brief_build")).toEqual([
+        { overLimit: false, projectId: PROJECT },
+      ])
+    );
+    heldBack(PROJECT);
+    expect(await screen.findByText(LIMIT_TITLE)).toBeTruthy();
+
+    act(() => fake.setLimit(NO_LIMIT_DATA));
+    await waitFor(() => expect(screen.queryByText(LIMIT_TITLE)).toBeNull());
+    expect(screen.getByRole("button", { name: "Собрать бриф" })).toBeTruthy();
   });
 });

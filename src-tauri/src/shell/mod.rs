@@ -149,18 +149,32 @@ pub fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Err
     if !std::env::args().any(|arg| arg == AUTOSTART_ARG) {
         show_entry(app.handle());
     }
+    // The share of the subscription limit, before the loops: they stop at a
+    // threshold of Grill (agent-limit-guard). Polled at the start and every
+    // 10 minutes.
+    let limit = crate::agent::limit::app::for_app(app.handle(), &settings);
+    app.manage(limit.clone());
+    crate::agent::limit::app::schedule_polls(app.handle());
     // Before the recorder: its live pass starts the agent's schedulers. The
     // slow loop shares the fast loop's halt and hears its topic changes.
-    let fast_loop = crate::agent::fast_loop::app::for_app(app.handle());
+    let fast_loop = crate::agent::fast_loop::app::for_app(app.handle(), &limit);
     app.manage(crate::agent::slow_loop::app::for_app(
         app.handle(),
         &fast_loop,
+        &limit,
     ));
     app.manage(fast_loop);
     let recorder = crate::recording::manager_for_app(app.handle(), speech.recognizer(), &inputs);
     app.manage(recorder.clone());
-    // The calls' summary builds; a finishing call starts one.
-    app.manage(crate::summary::builds::SummaryBuilds::default());
+    // The calls' summary builds; a finishing call starts one, and so does a
+    // threshold of Grill that let go for the summaries that waited for it.
+    let summary_builds = crate::summary::builds::SummaryBuilds::default();
+    app.manage(summary_builds.clone());
+    tauri::async_runtime::spawn(crate::summary::run::build_when_limit_lets_go(
+        std::sync::Arc::new(app.handle().clone()),
+        summary_builds,
+        limit.clone(),
+    ));
     // The call in progress records through the recorder; none at start
     // (the storage finished the calls a previous run left).
     let calls = crate::call::manager_for_app(app.handle(), recorder.clone(), speech.clone());
@@ -327,6 +341,9 @@ pub fn shutdown<R: Runtime>(app: &AppHandle<R>) {
     }
     if let Some(slow_loop) = app.try_state::<crate::agent::slow_loop::scheduler::SlowLoop>() {
         slow_loop.shutdown();
+    }
+    if let Some(limit) = app.try_state::<crate::agent::limit::SubscriptionLimit>() {
+        limit.shutdown();
     }
     if let Some(builds) = app.try_state::<crate::projects::builds::BriefBuilds>() {
         builds.shutdown();

@@ -489,14 +489,18 @@ function briefTasksAt(
 
 /**
  * "Собираю бриф": the progress and the live list at `stage` of 5. The app
- * passes its `tasks` (the real stages); `error` says why the build failed.
+ * passes its `tasks` (the real stages); `error` says why the build failed,
+ * `notice` stands in its place for a build a threshold of Grill held back.
  */
 export function BuildingStep({
   error,
+  notice,
   stage = PREVIEW_BUILD_STAGE,
   tasks: stageTasks,
 }: {
   error?: string;
+  /** In place of the progress and of `error`. */
+  notice?: ReactNode;
   stage?: number;
   tasks?: typeof BRIEF_TASKS;
 }) {
@@ -511,20 +515,21 @@ export function BuildingStep({
         description="Обычно это занимает пару минут. Можно свернуть, агент доделает в фоне и пришлёт уведомление."
         title="Собираю бриф проекта"
       />
-      {error ? (
-        <Alert variant="destructive">
-          <AlertTitle>Не удалось собрать бриф</AlertTitle>
-          <AlertDescription>
-            {error}. Проект сохранён, бриф можно собрать ещё раз.
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <BriefBuildProgress
-          eta={stage < stages - 1 ? "~1 мин" : "~10 с"}
-          stage={stage}
-          stages={stages}
-        />
-      )}
+      {notice ??
+        (error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Не удалось собрать бриф</AlertTitle>
+            <AlertDescription>
+              {error}. Проект сохранён, бриф можно собрать ещё раз.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <BriefBuildProgress
+            eta={stage < stages - 1 ? "~1 мин" : "~10 с"}
+            stage={stage}
+            stages={stages}
+          />
+        ))}
       <BriefTaskList tasks={tasks} />
     </WizardForm>
   );

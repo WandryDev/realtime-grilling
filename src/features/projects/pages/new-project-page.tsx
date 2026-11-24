@@ -24,7 +24,8 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ProjectSource } from "@/bindings";
+import type { LimitOutlook, ProjectSource } from "@/bindings";
+import { useLimitOutlook } from "@/data/agent-limit";
 import { addPerson, initialsOf, usePeople } from "@/data/people";
 import {
   createProject,
@@ -49,7 +50,8 @@ import {
   useBriefBuild,
   useDocumentDrop,
 } from "../api";
-import { BRIEF_BUILD_STAGES } from "../backend";
+import { BRIEF_BUILD_STAGES, GRILL_LIMIT } from "../backend";
+import { BriefLimitNotice } from "../components/brief-limit-notice";
 import {
   DocumentsBlock,
   SoonIntegrations,
@@ -224,6 +226,7 @@ export function NewProjectPage() {
   const [leaveOpen, setLeaveOpen] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const build = useBriefBuild(projectId);
+  const outlook = useLimitOutlook();
   const savedId = projectId ?? draftId;
   const saved = useProject(savedId);
   const savedPeople = usePeople(projectId);
@@ -262,6 +265,10 @@ export function NewProjectPage() {
     view = build.status === "ready" ? "ready" : "building";
   }
   const failed = build?.status === "failed";
+  // Held back by a threshold of Grill: «Собрать сверх лимита» while it is
+  // reached, an ordinary «Собрать ещё раз» once it let go.
+  const overLimit =
+    failed && build.error === GRILL_LIMIT && outlook.kind === "reached";
   let screenState: NewProjectState = view;
   if (view === "name" && nameError) {
     screenState = "name-error";
@@ -471,9 +478,9 @@ export function NewProjectPage() {
 
   const handleRetry = useCallback(() => {
     if (projectId) {
-      startBriefBuild(projectId, name.trim());
+      startBriefBuild(projectId, name.trim(), { overLimit });
     }
-  }, [name, projectId]);
+  }, [name, overLimit, projectId]);
 
   const handleStop = useCallback(() => {
     if (!projectId) {
@@ -590,6 +597,7 @@ export function NewProjectPage() {
         <BuildingView
           build={build}
           documents={documents.length}
+          outlook={outlook}
           people={people.length}
         />
       );
@@ -618,6 +626,7 @@ export function NewProjectPage() {
             onNext={goNext}
             onRetry={handleRetry}
             onStop={handleStop}
+            overLimit={overLimit}
             projectHref={projectHref}
             view={view}
           />
@@ -760,15 +769,23 @@ function useWizardDocuments({
 function BuildingView({
   build,
   documents,
+  outlook,
   people,
 }: {
   build: ReturnType<typeof useBriefBuild>;
   documents: number;
+  outlook: LimitOutlook;
   people: number;
 }) {
+  const failed = build?.status === "failed";
   return (
     <BuildingStep
-      error={build?.status === "failed" ? build.error : undefined}
+      error={failed ? build.error : undefined}
+      notice={
+        failed && build.error === GRILL_LIMIT ? (
+          <BriefLimitNotice outlook={outlook} />
+        ) : undefined
+      }
       stage={build ? Math.min(build.stage + 1, BRIEF_BUILD_STAGES) : undefined}
       tasks={buildTasks(people, documents)}
     />
@@ -785,11 +802,14 @@ function WizardActions({
   onNext,
   onRetry,
   onStop,
+  overLimit,
   projectHref,
   view,
 }: {
   /** The build failed: try again, or open the saved project. */
   failed: boolean;
+  /** A threshold of Grill held it back: the retry goes past it. */
+  overLimit: boolean;
   onBack: () => void;
   onBackground: () => void;
   onBuild: () => void;
@@ -803,7 +823,11 @@ function WizardActions({
   if (view === "building" && failed) {
     return (
       <WizardFooter
-        end={<WizardButton onClick={onRetry}>Собрать ещё раз</WizardButton>}
+        end={
+          <WizardButton onClick={onRetry}>
+            {overLimit ? "Собрать сверх лимита" : "Собрать ещё раз"}
+          </WizardButton>
+        }
         start={
           <WizardTextAction {...linkButtonProps(projectHref)}>
             Открыть проект

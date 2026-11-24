@@ -6,6 +6,7 @@ import { NewProjectScreen } from "@/features/projects/screens/new-project-screen
 import { PersonScreen } from "@/features/projects/screens/person-screen";
 import { ProjectScreen } from "@/features/projects/screens/project-screen";
 
+import { ProjectGrillLimitDemo } from "../_components/limit-demos";
 import { ScreenFlow, ScreenFrame } from "../_components/screen-frame";
 import {
   ClickUpSourcesStates,
@@ -29,6 +30,7 @@ const SCREENS = [
   { id: "project", title: "10 Проект" },
   { id: "project-updating", title: "11 Обновляется" },
   { id: "project-outdated", title: "12 Устарел" },
+  { id: "project-grill-limit", title: "12 Лимит Grill" },
   { id: "person", title: "13 Профиль" },
   { id: "person-edit", title: "14 Редактирование" },
   { id: "person-add", title: "15 Добавить" },
@@ -143,6 +145,15 @@ export default function ProjectsScreensPage() {
         width={1440}
       >
         <ProjectScreen briefState="updating" className="size-full" />
+      </ScreenFrame>
+      <ScreenFrame
+        height={900}
+        id="project-grill-limit"
+        note="Неделя за порогом Grill (85 % из 80 %) → бриф не собирается сам: ни в мастере, ни по кнопке, ни перед звонком (виджет не пишет «Обновляю бриф…», звонок берёт последнюю версию). «Собрать сверх лимита» собирает сразу. Автосборки после сброса нет: устаревший бриф обновится перед следующим звонком."
+        title="12 Проект — бриф не собран, лимит Grill"
+        width={1440}
+      >
+        <ProjectGrillLimitDemo className="size-full" />
       </ScreenFrame>
       <ScreenFrame
         height={900}

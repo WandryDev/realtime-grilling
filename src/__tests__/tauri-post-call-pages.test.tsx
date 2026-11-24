@@ -59,9 +59,8 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.search,
 }));
 
-const { fakeCall, fakePerson, fakeProject, IDLE_SESSION } = await import(
-  "./helpers/fake-tauri"
-);
+const { fakeCall, fakePerson, fakeProject, IDLE_SESSION, NO_LIMIT_DATA } =
+  await import("./helpers/fake-tauri");
 const { CallSummaryPage } = await import(
   "@/features/post-call/pages/call-summary-page"
 );
@@ -78,6 +77,7 @@ const { refreshProjects } = await import("@/data/projects");
 const { refreshPeople } = await import("@/data/people");
 const { refreshCalls } = await import("@/data/calls");
 const { routes } = await import("@/lib/routes");
+const { resetLine } = await import("@/lib/agent-limit");
 
 const EXCHANGE = "019a0000-0000-7000-8000-000000000002";
 const IGOR = "019a0000-0000-7000-8000-0000000000a2";
@@ -334,6 +334,7 @@ beforeEach(async () => {
     startedAt: STARTED_AT,
   });
   act(() => fake.setSession(IDLE_SESSION));
+  act(() => fake.setLimit(NO_LIMIT_DATA));
   await act(() => refreshProjects());
   await act(() => refreshPeople());
   await act(() => refreshCalls());
@@ -470,7 +471,79 @@ describe("«Итоги звонка» in Tauri", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Собрать итоги" }));
     await waitFor(() =>
-      expect(invokedWith("summary_build")).toEqual([{ callId: CALL }])
+      expect(invokedWith("summary_build")).toEqual([
+        { callId: CALL, overLimit: false },
+      ])
+    );
+  });
+
+  it("Звонок закончился за порогом: the threshold, its reset and «Собрать сверх лимита», which builds past it", async () => {
+    const resetsAt = Date.now() + 2 * 60 * MINUTE;
+    act(() =>
+      fake.setLimit({
+        ...NO_LIMIT_DATA,
+        outlook: {
+          hit: { resetsAt, threshold: 90, used: 93, window: "session" },
+          kind: "reached",
+        },
+      })
+    );
+    records({
+      cards: LIVE_CARDS,
+      view: { building: null, summary: failed("grillLimit") },
+    });
+    openSummary();
+
+    expect(
+      await screen.findByText("Итоги не собраны: достигнут лимит Grill")
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(`Сессия 93 % из 90 %, ${resetLine(resetsAt)}.`, {
+        exact: false,
+      })
+    ).toBeTruthy();
+    // What the records give stays: the questions and the fast loop's card.
+    const list = await screen.findByRole("list", {
+      name: "Не успели спросить",
+    });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(
+      within(screen.getByRole("region", { name: "Карточки задач" })).getByText(
+        "Обмен валют"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Собрать итоги" })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Собрать сверх лимита" })
+    );
+    await waitFor(() =>
+      expect(invokedWith("summary_build")).toEqual([
+        { callId: CALL, overLimit: true },
+      ])
+    );
+  });
+
+  it("a summary the threshold held back, once it let go: an ordinary «Собрать итоги»", async () => {
+    records({ view: { building: null, summary: failed("grillLimit") } });
+    openSummary();
+
+    expect(
+      await screen.findByText("Итоги не собраны: достигнут лимит Grill")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Порог лимита Grill больше не достигнут.", {
+        exact: false,
+      })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Собрать сверх лимита" })
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Собрать итоги" }));
+    await waitFor(() =>
+      expect(invokedWith("summary_build")).toEqual([
+        { callId: CALL, overLimit: false },
+      ])
     );
   });
 

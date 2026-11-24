@@ -34,8 +34,9 @@ use tauri_specta::Event as _;
 use tokio::sync::broadcast;
 
 use super::{
-    CANCELLED, EFFORT, MODEL, PROPOSALS_CLOSING, PROPOSALS_PROMPT, REFINE_SILENCE, SUMMARY_CLOSING,
-    SUMMARY_PROMPT, SummaryCounts, SummaryProgress, SummaryStage, SummaryStageState, TIMEOUT,
+    CANCELLED, EFFORT, GRILL_LIMIT, MODEL, PROPOSALS_CLOSING, PROPOSALS_PROMPT, REFINE_SILENCE,
+    SUMMARY_CLOSING, SUMMARY_PROMPT, SummaryCounts, SummaryProgress, SummaryStage,
+    SummaryStageState, TIMEOUT,
     builds::{BuildSlot, Stop, SummaryBuilds},
     input::{self, SummaryMessage},
     proposals_schema_argument,
@@ -48,6 +49,7 @@ use crate::{
     agent::{
         claude_cli::{Agent, AgentError, AgentRequest, CallOptions, OutputKind, Usage},
         fast_loop::scheduler::{outcome_of, with_usage},
+        limit::{LimitHit, LimitPolicy, SubscriptionLimit},
     },
     call::CallManager,
     error::CommandError,
@@ -86,6 +88,10 @@ pub trait SummaryHost: EventSink + 'static {
     fn silence(&self) -> Duration {
         REFINE_SILENCE
     }
+    /// The threshold of Grill reached now; none by default.
+    fn grill_limit(&self) -> Option<LimitHit> {
+        None
+    }
 }
 
 impl<R: Runtime> SummaryHost for AppHandle<R> {
@@ -102,6 +108,10 @@ impl<R: Runtime> SummaryHost for AppHandle<R> {
     fn agent(&self) -> AgentLookup<'_> {
         // The brief's check: the CLI found, installed and logged in.
         BriefHost::agent(self)
+    }
+
+    fn grill_limit(&self) -> Option<LimitHit> {
+        crate::agent::limit::app::of(self).reached()
     }
 
     fn prompt_dir(&self) -> PathBuf {
@@ -145,12 +155,72 @@ pub fn start<H: SummaryHost>(
     host: &Arc<H>,
     builds: &SummaryBuilds,
     call_id: &str,
+    limit: LimitPolicy,
 ) -> Option<tauri::async_runtime::JoinHandle<()>> {
     let slot = builds.start(call_id)?;
     let host = Arc::clone(host);
     Some(tauri::async_runtime::spawn(async move {
-        build(&host, slot).await;
+        build(&host, slot, limit).await;
     }))
+}
+
+/// Runs for the app's life (design.md, decision 7): once a threshold of
+/// Grill lets go (a reset, a lower share, a higher threshold), the
+/// summaries that waited for it are built, one at a time. A share not
+/// known yet is no news: the first measure that is below the thresholds
+/// counts as letting go, so a reset while the app was closed builds them
+/// at the next start.
+pub async fn build_when_limit_lets_go<H: SummaryHost>(
+    host: Arc<H>,
+    builds: SummaryBuilds,
+    limit: SubscriptionLimit,
+) {
+    let mut news = limit.subscribe();
+    let mut was_reached = None;
+    loop {
+        let view = limit.view();
+        let known = view.session.is_some() || view.week.is_some();
+        let reached = limit.reached().is_some();
+        if known && !reached && was_reached != Some(false) {
+            build_waiting(&host, &builds, &limit).await;
+        }
+        if known {
+            was_reached = Some(reached);
+        }
+        if news.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// The summaries `failed` / [`GRILL_LIMIT`], the oldest first, each after
+/// the last ended; none once a threshold is reached again.
+async fn build_waiting<H: SummaryHost>(
+    host: &Arc<H>,
+    builds: &SummaryBuilds,
+    limit: &SubscriptionLimit,
+) {
+    let Some(storage) = host.storage() else {
+        return;
+    };
+    let waiting = match storage
+        .read(|db| summaries::failed_with(db, GRILL_LIMIT))
+        .await
+    {
+        Ok(waiting) => waiting,
+        Err(error) => {
+            eprintln!("grill: could not read the summaries that wait for the limit: {error}");
+            return;
+        }
+    };
+    for call_id in waiting {
+        if limit.reached().is_some() {
+            return;
+        }
+        if let Some(running) = start(host, builds, &call_id, LimitPolicy::Respect) {
+            let _ = running.await;
+        }
+    }
 }
 
 /// «Остановить» (`summary_cancel`): the build stops, saves nothing and
@@ -189,7 +259,7 @@ fn storage_end(error: CommandError) -> End {
     }
 }
 
-async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot) {
+async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot, limit: LimitPolicy) {
     let emit_host = Arc::clone(host);
     let stages = Stages {
         call_id: slot.call_id().to_owned(),
@@ -201,7 +271,14 @@ async fn build<H: SummaryHost>(host: &Arc<H>, slot: BuildSlot) {
     let call_id = slot.call_id().to_owned();
     let mut before = None;
     let journaled = Mutex::new(Vec::new());
-    let outcome = attempt(host.as_ref(), &slot, &stages, &mut before, &journaled).await;
+    let outcome = attempt(
+        host.as_ref(),
+        &slot,
+        &stages,
+        (&mut before, limit),
+        &journaled,
+    )
+    .await;
     // The agent's calls into the journal once the build no longer waits on
     // the database (call-analytics design.md, decision 2).
     let journaled = journaled
@@ -317,7 +394,7 @@ async fn attempt<H: SummaryHost>(
     host: &H,
     slot: &BuildSlot,
     stages: &Stages,
-    before: &mut Option<Before>,
+    (before, limit): (&mut Option<Before>, LimitPolicy),
     journaled: &Mutex<Vec<AgentCallInput>>,
 ) -> Result<(), End> {
     stages.advance(SummaryStage::Transcript);
@@ -384,6 +461,11 @@ async fn attempt<H: SummaryHost>(
     unless_stopped(slot)?;
 
     stages.advance(SummaryStage::Summary);
+    // A threshold of Grill: the agent stages wait for it to let go, also
+    // after a call that went past it (design.md, decision 7).
+    if limit == LimitPolicy::Respect && host.grill_limit().is_some() {
+        return Err(failed(GRILL_LIMIT));
+    }
     let agent = host.agent().await.map_err(End::Failed)?;
     unless_stopped(slot)?;
     let reply = ask(host, slot, &agent, Ask::Summary, &message, journaled).await?;

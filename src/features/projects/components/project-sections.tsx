@@ -92,6 +92,7 @@ export function BriefSection({
   brief,
   className,
   id,
+  notice,
   onRefresh,
   onStop,
   state,
@@ -101,6 +102,8 @@ export function BriefSection({
   brief: BriefView | null;
   className?: string;
   id?: string;
+  /** Over the brief: why the last build didn't build it. */
+  notice?: ReactNode;
   /** "Собрать бриф" / "Обновить" / "Обновить бриф". */
   onRefresh?: () => void;
   /** "Остановить" while updating. */
@@ -127,6 +130,7 @@ export function BriefSection({
       {state === "updating" ? (
         <BriefUpdateBar value={status.updatingProgress} />
       ) : null}
+      {notice}
       {state === "outdated" ? (
         <Alert className="items-start gap-y-0.5 *:[svg]:mt-[3px]">
           <ClockIcon />

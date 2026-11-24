@@ -5,12 +5,18 @@ import { Button } from "@grill/ui/button";
 import { Progress, ProgressLabel } from "@grill/ui/progress";
 import { Spinner } from "@grill/ui/spinner";
 import type { ReactNode } from "react";
-import type { AgentState, AgentUsage } from "@/bindings";
+import type {
+  AgentState,
+  LimitWindow,
+  SubscriptionLimitView,
+  WindowMeasure,
+} from "@/bindings";
 import {
   DEFAULT_SETTINGS,
   type SettingChange,
   type SettingsValues,
 } from "@/data/settings";
+import { resetLine } from "@/lib/agent-limit";
 import { cn } from "@/lib/utils";
 
 import {
@@ -23,8 +29,8 @@ import { agentStatusLine, momentLabel, subscriptionName } from "../format";
 import { RefreshIcon } from "../icons";
 import {
   AGENT,
-  AGENT_LIMIT_LOW,
-  AGENT_UTILIZATION,
+  AGENT_LIMIT,
+  AGENT_LIMIT_OPTIONS,
   QUESTION_COUNT,
   QUESTION_FREQUENCY,
 } from "../mock";
@@ -159,49 +165,105 @@ function loginLabel(agent: AgentState | null) {
 
 const PERCENT = 100;
 
-/** The last known share of the limit, or «нет данных». */
-function UsageFact({ usage }: { usage: AgentUsage | null }) {
-  if (!usage) {
+const WINDOW_LABELS: Record<LimitWindow, string> = {
+  session: "Сессия, 5 часов",
+  week: "Неделя",
+};
+
+/** Where the outlook puts a window: at its threshold, close to it, or not. */
+function windowTone(limit: SubscriptionLimitView, window: LimitWindow) {
+  const { outlook } = limit;
+  if (outlook.kind === "ok" || outlook.hit.window !== window) {
+    return "ok";
+  }
+  return outlook.kind;
+}
+
+/** «Порог Grill 90 %, замер 12:41»; the reset when known. */
+function measureNote(
+  measure: WindowMeasure,
+  threshold: number | null,
+  tone: "ok" | "near" | "reached"
+) {
+  const measured = `замер ${momentLabel(measure.measuredAt)}`;
+  if (tone === "reached") {
+    return `Порог Grill ${threshold} % пройден: агент ждёт сброса, ${measured}`;
+  }
+  if (threshold === null) {
+    return `Без порога Grill, ${measured}`;
+  }
+  return `Порог Grill ${threshold} %, ${measured}`;
+}
+
+/**
+ * One window of the subscription limit: its share with the reset and the
+ * time of the measure, or «нет данных».
+ */
+function WindowFact({
+  limit,
+  window,
+}: {
+  limit: SubscriptionLimitView;
+  window: LimitWindow;
+}) {
+  const label = WINDOW_LABELS[window];
+  const measure = limit[window];
+  if (!measure) {
+    return (
+      <AgentFact label={label}>
+        <span className="text-muted-foreground">нет данных</span>
+      </AgentFact>
+    );
+  }
+  const tone = windowTone(limit, window);
+  const threshold = limit.thresholds[window];
+  return (
+    <AgentFact className="items-start" label={label}>
+      <Progress
+        className={cn(
+          "[&_[data-slot=progress-track]]:bg-border gap-y-2",
+          tone === "ok"
+            ? "[&_[data-slot=progress-indicator]]:bg-foreground"
+            : "[&_[data-slot=progress-indicator]]:bg-contradiction"
+        )}
+        locale="ru-RU"
+        size="sm"
+        tone="active"
+        value={Math.min(PERCENT, measure.used)}
+      >
+        <ProgressLabel className="font-normal">
+          Использовано {measure.used} %
+        </ProgressLabel>
+        <span className="text-muted-foreground ml-auto text-xs">
+          {resetLine(measure.resetsAt)}
+        </span>
+      </Progress>
+      <p
+        className={cn(
+          "mt-2 text-sm",
+          tone === "ok" ? "text-muted-foreground" : "text-contradiction"
+        )}
+      >
+        {measureNote(measure, threshold, tone)}
+      </p>
+    </AgentFact>
+  );
+}
+
+/** Both windows; «нет данных» before the backend answered. */
+function LimitFacts({ limit }: { limit: SubscriptionLimitView | null }) {
+  if (!limit) {
     return (
       <AgentFact label="Лимит подписки">
         <span className="text-muted-foreground">нет данных</span>
       </AgentFact>
     );
   }
-  const used = Math.round(usage.utilization * PERCENT);
-  const low = usage.utilization >= AGENT_LIMIT_LOW;
   return (
-    <AgentFact className="items-start" label="Лимит подписки">
-      <Progress
-        className={cn(
-          "[&_[data-slot=progress-track]]:bg-border gap-y-2",
-          low
-            ? "[&_[data-slot=progress-indicator]]:bg-contradiction"
-            : "[&_[data-slot=progress-indicator]]:bg-foreground"
-        )}
-        locale="ru-RU"
-        size="sm"
-        tone="active"
-        value={Math.min(PERCENT, used)}
-      >
-        <ProgressLabel className="font-normal">
-          Использовано {used} %
-        </ProgressLabel>
-        <span className="text-muted-foreground ml-auto font-mono text-xs">
-          {momentLabel(usage.measuredAt)}
-        </span>
-      </Progress>
-      <p
-        className={cn(
-          "mt-2 text-sm",
-          low ? "text-contradiction" : "text-muted-foreground"
-        )}
-      >
-        {low
-          ? "Почти исчерпан: вопросы могут перестать приходить посреди разговора"
-          : "По последнему ответу агента, время замера справа"}
-      </p>
-    </AgentFact>
+    <>
+      <WindowFact limit={limit} window="session" />
+      <WindowFact limit={limit} window="week" />
+    </>
   );
 }
 
@@ -213,9 +275,10 @@ export interface AgentHandlers {
 }
 
 /**
- * "Агент": the CLI and its subscription, how questions are suggested.
+ * "Агент": the CLI and its subscription, the share of the limit of both
+ * windows and the thresholds of Grill, how questions are suggested.
  * `agent` is what Claude Code answered, `null` while the first check
- * runs; `usage` the last known share of the limit (red from 90 %).
+ * runs; `limit` the share of the limit, `null` before it is known.
  */
 export function AgentSettings({
   agent = AGENT,
@@ -224,17 +287,17 @@ export function AgentSettings({
   onChangePath,
   onCheck,
   onSignIn,
+  limit = AGENT_LIMIT,
   signingIn = false,
-  usage = { measuredAt: DEMO_MEASURED_AT, utilization: AGENT_UTILIZATION },
   values = DEFAULT_SETTINGS,
 }: AgentHandlers & {
   agent?: AgentState | null;
   /** "Проверить снова" is running. */
   checking?: boolean;
+  limit?: SubscriptionLimitView | null;
   onChange?: SettingChange;
   /** The login dialog is open. */
   signingIn?: boolean;
-  usage?: AgentUsage | null;
   values?: SettingsValues;
 }) {
   const version =
@@ -280,9 +343,37 @@ export function AgentSettings({
           >
             {loginLabel(agent)}
           </AgentFact>
-          <UsageFact usage={usage} />
+          <LimitFacts limit={limit} />
         </dl>
       </section>
+      <SettingsSection className="pt-12" title="Лимит Grill">
+        <SettingsRow
+          control={
+            <SettingsSegments
+              defaultValue={values.agentLimitSession}
+              label="Порог сессии"
+              onSettingChange={onChange}
+              options={AGENT_LIMIT_OPTIONS}
+              setting="agentLimitSession"
+            />
+          }
+          description="Сколько 5-часового окна подписки может занять Grill. На пороге вопросы встают, запись и расшифровка идут, остаток остаётся вам"
+          title="Порог сессии"
+        />
+        <SettingsRow
+          control={
+            <SettingsSegments
+              defaultValue={values.agentLimitWeek}
+              label="Порог недели"
+              onSettingChange={onChange}
+              options={AGENT_LIMIT_OPTIONS}
+              setting="agentLimitWeek"
+            />
+          }
+          description="Недельное окно всех моделей. В звонке можно продолжить сверх порога, итоги и бриф собираются по кнопке"
+          title="Порог недели"
+        />
+      </SettingsSection>
       <SettingsSection className="pt-12" title="Вопросы во время звонка">
         <SettingsRow
           control={
@@ -316,13 +407,17 @@ export function AgentSettings({
   );
 }
 
-/** The demo's last measure of the limit, 12 November 12:41. */
-const DEMO_MEASURED_AT = new Date(2026, 10, 12, 12, 41).getTime();
-
-export function AgentSettingsScreen({ className }: { className?: string }) {
+export function AgentSettingsScreen({
+  className,
+  limit,
+}: {
+  className?: string;
+  /** The share of the limit; the demo's below the thresholds by default. */
+  limit?: SubscriptionLimitView;
+}) {
   return (
     <SettingsScreen className={className} section="agent">
-      <AgentSettings />
+      <AgentSettings limit={limit} />
     </SettingsScreen>
   );
 }

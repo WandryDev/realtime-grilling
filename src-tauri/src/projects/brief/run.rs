@@ -39,6 +39,7 @@ use crate::{
         },
         discover::SearchEnv,
         fast_loop::scheduler::{outcome_of, with_usage},
+        limit::{LimitHit, LimitPolicy},
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
@@ -82,7 +83,15 @@ pub trait BriefHost: EventSink + 'static {
     fn sync_connectors(self: &Arc<Self>, _project_id: &str) -> SyncLookup {
         Box::pin(async {})
     }
+    /// The threshold of Grill reached now; none by default.
+    fn grill_limit(&self) -> Option<LimitHit> {
+        None
+    }
 }
+
+/// The `message` of a build that failed at a threshold of Grill before the
+/// agent (agent-limit-guard design.md, decision 8).
+pub const GRILL_LIMIT: &str = "grillLimit";
 
 pub type SyncLookup = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
@@ -116,12 +125,19 @@ impl<R: Runtime> BriefHost for AppHandle<R> {
                 .await
                 .map_err(not_ready)?;
             let work_dir = agent::fast_loop::app::work_dir(self);
-            Ok(Arc::new(ClaudeCodeCli::new(cli, work_dir)) as Arc<dyn Agent>)
+            Ok(Arc::new(agent::limit::Metered {
+                agent: Arc::new(ClaudeCodeCli::new(cli, work_dir)),
+                limit: agent::limit::app::of(self),
+            }) as Arc<dyn Agent>)
         })
     }
 
     fn prompt_dir(&self) -> PathBuf {
         agent::fast_loop::app::work_dir(self).join("briefs")
+    }
+
+    fn grill_limit(&self) -> Option<LimitHit> {
+        agent::limit::app::of(self).reached()
     }
 
     fn sync_connectors(self: &Arc<Self>, project_id: &str) -> SyncLookup {
@@ -147,18 +163,20 @@ fn not_ready(state: AgentState) -> String {
 
 /// Starts a build of the project unless one runs (then `None`: follow its
 /// progress). `agent` is the one already checked, else it is looked up at
-/// stage 2.
+/// stage 2. With [`LimitPolicy::Respect`] a reached threshold of Grill
+/// fails it before the agent ([`GRILL_LIMIT`]).
 pub fn start<H: BriefHost>(
     host: &Arc<H>,
     builds: &BriefBuilds,
     project_id: &str,
     agent: Option<Arc<dyn Agent>>,
+    limit: LimitPolicy,
 ) -> Option<tauri::async_runtime::JoinHandle<()>> {
     let mut slot = builds.start(project_id)?;
     host.data_changed(projects::changed(project_id));
     let host = Arc::clone(host);
     Some(tauri::async_runtime::spawn(async move {
-        build(&host, &mut slot, agent).await;
+        build(&host, &mut slot, agent, limit).await;
         let project_id = slot.project_id().to_owned();
         drop(slot);
         host.data_changed(projects::changed(&project_id));
@@ -213,10 +231,15 @@ pub async fn prepare<H: BriefHost>(
     if builds.failed_lately(project_id, &fingerprint) {
         return Ok(false);
     }
+    // At a threshold of Grill the call takes the brief as it is: no
+    // «Обновляю бриф…» (design.md, decision 8).
+    if host.grill_limit().is_some() {
+        return Ok(false);
+    }
     let Ok(agent) = host.agent().await else {
         return Ok(false);
     };
-    Ok(start(host, builds, project_id, Some(agent)).is_some())
+    Ok(start(host, builds, project_id, Some(agent), LimitPolicy::Respect).is_some())
 }
 
 /// Something to build a brief from, without reading the documents' text.
@@ -231,22 +254,33 @@ fn has_materials(db: &rusqlite::Connection, project: &projects::Project) -> Comm
 /// How a build ended short of a brief.
 enum End {
     Failed(String),
+    /// A threshold of Grill: no agent call, and no back-off for
+    /// `brief_prepare` (the inputs didn't fail).
+    GrillLimit,
     Cancelled,
 }
 
-async fn build<H: BriefHost>(host: &Arc<H>, slot: &mut BuildSlot, agent: Option<Arc<dyn Agent>>) {
+async fn build<H: BriefHost>(
+    host: &Arc<H>,
+    slot: &mut BuildSlot,
+    agent: Option<Arc<dyn Agent>>,
+    limit: LimitPolicy,
+) {
     let emit_host = Arc::clone(host);
     let stages = Arc::new(Stages {
         project_id: slot.project_id().to_owned(),
         emit: Box::new(move |progress| emit_host.progress(progress)),
         current: Mutex::new(0),
     });
-    match attempt(host.as_ref(), slot, agent, &stages).await {
+    match attempt(host.as_ref(), slot, (agent, limit), &stages).await {
         Ok(()) => {
             slot.succeeded();
             stages.finish();
         }
         Err(End::Cancelled) => stages.end(BriefStageState::Cancelled),
+        Err(End::GrillLimit) => stages.end(BriefStageState::Failed {
+            message: GRILL_LIMIT.to_owned(),
+        }),
         Err(End::Failed(message)) => {
             eprintln!(
                 "grill: the brief of {} was not built: {message}",
@@ -273,7 +307,7 @@ fn unless_cancelled(slot: &BuildSlot) -> Result<(), End> {
 async fn attempt<H: BriefHost>(
     host: &H,
     slot: &mut BuildSlot,
-    agent: Option<Arc<dyn Agent>>,
+    (agent, limit): (Option<Arc<dyn Agent>>, LimitPolicy),
     stages: &Arc<Stages>,
 ) -> Result<(), End> {
     stages.advance(1);
@@ -295,6 +329,9 @@ async fn attempt<H: BriefHost>(
     unless_cancelled(slot)?;
 
     stages.advance(2);
+    if limit == LimitPolicy::Respect && host.grill_limit().is_some() {
+        return Err(End::GrillLimit);
+    }
     let agent = match agent {
         Some(agent) => agent,
         None => host.agent().await.map_err(End::Failed)?,

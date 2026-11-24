@@ -3,6 +3,7 @@
 import { toast } from "@grill/ui/toast";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { allowOverLimit, useLimitOutlook } from "@/data/agent-limit";
 import {
   type CallSession,
   finishCall,
@@ -25,7 +26,7 @@ import {
 import { showFloatingWindow } from "@/features/shell/api";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
-
+import { OVER_LIMIT_ACTION } from "../agent-state";
 import {
   actOnQuestion,
   type CallAgentUpdate,
@@ -107,6 +108,7 @@ export const CALL_DEMO_STATES = [
   "mic-released",
   "agent-timeout",
   "limit-reached",
+  "grill-limit",
   "transcript-lag",
   "no-system-audio",
   "github-unavailable",
@@ -226,6 +228,14 @@ function openStartWidget() {
   showFloatingWindow(routes.startWidget());
 }
 
+function overLimitFailed() {
+  toast.add({
+    description: "Попробуйте ещё раз через несколько секунд",
+    title: "Не получилось продолжить сверх лимита",
+    type: "error",
+  });
+}
+
 export function CallPage() {
   const router = useRouter();
   const demo = useDemoState(CALL_DEMO_STATES);
@@ -236,6 +246,8 @@ export function CallPage() {
   // build): the window opens its summary.
   const finishingCall = useRef<string | null>(null);
   const { callId, status } = session;
+  // «Звонка нет» warns of the thresholds of Grill, as the start widget does.
+  const limit = useLimitOutlook();
   useEffect(() => {
     if (status === "finishing" && callId) {
       finishingCall.current = callId;
@@ -253,7 +265,13 @@ export function CallPage() {
       return <div aria-busy="true" className="bg-surface h-svh" />;
     }
     if (session.status === "idle") {
-      return <NoCallScreen className="h-svh" onStartCall={openStartWidget} />;
+      return (
+        <NoCallScreen
+          className="h-svh"
+          limit={limit}
+          onStartCall={openStartWidget}
+        />
+      );
     }
   }
   // A forced state starts the window over, and so does a new call (the
@@ -541,6 +559,12 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
         case "retry":
           retry();
           break;
+        case OVER_LIMIT_ACTION:
+          // The agent's next status resumes the questions.
+          if (recordingId) {
+            allowOverLimit(recordingId).catch(overLimitFailed);
+          }
+          break;
         case "remind":
           toast.add({
             description: "Когда лимит обновится, вопросы пойдут снова",
@@ -575,7 +599,7 @@ function LiveCallWindow({ demo }: { demo: CallDemoState | undefined }) {
           break;
       }
     },
-    [retry, track]
+    [recordingId, retry, track]
   );
 
   const onReconnect = useCallback(

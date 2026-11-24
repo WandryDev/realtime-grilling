@@ -87,7 +87,12 @@ impl<R: Runtime> CallHost for AppCallHost<R> {
 
     fn summary_start(&self, call_id: &str) {
         if let Some(builds) = self.app.try_state::<SummaryBuilds>() {
-            summary_run::start(&Arc::new(self.app.clone()), &builds, call_id);
+            summary_run::start(
+                &Arc::new(self.app.clone()),
+                &builds,
+                call_id,
+                crate::agent::limit::LimitPolicy::Respect,
+            );
         }
     }
 

@@ -16,6 +16,7 @@ import {
   type ExportTarget,
   endsBuild,
   finishedStages,
+  GRILL_LIMIT,
   ProjectsBackend,
 } from "./backend";
 import type { RejectedDocument } from "./components/documents-block";
@@ -40,7 +41,10 @@ import type { RejectedDocument } from "./components/documents-block";
 export interface BriefBuild {
   /** Collapsed to the background: a toast tells when it is ready. */
   background: boolean;
-  /** Why it failed (`status: "failed"`). */
+  /**
+   * Why it failed (`status: "failed"`); `GRILL_LIMIT` when a threshold of
+   * Grill held it back before the agent.
+   */
   error?: string;
   projectName: string;
   /** Finished stages, 0…BRIEF_BUILD_STAGES. */
@@ -95,9 +99,9 @@ const projectDeleted = (projectId: string) =>
   );
 
 const buildBrief = Effect.fn("buildBrief")(
-  function* (projectId: string) {
+  function* (projectId: string, overLimit: boolean) {
     const backend = yield* ProjectsBackend;
-    yield* backend.buildBrief(projectId).pipe(
+    yield* backend.buildBrief(projectId, overLimit).pipe(
       Stream.onStart(Effect.sync(refreshMockStores)),
       Stream.runForEach((stage) =>
         Effect.sync(() => {
@@ -131,6 +135,19 @@ const buildBrief = Effect.fn("buildBrief")(
           }
           patchBuild(projectId, { error: error.message, status: "failed" });
           refreshMockStores();
+          if (error.message === GRILL_LIMIT) {
+            // The wizard and the project page show the threshold and offer
+            // «Собрать сверх лимита»; only a build in the background tells.
+            if (buildsStore.get()[projectId]?.background) {
+              toast.add({
+                description:
+                  "Бриф можно собрать сверх лимита на странице проекта",
+                title: "Бриф не собран: достигнут лимит Grill",
+                type: "warning",
+              });
+            }
+            return;
+          }
           toast.add({
             description: error.message,
             title: "Не удалось собрать бриф",
@@ -163,12 +180,17 @@ const buildBrief = Effect.fn("buildBrief")(
  * The agent reads the description, the notes, the people and the
  * documents and writes the brief. Runs outside React, so it keeps going
  * when the screen is left. With `background` a toast tells when it is
- * ready; `onOpen` puts "Открыть" in that toast.
+ * ready; `onOpen` puts "Открыть" in that toast. `overLimit` is «Собрать
+ * сверх лимита»: the thresholds of Grill don't hold it back.
  */
 export function startBriefBuild(
   projectId: string,
   projectName: string,
-  options: { background?: boolean; onOpen?: () => void } = {}
+  options: {
+    background?: boolean;
+    onOpen?: () => void;
+    overLimit?: boolean;
+  } = {}
 ) {
   cancelBuild(projectId);
   buildsStore.set((builds) => ({
@@ -183,7 +205,10 @@ export function startBriefBuild(
   if (options.onOpen) {
     openOnReady.set(projectId, options.onOpen);
   }
-  cancelBuilds.set(projectId, runCancelable(buildBrief(projectId)));
+  cancelBuilds.set(
+    projectId,
+    runCancelable(buildBrief(projectId, options.overLimit ?? false))
+  );
 }
 
 /** "Свернуть в фон": the build goes on, a toast tells when it is ready. */
@@ -209,6 +234,8 @@ export function stopBriefBuild(projectId: string) {
 /* ------------------------------------------------ Этапы любой сборки */
 
 export interface BriefStageProgress {
+  /** Why the last build failed; `null` while it runs or when it didn't. */
+  error: string | null;
   /** Finished stages, 0…BRIEF_BUILD_STAGES. */
   finished: number;
   running: boolean;
@@ -232,6 +259,10 @@ function followProgress() {
           progressStore.set((current) => ({
             ...current,
             [progress.projectId]: {
+              error:
+                progress.state.status === "failed"
+                  ? progress.state.message
+                  : null,
               finished: finishedStages(progress),
               running,
             },

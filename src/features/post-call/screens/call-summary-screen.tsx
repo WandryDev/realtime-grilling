@@ -66,9 +66,16 @@ import {
 
 /** «Итоги не собраны»: why, and «Собрать итоги». */
 export interface SummaryFailure {
+  /**
+   * Under the reason, before what is kept: the threshold of Grill that
+   * held the build back and when it resets.
+   */
+  detail?: string;
   onRebuild?: () => void;
   /** «Итоги не собраны: <reason>». */
   reason: string;
+  /** The rebuild's button; «Собрать итоги» by default. */
+  rebuildLabel?: string;
 }
 
 function ProcessingAside() {
@@ -146,13 +153,14 @@ function FailureNotice({ failure }: { failure: SummaryFailure }) {
     <Alert variant="warning">
       <AlertTitle>{`Итоги не собраны: ${failure.reason}`}</AlertTitle>
       <AlertDescription>
+        {failure.detail ? `${failure.detail} ` : null}
         Расшифровка, вопросы и карточки звонка сохранены. Итоги можно собрать
         снова.
       </AlertDescription>
       {failure.onRebuild ? (
         <AlertAction>
           <Button onClick={failure.onRebuild} size="sm">
-            Собрать итоги
+            {failure.rebuildLabel ?? "Собрать итоги"}
           </Button>
         </AlertAction>
       ) : null}

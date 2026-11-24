@@ -1239,7 +1239,7 @@ mod acl {
         "data_summary",
         "data_delete_all",
         "agent_check_path",
-        "agent_usage",
+        "agent_limit_refresh",
         "audio_inputs_get",
         "audio_inputs_start",
         "audio_inputs_stop",
@@ -1501,6 +1501,8 @@ fn capabilities_match_the_command_list() {
         "projects_overview",
         "brief_prepare",
         "summary_get",
+        "agent_limit_get",
+        "agent_limit_override",
     ] {
         assert!(
             floating.iter().any(|command| command == needed),
@@ -1544,7 +1546,7 @@ fn capabilities_match_the_command_list() {
         "audio_inputs_start",
         "audio_inputs_stop",
         "agent_check_path",
-        "agent_usage",
+        "agent_limit_refresh",
         "recordings_info",
         "data_summary",
         "data_delete_all",

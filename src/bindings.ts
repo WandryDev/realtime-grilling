@@ -33,10 +33,11 @@ export const commands = {
 	/**
 	 *  Starts building the project's brief with the agent, in the background,
 	 *  and returns at once: `BriefProgress` follows the stages (1…5) to `done`,
-	 *  `failed` or `cancelled`. While a build of the project runs, does nothing
+	 *  `failed` or `cancelled`. A reached threshold of Grill fails it before
+	 *  the agent (`grillLimit`) unless `overLimit` («Собрать сверх лимита»). While a build of the project runs, does nothing
 	 *  (follow that one). `NotFound` for an unknown project.
 	 */
-	briefBuild: (projectId: string) => typedError<null, CommandError>(__TAURI_INVOKE("brief_build", { projectId })),
+	briefBuild: (projectId: string, overLimit: boolean) => typedError<null, CommandError>(__TAURI_INVOKE("brief_build", { projectId, overLimit })),
 	/**
 	 *  Stops the project's build and kills the agent; the old brief stays.
 	 *  Nothing when none runs.
@@ -277,10 +278,23 @@ export const commands = {
 	 */
 	agentCheckPath: (path: string) => typedError<AgentState, CommandError>(__TAURI_INVOKE("agent_check_path", { path })),
 	/**
-	 *  The last known share of the subscription limit, from the newest agent
-	 *  call that reported one; `null` without any.
+	 *  The share of the subscription limit of both windows, the thresholds of
+	 *  Grill and the outlook (agent-limit-guard design.md, decision 4).
+	 *  `SubscriptionLimitChanged` follows every change.
 	 */
-	agentUsage: () => typedError<AgentUsage | null, CommandError>(__TAURI_INVOKE("agent_usage")),
+	agentLimitGet: () => typedError<SubscriptionLimitView, CommandError>(__TAURI_INVOKE("agent_limit_get")),
+	/**
+	 *  «Проверить»: polls `/usage` now (joining a poll that runs) when the
+	 *  agent is ready, and returns the share as it is then. A poll that
+	 *  failed keeps the measures; never calls the model.
+	 */
+	agentLimitRefresh: () => typedError<SubscriptionLimitView, CommandError>(__TAURI_INVOKE("agent_limit_refresh")),
+	/**
+	 *  «Продолжить сверх лимита»: the thresholds of Grill no longer stop the
+	 *  calls of the recording, until it ends. Neither the summary nor the
+	 *  brief build follow it.
+	 */
+	agentLimitOverride: (recordingId: string) => typedError<null, CommandError>(__TAURI_INVOKE("agent_limit_override", { recordingId })),
 	/**
 	 *  Subscribes the calling window to `AudioLevel` of a source, opening the
 	 *  device if no window listens to it yet. `External` with `reason`
@@ -372,11 +386,13 @@ export const commands = {
 	/**
 	 *  «Собрать итоги»: builds the summary of a finished call again, in the
 	 *  background, and returns at once; `SummaryProgress` follows the stages.
+	 *  `overLimit` («Собрать сверх лимита») builds it whatever the thresholds
+	 *  of Grill; otherwise a reached one leaves it `failed` / `grillLimit`.
 	 *  The previous summary stays until the new one is saved. While a build
 	 *  of the call runs, does nothing (follow that one). `NotFound` for an
 	 *  unknown call, `Invalid` for a live one.
 	 */
-	summaryBuild: (callId: string) => typedError<null, CommandError>(__TAURI_INVOKE("summary_build", { callId })),
+	summaryBuild: (callId: string, overLimit: boolean) => typedError<null, CommandError>(__TAURI_INVOKE("summary_build", { callId, overLimit })),
 	/**
 	 *  «Остановить»: the call's build stops (its agent is killed, nothing is
 	 *  saved), its summary is `failed` / `cancelled` and the call `finished`;
@@ -580,6 +596,7 @@ export const events = {
 	recordingLevels: makeEvent<RecordingLevels, RecordingLevels>("recording-levels"),
 	shortcutPressed: makeEvent<ShortcutPressed, ShortcutPressed>("shortcut-pressed"),
 	speechModelChanged: makeEvent<SpeechModelChanged, SpeechModelChanged>("speech-model-changed"),
+	subscriptionLimitChanged: makeEvent<SubscriptionLimitChanged, SubscriptionLimitChanged>("subscription-limit-changed"),
 	summaryProgress: makeEvent<SummaryProgress, SummaryProgress>("summary-progress"),
 	transcriptDropped: makeEvent<TranscriptDropped, TranscriptDropped>("transcript-dropped"),
 	transcriptLag: makeEvent<TranscriptLag, TranscriptLag>("transcript-lag"),
@@ -631,7 +648,12 @@ export type AgentLoopState =
  *  The subscription limit is used up; `resetsAt` (Unix ms) when known.
  *  Calls resume after it.
  */
-{ kind: "rateLimited"; resetsAt: number | null };
+{ kind: "rateLimited"; resetsAt: number | null } | 
+/**
+ *  A threshold of Grill is reached (agent-limit-guard): no calls until
+ *  it lets go or «Продолжить сверх лимита» (`agent_limit_override`).
+ */
+{ kind: "grillLimit"; hit: LimitHit };
 
 export type AgentState = { status: "notInstalled" } | { status: "needsLogin"; version: string } | { status: "ready"; version: string; 
 /**  `pro`, `max`, `team`…; `null` when the CLI doesn't say. */
@@ -653,17 +675,6 @@ export type AgentStatus = {
 	recordingId: string,
 	state: AgentLoopState,
 	utilization?: number | null,
-};
-
-/**
- *  The last known share of the subscription limit (settings-real design.md,
- *  decision 7).
- */
-export type AgentUsage = {
-	/**  0–1, as the CLI reported it. */
-	utilization: number,
-	/**  When the call that reported it was recorded, ms since the Unix epoch. */
-	measuredAt: number,
 };
 
 /**  The microphones and the choice, as `audio_inputs_get` returns them. */
@@ -1122,6 +1133,11 @@ export type CallSessionStatus = "idle" | "live" | "finishing";
 export type CallStart = {
 	projectId?: string | null,
 	participantIds?: string[] | null,
+	/**
+	 *  «Начать сверх лимита»: the thresholds of Grill don't stop the
+	 *  call's agent (agent-limit-guard design.md, decision 9).
+	 */
+	overLimit?: boolean | null,
 };
 
 /**  Everything the windows and the agent need about a recording's call. */
@@ -1584,6 +1600,54 @@ export type KeyDocument = {
 	title: string,
 	why: string,
 };
+
+/**  A window at or near its threshold. */
+export type LimitHit = {
+	window: LimitWindow,
+	/**  Whole percents used. */
+	used: number,
+	threshold: number,
+	/**  Unix ms, when known. */
+	resetsAt: number | null,
+};
+
+/**  What the measures say of the thresholds (design.md, decision 4). */
+export type LimitOutlook = 
+/**
+ *  Every window with a threshold is at least [`NEAR_MARGIN`] below it,
+ *  or not known.
+ */
+{ kind: "ok" } | 
+/**
+ *  A window is less than [`NEAR_MARGIN`] below its threshold: the one
+ *  closest to it.
+ */
+{ kind: "near"; hit: LimitHit } | 
+/**
+ *  A threshold is reached: the calls stop. With both, the window that
+ *  resets later.
+ */
+{ kind: "reached"; hit: LimitHit };
+
+/**  The thresholds of Grill in percents; `null`: «Без ограничения». */
+export type LimitThresholds = {
+	session: number | null,
+	week: number | null,
+};
+
+/**  The windows the thresholds watch. */
+export type LimitWindow = 
+/**  The 5-hour session. */
+"session" | 
+/**  The week, all models. */
+"week";
+
+/**  Who measured a window. */
+export type MeasureSource = 
+/**  The poll of `/usage`. */
+"usage" | 
+/**  The limit event of an agent call. */
+"call";
 
 /**
  *  Whether another app captures from an input. Sent to every window on
@@ -2167,6 +2231,28 @@ export type SpeechModel = {
 export type SpeechModelChanged = SpeechModel;
 
 /**
+ *  The share of the limit, its thresholds or its outlook changed. To
+ *  every window.
+ */
+export type SubscriptionLimitChanged = {
+	limit: SubscriptionLimitView,
+};
+
+/**
+ *  The share of the limit as the windows show it: `call_agent_limit_get`
+ *  and every change.
+ */
+export type SubscriptionLimitView = {
+	/**  `null`: «нет данных». */
+	session: WindowMeasure | null,
+	week: WindowMeasure | null,
+	thresholds: LimitThresholds,
+	outlook: LimitOutlook,
+	/**  A poll of `/usage` runs. */
+	checking: boolean,
+};
+
+/**
  *  The task card of a summary topic. The manager's decision and title live
  *  here ([`update_card`]).
  */
@@ -2481,6 +2567,17 @@ export type Value = null | boolean | number | string | Value[] | { [key in strin
 
 /**  A window a screen can hand over to. */
 export type WindowLabel = "main" | "widget" | "overlay";
+
+/**  A window's last measure as the windows show it. */
+export type WindowMeasure = {
+	/**  Whole percents used, 0–100; 0 once the reset time passed. */
+	used: number,
+	/**  Unix ms; `null` when unknown, or once it passed. */
+	resetsAt: number | null,
+	/**  When it was measured, Unix ms. */
+	measuredAt: number,
+	source: MeasureSource,
+};
 
 /**
  *  A workspace a secret opens, to pick one when it opens several

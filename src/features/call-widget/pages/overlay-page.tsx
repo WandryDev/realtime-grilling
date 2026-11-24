@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import type { CallState } from "@/bindings";
+import { allowOverLimit } from "@/data/agent-limit";
 import {
   type CallSession,
   CURRENT_CALL_ID,
@@ -24,6 +25,7 @@ import { inTauri } from "@/effect/runtime";
 import {
   type AgentQuestions,
   type AgentStatusView,
+  grillLimitTitle,
   toAgentQuestions,
   toAgentStatusView,
 } from "@/features/call/agent-state";
@@ -40,6 +42,7 @@ import {
   useRecordingSignal,
 } from "@/features/recording/api";
 import { useOpenRoute } from "@/features/shell/api";
+import { resetLine } from "@/lib/agent-limit";
 import { routes } from "@/lib/routes";
 import { useDemoState } from "@/lib/use-demo-state";
 
@@ -266,6 +269,14 @@ function useAgentQuestions(recordingId: string | undefined, enabled: boolean) {
   return { state, status, view };
 }
 
+function overLimitFailed() {
+  toast.add({
+    description: "Попробуйте ещё раз через несколько секунд",
+    title: "Не получилось продолжить сверх лимита",
+    type: "error",
+  });
+}
+
 function hideFailed(description: string | null) {
   if (description !== null) {
     toast.add({ description, title: "Не получилось скрыть", type: "error" });
@@ -389,6 +400,7 @@ type QuestionProps = Pick<
   | "agentState"
   | "agentTone"
   | "finalCheckMore"
+  | "limitNotice"
   | "mainLabel"
   | "mainQuestion"
   | "mainQuestionId"
@@ -472,6 +484,7 @@ function useOverlayQuestions(
 
   if (backend) {
     const stopped = agent.status?.banner ? agent.status.agent : null;
+    const limit = agent.status?.grillLimit;
     return {
       finalCheck: backend.finalCheckMore !== undefined,
       questions: {
@@ -479,6 +492,16 @@ function useOverlayQuestions(
         agentState: agent.status?.thinking ? "thinking" : "listening",
         agentTone: stopped?.tone,
         finalCheckMore: backend.finalCheckMore,
+        limitNotice:
+          limit && recordingId
+            ? {
+                hint: resetLine(limit.resetsAt),
+                onContinue: () => {
+                  allowOverLimit(recordingId).catch(overLimitFailed);
+                },
+                title: grillLimitTitle(limit),
+              }
+            : undefined,
         mainLabel: backend.main?.label,
         mainQuestion: backend.main?.title ?? null,
         mainQuestionId: backend.main?.id,

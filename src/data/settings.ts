@@ -23,6 +23,12 @@ import { createSyncedStore } from "./synced-store";
  */
 
 export interface SettingsValues {
+  /**
+   * The thresholds of Grill on the subscription limit: "90" | "80" | "70" |
+   * "50" percents, or "off" («Без ограничения»).
+   */
+  agentLimitSession: string;
+  agentLimitWeek: string;
   /** The agent CLI; `null`: Rust finds it by itself. */
   agentPath: string | null;
   /** Days, "7" | "30" | "90", or "never". */
@@ -71,6 +77,8 @@ export const DEFAULT_SHORTCUTS: Record<string, string[]> = Object.fromEntries(
 
 /** The defaults of `settings::defaults` in Rust. */
 export const DEFAULT_SETTINGS: SettingsValues = {
+  agentLimitSession: "90",
+  agentLimitWeek: "80",
   agentPath: null,
   audioRetention: "never",
   autoEnd: "10",

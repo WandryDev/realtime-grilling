@@ -618,6 +618,47 @@ describe("the agent's status in Tauri", () => {
     expect(call.getByText("лимит исчерпан")).toBeTruthy();
   });
 
+  it("shows the threshold of Grill in both windows; «Продолжить сверх лимита» goes past it", async () => {
+    const resetsAt = new Date(2026, 10, 24, 14, 9).getTime();
+    vi.useFakeTimers({
+      now: new Date(2026, 10, 24, 12, 0).getTime(),
+      shouldAdvanceTime: true,
+      toFake: ["Date"],
+    });
+    setBackend(crmState());
+    const { call, overlay } = await openBoth();
+
+    await agentStatus({
+      hit: { resetsAt, threshold: 90, used: 91, window: "session" },
+      kind: "grillLimit",
+    });
+    const banner = await call.findByRole("alert");
+    expect(banner.textContent).toContain("Лимит Grill: сессия 91 % из 90 %");
+    expect(banner.textContent).toContain("сброс в 14:09");
+    expect(call.getByText("лимит Grill")).toBeTruthy();
+    const notice = overlay.getByRole("region", { name: "Лимит Grill" });
+    expect(notice.textContent).toContain("Лимит Grill: сессия 91 % из 90 %");
+    expect(notice.textContent).toContain("сброс в 14:09");
+
+    fireEvent.click(
+      within(banner).getByRole("button", { name: "Продолжить сверх лимита" })
+    );
+    fireEvent.click(
+      within(notice).getByRole("button", { name: "Продолжить сверх лимита" })
+    );
+    await waitFor(() =>
+      expect(invokedWith("agent_limit_override")).toEqual([
+        { recordingId: RECORDING },
+        { recordingId: RECORDING },
+      ])
+    );
+
+    // The backend resumes the agent: both notices go.
+    await agentStatus({ kind: "idle" });
+    expect(call.queryByRole("alert")).toBeNull();
+    expect(overlay.queryByRole("region", { name: "Лимит Grill" })).toBeNull();
+  });
+
   it("shows the overlay's agent stopped", async () => {
     setBackend(crmState(), { kind: "needsLogin" });
     const overlay = within(render(<OverlayPage />).container);

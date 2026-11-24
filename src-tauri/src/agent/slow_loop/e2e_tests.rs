@@ -259,6 +259,13 @@ fn a_recording_with_an_outline_source_gets_a_finding() {
         slow_loop.phrase(&rig.recording, TranscriptChannel::Others, CLIENT, None);
         rig.until("a recorded call", |rig| !rig.slow_calls().is_empty())
             .await;
+        // The call is journaled before the scheduler hears that it ended.
+        rig.until("the end of the call", |_| {
+            slow_loop
+                .search(&rig.recording)
+                .is_some_and(|search| !search.running)
+        })
+        .await;
 
         let view = rig
             .loop_host

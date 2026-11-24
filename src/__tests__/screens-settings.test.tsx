@@ -72,8 +72,11 @@ describe("settings screens", () => {
     expect(screen.getByText("найден автоматически")).toBeTruthy();
     expect(screen.getByText("2.1.14")).toBeTruthy();
     expect(screen.getByText("Выполнен, подписка Max")).toBeTruthy();
-    expect(screen.getByRole("progressbar")).toBeTruthy();
+    // The session and the week, each with its share.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(2);
     expect(screen.getByText("Использовано 38 %")).toBeTruthy();
+    expect(screen.getByText("Использовано 21 %")).toBeTruthy();
+    expect(screen.getByText("Лимит Grill")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Выйти" })).toBeNull();
     expect(screen.queryByText("Финальная проверка")).toBeNull();
     expect(

@@ -9,6 +9,7 @@ import {
 import { type BackendError, call } from "@/effect/tauri";
 import { SHORTCUTS } from "@/features/settings/mock";
 
+import { mockAgentLimit, thresholdOf } from "./agent-limit";
 import { invalid, MOCK_SETTINGS_KEY, MockDatabase } from "./mock-database";
 import { NEVER, settingProblem } from "./setting-checks";
 
@@ -59,6 +60,15 @@ export class SettingsData extends Context.Service<
         ...MOCK_DEFAULTS,
         ...Object.fromEntries(tables.settings),
       });
+      // The thresholds of Grill act at once, as Rust's `settings_update`.
+      const applyThresholds = () => {
+        const settings = read();
+        mockAgentLimit.setThresholds({
+          session: thresholdOf(settings.agentLimitSession),
+          week: thresholdOf(settings.agentLimitWeek),
+        });
+      };
+      applyThresholds();
 
       const update = Effect.fnUntraced(function* (patch: SettingsMap) {
         yield* validate(patch);
@@ -90,6 +100,9 @@ export class SettingsData extends Context.Service<
           tables.settings.set(key, value);
         }
         persist(tables.settings);
+        if ("agentLimitSession" in patch || "agentLimitWeek" in patch) {
+          applyThresholds();
+        }
         if (Object.keys(patch).length > 0) {
           yield* database.emit("settings", "settings", null, "updated");
         }
@@ -116,6 +129,8 @@ export const ONBOARDING_COMPLETED = "onboardingCompleted";
 /** Defaults of the keys Rust acts on, as `settings_get` returns them. */
 const MOCK_DEFAULTS: SettingsMap = {
   [ONBOARDING_COMPLETED]: false,
+  agentLimitSession: "90",
+  agentLimitWeek: "80",
   audioRetention: NEVER,
   autoEnd: "10",
   compactOverlay: true,

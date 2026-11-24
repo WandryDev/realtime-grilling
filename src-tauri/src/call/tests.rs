@@ -302,6 +302,7 @@ impl Fixture {
             .start(CallStart {
                 project_id: project_id.map(str::to_owned),
                 participant_ids: Some(people.iter().map(|id| (*id).to_owned()).collect()),
+                ..CallStart::default()
             })
             .await
             .unwrap()
@@ -405,6 +406,7 @@ async fn no_microphone_access_leaves_no_call() {
         .start(CallStart {
             project_id: Some(exchange),
             participant_ids: None,
+            ..CallStart::default()
         })
         .await
         .unwrap_err();
@@ -437,6 +439,7 @@ async fn an_invalid_start_records_nothing() {
         .start(CallStart {
             project_id: Some(exchange),
             participant_ids: Some(vec![marina]),
+            ..CallStart::default()
         })
         .await
         .unwrap_err();

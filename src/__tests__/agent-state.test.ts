@@ -8,6 +8,7 @@ import {
   withFooters,
 } from "@/features/call/agent-state";
 import type { TranscriptItem } from "@/features/call/types";
+import { resetLine } from "@/lib/agent-limit";
 
 import {
   at,
@@ -485,6 +486,28 @@ describe("toAgentStatusView", () => {
       expect.objectContaining({ href: "/settings/agent" }),
     ]);
     expect(view.agent.label).toBe("нужен вход");
+  });
+
+  it("names the window, the share and the threshold of Grill", () => {
+    const resetsAt = at(180);
+    const view = toAgentStatusView(
+      status({
+        hit: { resetsAt, threshold: 90, used: 91, window: "session" },
+        kind: "grillLimit",
+      }),
+      LATER
+    );
+    expect(view).toMatchObject({
+      agent: { label: "лимит Grill" },
+      banner: {
+        actions: [{ id: "over-limit", label: "Продолжить сверх лимита" }],
+        title: "Лимит Grill: сессия 91 % из 90 %",
+      },
+      frozen: true,
+      grillLimit: { threshold: 90, used: 91, window: "session" },
+      retryIn: null,
+    });
+    expect(view.banner?.hint?.text).toBe(resetLine(resetsAt, LATER));
   });
 
   it("names the reset time of a used-up limit", () => {

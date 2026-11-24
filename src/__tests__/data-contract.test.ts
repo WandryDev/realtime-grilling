@@ -751,6 +751,15 @@ function dataContract(
             yield* failureKind(settings.update({ hideOnShare: "yes" })),
             "Invalid"
           );
+          // The thresholds of Grill (agent-limit-guard): 90 % and 80 %.
+          assert.strictEqual(defaults.agentLimitSession, "90");
+          assert.strictEqual(defaults.agentLimitWeek, "80");
+          assert.strictEqual(
+            yield* failureKind(settings.update({ agentLimitWeek: "85" })),
+            "Invalid"
+          );
+          const off = yield* settings.update({ agentLimitSession: "off" });
+          assert.strictEqual(off.settings.agentLimitSession, "off");
           yield* settings.completeOnboarding;
           assert.strictEqual((yield* settings.get).onboardingCompleted, true);
         })
@@ -842,7 +851,7 @@ function postCallContract(
             assert.strictEqual(failed?.error, "interrupted");
             assert.strictEqual(failed?.content, null);
             assert.strictEqual(
-              yield* failureKind(summaries.build(live.id)),
+              yield* failureKind(summaries.build(live.id, false)),
               "Invalid"
             );
           })
@@ -860,9 +869,9 @@ function postCallContract(
           const readProgress = yield* recordProgress;
           const readChanges = yield* recordChanges;
 
-          yield* summaries.build(finished.id);
+          yield* summaries.build(finished.id, false);
           // A second start while it runs does nothing.
-          yield* summaries.build(finished.id);
+          yield* summaries.build(finished.id, false);
           const building = yield* summaries.get(finished.id);
           assert.strictEqual(building.summary?.state, "building");
           assert.strictEqual(building.building?.stage, "transcript");
@@ -935,7 +944,7 @@ function postCallContract(
           const proposals = yield* ProposalsData;
           const before = yield* proposals.list(DEMO_CALL_ID);
           const decided = before.filter((item) => item.decision !== "pending");
-          yield* summaries.build(DEMO_CALL_ID);
+          yield* summaries.build(DEMO_CALL_ID, false);
           // A rebuild keeps the saved summary while it runs.
           const running = yield* summaries.get(DEMO_CALL_ID);
           assert.strictEqual(running.summary?.state, "building");
@@ -964,7 +973,7 @@ function postCallContract(
           const summaries = yield* SummaryData;
           const readProgress = yield* recordProgress;
           const saved = (yield* summaries.get(DEMO_CALL_ID)).summary;
-          yield* summaries.build(DEMO_CALL_ID);
+          yield* summaries.build(DEMO_CALL_ID, false);
           yield* TestClock.adjust(MOCK_STAGE_MS);
           yield* summaries.cancel(DEMO_CALL_ID);
           yield* TestClock.adjust(MOCK_STAGE_MS * 5);

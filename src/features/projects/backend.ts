@@ -18,6 +18,7 @@ import {
   commands,
   events,
 } from "@/bindings";
+import { mockAgentLimit } from "@/data/services/agent-limit";
 import {
   briefFingerprint,
   MockDatabase,
@@ -37,12 +38,26 @@ import { type BackendError, call, subscribe } from "@/effect/tauri";
  *   leaving the screen (or "Свернуть") doesn't stop it, `cancel` does.
  * - `layerMock` plays the agent with timers over the mock database and
  *   sends the same `BriefProgress` as Rust: the project reads `building`
- *   meanwhile, and the brief it writes is fresh.
+ *   meanwhile, and the brief it writes is fresh. A threshold of Grill
+ *   reached in `mockAgentLimit` fails it before the agent, as Rust does.
+ *
+ * A build without `overLimit` ends `failed` / `GRILL_LIMIT` at stage 2
+ * while a threshold of Grill is reached; «Собрать сверх лимита» passes
+ * `overLimit` and builds past it (agent-limit-guard design.md, decision 8).
  */
 
 export class BriefError extends Schema.TaggedError<BriefError>()("BriefError", {
   message: Schema.String,
 }) {}
+
+/**
+ * The `message` of a build a threshold of Grill held back
+ * (`projects::brief::run::GRILL_LIMIT` in Rust).
+ */
+export const GRILL_LIMIT = "grillLimit";
+
+/** Rust's stage of «Собираю бриф» whose start asks the thresholds. */
+const LIMIT_STAGE = 2;
 
 /** The build was stopped ("Остановить", here or in another window). */
 export class BriefCancelled extends Schema.TaggedError<BriefCancelled>()(
@@ -78,11 +93,13 @@ export class ProjectsBackend extends Context.Service<
      * emits the number of finished stages and ends when the brief is saved.
      */
     readonly buildBrief: (
-      projectId: string
+      projectId: string,
+      overLimit: boolean
     ) => Stream.Stream<number, BriefError | BriefCancelled>;
     /** "Обновить": the same build, to its end. */
     readonly refreshBrief: (
-      projectId: string
+      projectId: string,
+      overLimit: boolean
     ) => Effect.Effect<void, BriefError | BriefCancelled>;
     /** "Остановить": the agent stops, the old brief stays. */
     readonly cancel: (projectId: string) => Effect.Effect<void>;
@@ -175,7 +192,8 @@ export class ProjectsBackend extends Context.Service<
         Queue.offerUnsafe(queue, progress);
       })
     ).pipe(Stream.catch(() => Stream.empty)),
-    refreshBrief: (projectId) => Stream.runDrain(tauriBuildBrief(projectId)),
+    refreshBrief: (projectId, overLimit) =>
+      Stream.runDrain(tauriBuildBrief(projectId, overLimit)),
   });
 
   static readonly layerMock = Layer.effect(
@@ -205,7 +223,8 @@ export class ProjectsBackend extends Context.Service<
         );
 
       const run = (
-        projectId: string
+        projectId: string,
+        overLimit: boolean
       ): Stream.Stream<number, BriefError | BriefCancelled> =>
         Stream.unwrap(
           Effect.gen(function* (): Effect.fn.Return<
@@ -226,12 +245,22 @@ export class ProjectsBackend extends Context.Service<
             yield* projectChanged(projectId);
             // The stage running now, for the cancel.
             let current = 0;
+            // Ended `failed` by the threshold: not a cancel.
+            let held = false;
             return Stream.range(1, BRIEF_BUILD_STAGES).pipe(
               // The same events as Rust: each stage runs, then is done.
               Stream.mapEffect((stage) =>
                 Effect.gen(function* () {
                   current = stage;
                   yield* publish(projectId, stage, { status: "running" });
+                  if (stage === LIMIT_STAGE && !overLimit && limitReached()) {
+                    held = true;
+                    yield* publish(projectId, stage, {
+                      message: GRILL_LIMIT,
+                      status: "failed",
+                    });
+                    return yield* new BriefError({ message: GRILL_LIMIT });
+                  }
                   yield* Effect.sleep(MOCK_STAGE);
                   // Deleting a project stops its build, as in Rust.
                   if (!tables.projects.has(projectId)) {
@@ -249,7 +278,7 @@ export class ProjectsBackend extends Context.Service<
               Stream.onExit((exit) =>
                 Effect.gen(function* () {
                   tables.building.delete(projectId);
-                  if (!Exit.isSuccess(exit)) {
+                  if (!(Exit.isSuccess(exit) || held)) {
                     yield* publish(projectId, Math.max(current, 1), {
                       status: "cancelled",
                     });
@@ -280,8 +309,10 @@ export class ProjectsBackend extends Context.Service<
         tables.briefInputs.set(projectId, inputs);
       });
 
-      const buildBrief = (projectId: string) =>
-        tables.building.has(projectId) ? follow(projectId) : run(projectId);
+      const buildBrief = (projectId: string, overLimit: boolean) =>
+        tables.building.has(projectId)
+          ? follow(projectId)
+          : run(projectId, overLimit);
 
       return ProjectsBackend.of({
         buildBrief,
@@ -309,7 +340,8 @@ export class ProjectsBackend extends Context.Service<
         prepareBrief: (projectId) =>
           Effect.gen(function* () {
             const project = tables.projects.get(projectId);
-            if (!project || tables.building.has(projectId)) {
+            // At a threshold of Grill the refresh doesn't start at all.
+            if (!project || tables.building.has(projectId) || limitReached()) {
               return false;
             }
             const outdated =
@@ -322,7 +354,7 @@ export class ProjectsBackend extends Context.Service<
               return false;
             }
             const fiber = yield* Effect.forkDetach(
-              Stream.runDrain(run(projectId)).pipe(
+              Stream.runDrain(run(projectId, false)).pipe(
                 Effect.ignore,
                 Effect.ensuring(Effect.sync(() => background.delete(projectId)))
               ),
@@ -332,14 +364,15 @@ export class ProjectsBackend extends Context.Service<
             return true;
           }),
         progress: Stream.fromPubSub(progress),
-        refreshBrief: (projectId) => Stream.runDrain(buildBrief(projectId)),
+        refreshBrief: (projectId, overLimit) =>
+          Stream.runDrain(buildBrief(projectId, overLimit)),
       });
     })
   );
 }
 
 /** `brief_build`, then the `BriefProgress` of that project to its end. */
-function tauriBuildBrief(projectId: string) {
+function tauriBuildBrief(projectId: string, overLimit: boolean) {
   return buildStages(
     Stream.callback<BriefProgress, BackendError>((queue) =>
       Effect.gen(function* () {
@@ -349,7 +382,7 @@ function tauriBuildBrief(projectId: string) {
             Queue.offerUnsafe(queue, progress);
           }
         });
-        yield* call(() => commands.briefBuild(projectId));
+        yield* call(() => commands.briefBuild(projectId, overLimit));
       })
     ).pipe(
       Stream.mapError((error) => new BriefError({ message: error.message }))
@@ -406,6 +439,11 @@ function buildStages<E>(
       }
     )
   );
+}
+
+/** The mock: whether a threshold of Grill is reached in `mockAgentLimit`. */
+function limitReached() {
+  return mockAgentLimit.view().outlook.kind === "reached";
 }
 
 /** How long a stage of the mock agent takes. */

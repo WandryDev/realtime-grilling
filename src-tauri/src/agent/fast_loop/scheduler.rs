@@ -61,6 +61,7 @@ use crate::{
             self, Agent, AgentError, AgentReply, AgentRequest, CallOptions, OutputKind, Usage,
         },
         halt::{AgentHalt, Halted},
+        limit::{LimitHit, SubscriptionLimit},
         process::TreeSlot,
     },
     error::{CommandError, CommandResult},
@@ -134,6 +135,10 @@ pub struct LoopConfig {
     /// `None` never. A replay may try others (`grill-eval replay
     /// --topic-check`).
     pub topic_check: Option<TopicCheckConfig>,
+    /// The share of the subscription limit, whose thresholds stop the calls
+    /// (agent-limit-guard design.md, decision 5): the app's in the app; a
+    /// fresh one, with no measures, never stops them.
+    pub limit: SubscriptionLimit,
 }
 
 /// When the topic check runs and what it reads.
@@ -169,6 +174,7 @@ impl LoopConfig {
             quiet_minutes: assembly::QUIET_MINUTES,
             min_gap: None,
             topic_check: Some(TopicCheckConfig::default()),
+            limit: SubscriptionLimit::default(),
         }
     }
 }
@@ -328,6 +334,8 @@ impl FastLoop {
     /// The live pass of `recording_id` is over: the running call, if any,
     /// is cancelled, and no other starts.
     pub fn live_finished(&self, recording_id: &str) {
+        // «Сверх лимита» was for this recording only.
+        self.0.config.limit.forget(recording_id);
         let session = lock(&self.0.sessions).remove(recording_id);
         if let Some(session) = session {
             let _ = session.sender.send(Message::Stop);
@@ -516,7 +524,7 @@ impl FastLoop {
                     return;
                 }
                 self.report(&recording_id, AgentLoopState::Idle);
-                let scheduler = Scheduler {
+                let mut scheduler = Scheduler {
                     call: CallContext {
                         fast_loop: self.clone(),
                         recording_id,
@@ -536,6 +544,9 @@ impl FastLoop {
                     last_client_segment: None,
                     after_halt: false,
                 };
+                // «Начать без агента»: a threshold reached before the call
+                // stops it from the start.
+                scheduler.adopt_grill_limit();
                 scheduler.run(receiver).await;
             }
             Err(state) => {
@@ -613,6 +624,9 @@ enum Halt {
     RateLimited {
         until: Option<Instant>,
     },
+    /// A threshold of Grill, until it lets go or the recording goes past
+    /// it (agent-limit-guard design.md, decision 5).
+    GrillLimit,
 }
 
 /// How a call ended, for the scheduler.
@@ -716,6 +730,7 @@ impl Scheduler {
     async fn run(mut self, mut messages: mpsc::UnboundedReceiver<Message>) {
         let mut call: Option<JoinHandle<CallEnd>> = None;
         let mut stopping = false;
+        let mut limit_news = self.call.fast_loop.0.config.limit.subscribe();
         while !(stopping && call.is_none()) {
             let idle = call.is_none() && !stopping;
             let retry_at = self.retry_at.filter(|_| idle && self.halt.is_none());
@@ -732,9 +747,13 @@ impl Scheduler {
                     Some(Message::Retry) => {
                         if call.is_none() {
                             // The user asks for a call: whatever stopped
-                            // them is tried again.
+                            // them is tried again, but a threshold of Grill
+                            // lets go only by itself or «сверх лимита».
                             self.call.fast_loop.0.halt.clear();
-                            call = Some(self.start_call(CallTrigger::ManualRetry));
+                            self.halt = self.halt.filter(|halt| *halt == Halt::GrillLimit);
+                            if !self.adopt_grill_limit() {
+                                call = Some(self.start_call(CallTrigger::ManualRetry));
+                            }
                         }
                     }
                     Some(Message::Resume) => {
@@ -757,7 +776,14 @@ impl Scheduler {
                     self.call.fast_loop.call_ended(&self.call.recording_id);
                     if !stopping {
                         self.finish(end);
+                        // Its limit event may have reached a threshold.
+                        if self.halt.is_none() {
+                            self.adopt_grill_limit();
+                        }
                     }
+                }
+                Ok(()) = limit_news.changed(), if !stopping => {
+                    self.limit_changed(call.is_none());
                 }
                 () = sleep_until(retry_at) => {
                     if !self.adopt_halt() {
@@ -790,15 +816,64 @@ impl Scheduler {
         self.call.fast_loop.forget(&self.call.recording_id);
     }
 
+    /// The threshold of Grill that stops this recording's calls now.
+    fn grill_limit(&self) -> Option<LimitHit> {
+        self.call
+            .fast_loop
+            .0
+            .config
+            .limit
+            .blocks(&self.call.recording_id)
+    }
+
+    /// A threshold of Grill stops the calls: the loop stops and says so.
+    /// `true` when it did.
+    fn adopt_grill_limit(&mut self) -> bool {
+        let Some(hit) = self.grill_limit() else {
+            return false;
+        };
+        self.halt = Some(Halt::GrillLimit);
+        self.report_changed(AgentLoopState::GrillLimit { hit });
+        true
+    }
+
+    /// The share of the limit, the thresholds or the recording's «сверх
+    /// лимита» changed: a threshold that let go resumes the calls, and the
+    /// conversation of the pause goes into the next one; one reached while
+    /// no call runs stops them now.
+    fn limit_changed(&mut self, idle: bool) {
+        match (self.halt, self.grill_limit()) {
+            (Some(Halt::GrillLimit), None) => {
+                self.halt = None;
+                self.after_halt = true;
+                self.report(AgentLoopState::Idle);
+            }
+            (Some(Halt::GrillLimit), Some(hit)) => {
+                self.report_changed(AgentLoopState::GrillLimit { hit });
+            }
+            (None, Some(_)) if idle => {
+                self.adopt_grill_limit();
+            }
+            _ => {}
+        }
+    }
+
+    /// [`Self::report`] unless the windows have this state already.
+    fn report_changed(&self, state: AgentLoopState) {
+        if self.call.fast_loop.status(&self.call.recording_id).state != state {
+            self.report(state);
+        }
+    }
+
     /// A call of the slow loop stopped the calls (agent-slow-loop design.md,
-    /// decision 1): this loop stops too, and says so, instead of starting
-    /// one. `true` when it did.
+    /// decision 1), or a threshold of Grill did: this loop stops too, and
+    /// says so, instead of starting one. `true` when it did.
     fn adopt_halt(&mut self) -> bool {
         if self.halt.is_some() {
             return false;
         }
         let Some(halted) = self.call.fast_loop.0.halt.active() else {
-            return false;
+            return self.adopt_grill_limit();
         };
         match halted {
             Halted::NeedsLogin => {

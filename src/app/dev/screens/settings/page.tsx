@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { AGENT_LIMIT_REACHED } from "@/features/settings/mock";
 import { AgentSettingsScreen } from "@/features/settings/screens/agent-settings";
 import { AudioSettingsScreen } from "@/features/settings/screens/audio-settings";
 import { GeneralSettingsScreen } from "@/features/settings/screens/general-settings";
@@ -46,9 +47,18 @@ const FRAMES: SettingsFrame[] = [
   {
     height: HEIGHT,
     id: "agent",
-    note: "Статус спрашивается у Claude Code при открытии раздела и по «Проверить снова». Путь без сохранённого — «найден автоматически»; «Указать другой» сначала проверяет CLI по пути. Без входа — «нужен вход» и «Войти» тем же потоком, что в онбординге. Лимит — последняя доля из вызовов агента со временем замера, от 90 % полоска красная, без замеров «нет данных». Изменения частоты и количества вопросов применяются к следующему звонку.",
+    note: "Статус спрашивается у Claude Code при открытии раздела и по «Проверить снова». Путь без сохранённого — «найден автоматически»; «Указать другой» сначала проверяет CLI по пути. Без входа — «нужен вход» и «Войти» тем же потоком, что в онбординге. Лимит подписки — доля сессии и недели со временем сброса и замера: бесплатный опрос /usage при запуске, раз в 10 минут и по «Проверить снова», а между ними событие лимита из каждого вызова агента. Без замеров «нет данных». «Лимит Grill» задаёт пороги: по умолчанию 90 % сессии и 80 % недели, новый порог действует сразу, и в идущем звонке тоже. Изменения частоты и количества вопросов применяются к следующему звонку.",
     render: (className) => <AgentSettingsScreen className={className} />,
     title: "18 Настройки — агент",
+  },
+  {
+    height: HEIGHT,
+    id: "agent-limit-reached",
+    note: "Сессия прошла порог Grill (94 % из 90 %) → её полоска и подпись красные: агент ждёт сброса, в звонке можно продолжить сверх лимита.",
+    render: (className) => (
+      <AgentSettingsScreen className={className} limit={AGENT_LIMIT_REACHED} />
+    ),
+    title: "18 Настройки — агент, лимит Grill исчерпан",
   },
   {
     height: "auto",

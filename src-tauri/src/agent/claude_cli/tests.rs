@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{AgentError, Events, OutputKind, RateLimit, Usage, reset_in_text};
+use super::{
+    AgentError, Events, OutputKind, RateLimit, Usage, WindowShare, WindowShares, reset_in_text,
+};
 
 pub const SUCCESS: &str = include_str!("fixtures/success.jsonl");
 pub const EMPTY_PATCH: &str = include_str!("fixtures/empty_patch.jsonl");
@@ -30,6 +32,8 @@ pub const RATE_LIMITED: &str = include_str!("fixtures/rate_limited.jsonl");
 const ELAPSED: Duration = Duration::from_millis(13_480);
 /// `resetsAt` 1793623200 s of the fixtures.
 const RESETS_AT_MS: i64 = 1_793_623_200_000;
+/// The week's `resetsAt` 1793970000 s of the fixtures.
+const WEEK_RESETS_AT_MS: i64 = 1_793_970_000_000;
 
 fn reply(stream: &str) -> Result<super::AgentReply, AgentError> {
     Events::parse(stream).reply(ELAPSED, None, "", OutputKind::Patch)
@@ -51,6 +55,16 @@ fn success_gives_the_patch_and_the_usage() {
             cost_usd: Some(0.054_969_2),
             utilization: Some(0.24),
             resets_at: Some(RESETS_AT_MS),
+            windows: WindowShares {
+                session: Some(WindowShare {
+                    used: 0.24,
+                    resets_at: Some(RESETS_AT_MS),
+                }),
+                week: Some(WindowShare {
+                    used: 0.1,
+                    resets_at: Some(WEEK_RESETS_AT_MS),
+                }),
+            },
         }
     );
 }
@@ -110,6 +124,25 @@ fn rate_limited_carries_the_reset_time() {
 }
 
 #[test]
+fn a_rejected_call_still_tells_both_windows() {
+    let limit = Events::parse(RATE_LIMITED).rate_limit.unwrap();
+    assert!(limit.rejected);
+    assert_eq!(
+        limit.windows,
+        WindowShares {
+            session: Some(WindowShare {
+                used: 1.0,
+                resets_at: Some(1_793_641_200_000),
+            }),
+            week: Some(WindowShare {
+                used: 0.31,
+                resets_at: Some(WEEK_RESETS_AT_MS),
+            }),
+        }
+    );
+}
+
+#[test]
 fn other_errors_are_invalid_output_or_process() {
     let stream = r#"{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"errors":["Failed to provide valid structured output after 5 attempts"]}"#;
     let Err(AgentError::InvalidOutput(message)) = reply(stream) else {
@@ -156,9 +189,22 @@ fn the_fullest_limit_window_counts() {
             rejected: false,
             utilization: Some(0.91),
             resets_at: Some(1_793_970_000_000),
+            windows: WindowShares {
+                session: Some(WindowShare {
+                    used: 0.3,
+                    resets_at: Some(RESETS_AT_MS),
+                }),
+                week: Some(WindowShare {
+                    used: 0.91,
+                    resets_at: Some(WEEK_RESETS_AT_MS),
+                }),
+            },
         }
     );
     assert_eq!(RateLimit::of(&json!({})), RateLimit::default());
+    // A window without its share is not known.
+    let partial = json!({ "unifiedWindows": { "five_hour": { "resetsAt": 1 } } });
+    assert!(RateLimit::of(&partial).windows.is_empty());
 }
 
 /// The phases the hook hears on a stream, in order.

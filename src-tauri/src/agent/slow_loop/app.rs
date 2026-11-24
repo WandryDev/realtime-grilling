@@ -13,18 +13,26 @@ use crate::{
         events::CallStateView,
         scheduler::FastLoop,
     },
+    agent::limit::SubscriptionLimit,
     error::CommandResult,
 };
 
 /// The slow loop of the app, on Tauri's runtime, sharing the halt of
-/// `fast_loop`, which tells it of every change of the current topic. The
-/// prompt files a crash left behind are removed.
-pub fn for_app<R: Runtime>(app: &AppHandle<R>, fast_loop: &FastLoop) -> SlowLoop {
+/// `fast_loop`, which tells it of every change of the current topic, and
+/// stopping at the thresholds of `limit`. The prompt files a crash left
+/// behind are removed.
+pub fn for_app<R: Runtime>(
+    app: &AppHandle<R>,
+    fast_loop: &FastLoop,
+    limit: &SubscriptionLimit,
+) -> SlowLoop {
+    let mut config = SlowConfig::new(work_dir(app));
+    config.limit = limit.clone();
     let slow_loop = SlowLoop::new(
         Arc::new(AppLoopHost { app: app.clone() }),
         Arc::new(CliProvider { app: app.clone() }),
         tauri::async_runtime::handle().inner().clone(),
-        SlowConfig::new(work_dir(app)),
+        config,
         fast_loop.halt(),
     );
     connect(fast_loop, &slow_loop);

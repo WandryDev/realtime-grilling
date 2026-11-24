@@ -1,3 +1,5 @@
+import type { LimitOutlook } from "@/bindings";
+
 import { LaunchCard } from "../components/launch-card";
 import { StartPill } from "../components/start-pill";
 import {
@@ -45,6 +47,7 @@ export function StartWidget({
   callHref,
   className,
   launch,
+  limit,
   onAddParticipant,
   onDismiss,
   onExpand,
@@ -53,6 +56,7 @@ export function StartWidget({
   onProjectChange,
   onRemoveParticipant,
   onStart,
+  onStartOverLimit,
   overlayHref,
   participants = CALL_PARTICIPANTS,
   projectId = PICKER_PROJECTS[0].id,
@@ -72,6 +76,8 @@ export function StartWidget({
   callHref?: string;
   className?: string;
   launch?: StartWidgetLaunch;
+  /** The thresholds of Grill: a warning on the prompt when close or reached. */
+  limit?: LimitOutlook;
   onAddParticipant?: (id: string) => void;
   /** × and "Не сейчас" on the prompt. */
   onDismiss?: () => void;
@@ -85,6 +91,8 @@ export function StartWidget({
   onRemoveParticipant?: (id: string) => void;
   /** "Начать" on the prompt and on the pill. */
   onStart?: () => void;
+  /** «Начать сверх лимита» on the prompt. */
+  onStartOverLimit?: () => void;
   /** "Оверлей" on the launch card. */
   overlayHref?: string;
   participants?: Participant[];
@@ -135,11 +143,13 @@ export function StartWidget({
       app={app}
       briefNote={briefNote}
       className={className}
+      limit={limit}
       onAddParticipant={onAddParticipant}
       onDismiss={onDismiss}
       onProjectChange={onProjectChange}
       onRemoveParticipant={onRemoveParticipant}
       onStart={onStart}
+      onStartOverLimit={onStartOverLimit}
       participants={participants}
       projectId={projectId}
       projectOpen={state === "choosing-project"}

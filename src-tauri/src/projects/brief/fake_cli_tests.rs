@@ -18,7 +18,10 @@ use super::{
     tests::{TestHost, block_on, reply},
 };
 use crate::{
-    agent::claude_cli::{Agent, ClaudeCodeCli},
+    agent::{
+        claude_cli::{Agent, ClaudeCodeCli},
+        limit::LimitPolicy,
+    },
     events::{Change, DataChanged, Entity},
     projects::builds::BriefBuilds,
     storage::{
@@ -170,7 +173,8 @@ fn project_events(host: &TestHost, project_id: &str) -> usize {
 
 /// Runs a build to its end.
 fn build(host: &Arc<TestHost>, builds: &BriefBuilds, project_id: &str, agent: Arc<dyn Agent>) {
-    let running = run::start(host, builds, project_id, Some(agent)).expect("a build starts");
+    let running = run::start(host, builds, project_id, Some(agent), LimitPolicy::Respect)
+        .expect("a build starts");
     block_on(running).unwrap();
 }
 
@@ -270,7 +274,14 @@ fn a_cancel_kills_the_agent_and_keeps_the_old_brief() {
     host.save(&project.id, &old);
 
     let fake = Fake::new(&reply());
-    let running = run::start(&host, &builds, &project.id, Some(fake.agent("hang"))).unwrap();
+    let running = run::start(
+        &host,
+        &builds,
+        &project.id,
+        Some(fake.agent("hang")),
+        LimitPolicy::Respect,
+    )
+    .unwrap();
     let child = fake.child_pid();
     let started = Instant::now();
     assert!(builds.cancel(&project.id));
@@ -291,13 +302,29 @@ fn a_second_request_while_building_starts_nothing() {
     let builds = BriefBuilds::default();
     let project = host.project();
     let fake = Fake::new(&reply());
-    let running = run::start(&host, &builds, &project.id, Some(fake.agent("hang"))).unwrap();
+    let running = run::start(
+        &host,
+        &builds,
+        &project.id,
+        Some(fake.agent("hang")),
+        LimitPolicy::Respect,
+    )
+    .unwrap();
     let child = fake.child_pid();
     assert_eq!(host.get(&project.id).brief_state, BriefState::None);
     assert!(builds.is_building(&project.id));
 
     let second = Fake::new(&reply());
-    assert!(run::start(&host, &builds, &project.id, Some(second.agent("play"))).is_none());
+    assert!(
+        run::start(
+            &host,
+            &builds,
+            &project.id,
+            Some(second.agent("play")),
+            LimitPolicy::Respect
+        )
+        .is_none()
+    );
     assert!(!block_on(prepare(&host, &builds, &project.id)).unwrap());
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(second.runs(), 0);
@@ -359,7 +386,7 @@ fn a_build_without_a_ready_agent_fails_at_the_start() {
     let host = TestHost::new(None);
     let builds = BriefBuilds::default();
     let project = host.project();
-    let running = run::start(&host, &builds, &project.id, None).unwrap();
+    let running = run::start(&host, &builds, &project.id, None, LimitPolicy::Respect).unwrap();
     block_on(running).unwrap();
     let last = host.progress().pop().unwrap();
     assert_eq!(last.stage, 2);
@@ -406,7 +433,14 @@ fn deleting_the_project_cancels_its_build() {
     let builds = BriefBuilds::default();
     let project = host.project();
     let fake = Fake::new(&reply());
-    let running = run::start(&host, &builds, &project.id, Some(fake.agent("hang"))).unwrap();
+    let running = run::start(
+        &host,
+        &builds,
+        &project.id,
+        Some(fake.agent("hang")),
+        LimitPolicy::Respect,
+    )
+    .unwrap();
     let child = fake.child_pid();
 
     block_on(crate::projects::delete(

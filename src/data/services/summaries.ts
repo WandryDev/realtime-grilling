@@ -37,7 +37,8 @@ import { demoRecords } from "./mock-records";
  * the demo summary is saved (`./mock-records.ts`) with fresh pending
  * proposals; the decided ones stay. A call without a recording gets the
  * demo one first: the browser's call window plays that call. The mock
- * leaves the call's status to the call session (`closeCall`).
+ * leaves the call's status to the call session (`closeCall`) and knows no
+ * thresholds of Grill: every build builds, `overLimit` or not.
  */
 export class SummaryData extends Context.Service<
   SummaryData,
@@ -46,8 +47,16 @@ export class SummaryData extends Context.Service<
     readonly get: (
       callId: string
     ) => Effect.Effect<CallSummaryView, BackendError>;
-    /** «Собрать итоги»: returns at once, `progress` follows the build. */
-    readonly build: (callId: string) => Effect.Effect<void, BackendError>;
+    /**
+     * «Собрать итоги»: returns at once, `progress` follows the build. With
+     * `overLimit` («Собрать сверх лимита») the thresholds of Grill don't
+     * stop it; without, a reached one leaves the summary `failed` /
+     * `grillLimit` (agent-limit-guard design.md, decision 7).
+     */
+    readonly build: (
+      callId: string,
+      overLimit: boolean
+    ) => Effect.Effect<void, BackendError>;
     /** «Остановить». */
     readonly cancel: (callId: string) => Effect.Effect<void, BackendError>;
     /** The progress of every call's build. */
@@ -55,7 +64,8 @@ export class SummaryData extends Context.Service<
   }
 >()("grill/data/services/SummaryData") {
   static readonly layerTauri = Layer.succeed(SummaryData, {
-    build: (callId) => Effect.asVoid(call(() => commands.summaryBuild(callId))),
+    build: (callId, overLimit) =>
+      Effect.asVoid(call(() => commands.summaryBuild(callId, overLimit))),
     cancel: (callId) =>
       Effect.asVoid(call(() => commands.summaryCancel(callId))),
     get: (callId) => call(() => commands.summaryGet(callId)),
@@ -317,6 +327,12 @@ const SUMMARY_TOPICS = 2;
 export const CANCELLED = "cancelled";
 /** The `error` of a finished call without a stored summary. */
 export const INTERRUPTED = "interrupted";
+/**
+ * The `error` of a build a threshold of Grill held back before the agent
+ * (`summary::GRILL_LIMIT` in Rust); the backend builds it when the
+ * threshold lets go.
+ */
+export const GRILL_LIMIT = "grillLimit";
 
 function emptySummary(callId: string, now: number): CallSummary {
   return {

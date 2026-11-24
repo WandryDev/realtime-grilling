@@ -9,6 +9,7 @@ import {
 } from "@/effect/tauri";
 import { RecordingBackend } from "@/features/recording/backend";
 
+import { mockAgentLimit } from "./agent-limit";
 import { invalid, MockDatabase, notFound } from "./mock-database";
 import { DEMO_CALL_ID } from "./mock-seed";
 
@@ -147,6 +148,10 @@ export class CallSessionBackend extends Context.Service<
         }
         const people = yield* checkStart(input);
         const recordingId = yield* recorder.start(people);
+        if (input.overLimit) {
+          // «Начать сверх лимита», as Rust's `call_start`.
+          mockAgentLimit.allowOver(recordingId);
+        }
         const startedAt = yield* Clock.currentTimeMillis;
         return yield* set({
           ...people,

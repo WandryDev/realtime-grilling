@@ -232,11 +232,12 @@ export function useCallSummary(
 
 /**
  * «Собрать итоги»: the build starts in the background and the summary
- * follows it. Resolves once it started (`false` when it couldn't).
+ * follows it; `overLimit` is «Собрать сверх лимита», past the thresholds
+ * of Grill. Resolves once it started (`false` when it couldn't).
  */
-export async function buildSummary(callId: string) {
+export async function buildSummary(callId: string, overLimit = false) {
   const started = await summaryStore(callId).mutate(
-    SummaryData.use((data) => Effect.as(data.build(callId), true)),
+    SummaryData.use((data) => Effect.as(data.build(callId, overLimit), true)),
     { error: "Не удалось собрать итоги" }
   );
   return started !== undefined;

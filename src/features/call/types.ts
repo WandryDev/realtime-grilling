@@ -332,6 +332,7 @@ export type CallScreenState =
   | "mic-released"
   | "agent-timeout"
   | "limit-reached"
+  | "grill-limit"
   | "transcript-lag"
   | "no-system-audio"
   | "github-unavailable"

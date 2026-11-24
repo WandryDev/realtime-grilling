@@ -19,7 +19,7 @@ describe("ProjectsBackend.layerMock", () => {
     Effect.gen(function* () {
       const backend = yield* ProjectsBackend;
       const fiber = yield* Effect.forkChild(
-        Stream.runCollect(backend.buildBrief("telemedia"))
+        Stream.runCollect(backend.buildBrief("telemedia", false))
       );
       yield* TestClock.adjust("5 seconds");
       const stages = yield* Fiber.join(fiber);
@@ -46,13 +46,13 @@ describe("ProjectsBackend.layerMock", () => {
         { startImmediately: true }
       );
       const owner = yield* Effect.forkChild(
-        Stream.runCollect(backend.buildBrief("telemedia")),
+        Stream.runCollect(backend.buildBrief("telemedia", false)),
         { startImmediately: true }
       );
       yield* TestClock.adjust("1 second");
       // Another window joins the build: it ends with the build, not a stage.
       const follower = yield* Effect.forkChild(
-        Stream.runCollect(backend.buildBrief("telemedia")),
+        Stream.runCollect(backend.buildBrief("telemedia", false)),
         { startImmediately: true }
       );
       yield* TestClock.adjust("5 seconds");
@@ -108,7 +108,9 @@ describe("ProjectsBackend.layerMock over the mock database", () => {
         description: "Запись к врачу",
         name: "Ромашка",
       });
-      const fiber = yield* Effect.forkChild(backend.refreshBrief(project.id));
+      const fiber = yield* Effect.forkChild(
+        backend.refreshBrief(project.id, false)
+      );
       yield* TestClock.adjust("1 second");
       assert.strictEqual(
         (yield* projects.get(project.id)).briefState,
@@ -153,7 +155,9 @@ describe("ProjectsBackend.layerMock over the mock database", () => {
       const backend = yield* ProjectsBackend;
       const projects = yield* ProjectsData;
       const before = yield* projects.get("telemedia");
-      const fiber = yield* Effect.forkChild(backend.refreshBrief("telemedia"));
+      const fiber = yield* Effect.forkChild(
+        backend.refreshBrief("telemedia", false)
+      );
       yield* TestClock.adjust("2 seconds");
       yield* Fiber.interrupt(fiber);
       const after = yield* projects.get("telemedia");
@@ -196,7 +200,7 @@ describe("ProjectsBackend.layerMock over the mock database", () => {
         name: "Ромашка",
       });
       const fiber = yield* Effect.forkChild(
-        Effect.exit(backend.refreshBrief(project.id))
+        Effect.exit(backend.refreshBrief(project.id, false))
       );
       yield* TestClock.adjust("2 seconds");
       yield* projects.remove(project.id);
@@ -212,7 +216,7 @@ describe("ProjectsBackend.layerMock over the mock database", () => {
       const backend = yield* ProjectsBackend;
       const projects = yield* ProjectsData;
       const project = yield* projects.create({ name: "Пусто" });
-      const exit = yield* Effect.exit(backend.refreshBrief(project.id));
+      const exit = yield* Effect.exit(backend.refreshBrief(project.id, false));
       assert.isTrue(Exit.isFailure(exit));
       assert.strictEqual((yield* projects.get(project.id)).briefState, "none");
     }).pipe(Effect.provide(MockServices))

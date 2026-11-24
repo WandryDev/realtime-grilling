@@ -5,9 +5,11 @@ import type {
   Evidence,
   FindingSourceKind,
   GapType,
+  LimitHit,
   Question,
   Topic,
 } from "@/bindings";
+import { hitLine, resetLine } from "@/lib/agent-limit";
 import { plural } from "@/lib/plural";
 import { routes } from "@/lib/routes";
 
@@ -535,6 +537,11 @@ export interface AgentStatusView {
   banner?: AgentBannerData;
   /** The agent stopped: the questions gray out. */
   frozen: boolean;
+  /**
+   * A threshold of Grill stops the agent: «Продолжить сверх лимита» lets
+   * this call go past it.
+   */
+  grillLimit?: LimitHit;
   /** Seconds before the backend retries by itself; null: it doesn't. */
   retryIn: number | null;
   /** A call is running. */
@@ -548,6 +555,14 @@ const RETRY_ACTION = {
   label: "Повторить",
   variant: "secondary",
 } as const;
+
+/** The banner's id of «Продолжить сверх лимита». */
+export const OVER_LIMIT_ACTION = "over-limit";
+
+/** «Лимит Grill: сессия 91 % из 90 %». */
+export function grillLimitTitle(hit: LimitHit) {
+  return `Лимит Grill: ${hitLine(hit)}`;
+}
 
 /** The backend's agent state as the status, the banner and the countdown. */
 export function toAgentStatusView(
@@ -618,6 +633,29 @@ export function toAgentStatusView(
           title: "Claude Code просит войти",
         },
         frozen: true,
+        retryIn: null,
+        thinking: false,
+        ...usage,
+      };
+    case "grillLimit":
+      return {
+        agent: { label: "лимит Grill", state: "listening", tone: "muted" },
+        banner: {
+          actions: [
+            {
+              id: OVER_LIMIT_ACTION,
+              label: "Продолжить сверх лимита",
+              variant: "secondary",
+            },
+          ],
+          description:
+            "Новых вопросов пока нет: остаток лимита подписки бережём для вас. Запись и расшифровка идут, после сброса или «Продолжить сверх лимита» догоню пропущенное.",
+          hint: { text: resetLine(state.hit.resetsAt, now) },
+          icon: "claude",
+          title: grillLimitTitle(state.hit),
+        },
+        frozen: true,
+        grillLimit: state.hit,
         retryIn: null,
         thinking: false,
         ...usage,

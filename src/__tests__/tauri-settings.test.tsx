@@ -88,7 +88,7 @@ const { WidgetSection } = await import(
 );
 const { DefaultSidebarStatus } = await import("@/features/shell/app-sidebar");
 const { publishAgentState } = await import("@/features/settings/agent-status");
-const { IDLE_SESSION } = await import("./helpers/fake-tauri");
+const { IDLE_SESSION, NO_LIMIT_DATA } = await import("./helpers/fake-tauri");
 const { settingProblem } = await import("@/data/services/setting-checks");
 const { getSettings, refreshSettings, resetSettings } = await import(
   "@/data/settings"
@@ -118,6 +118,7 @@ const USB = {
 
 /** 12:41 today. */
 const AT_12_41 = new Date().setHours(12, 41, 0, 0);
+const MEASURED_AT_12_41 = /замер 12:41/u;
 
 /** Keys the screens wrote before Rust checked them (decision 6). */
 const REMOVED_KEYS = [
@@ -252,7 +253,6 @@ describe("SettingsBackend.layerTauri", () => {
     expect((await runBackend((backend) => backend.checkAgent())).status).toBe(
       "ready"
     );
-    expect(await runBackend((backend) => backend.agentUsage)).toBeNull();
     expect((await runBackend((backend) => backend.recordingsInfo)).path).toBe(
       "/tmp/grill/recordings"
     );
@@ -623,20 +623,73 @@ describe("«Агент» in Tauri", () => {
     ).toBeTruthy();
   });
 
-  it("Лимит: the last share with its time, or «нет данных»", async () => {
-    fake.answers.set("agent_usage", () => ({
-      measuredAt: AT_12_41,
-      utilization: 0.82,
-    }));
+  it("Лимит: both windows with the reset and the measure, or «нет данных»", async () => {
+    const resetsAt = new Date().setHours(23, 9, 0, 0);
+    act(() =>
+      fake.setLimit({
+        ...NO_LIMIT_DATA,
+        session: {
+          measuredAt: AT_12_41,
+          resetsAt,
+          source: "usage",
+          used: 82,
+        },
+        week: { measuredAt: AT_12_41, resetsAt, source: "call", used: 16 },
+      })
+    );
+    const user = userEvent.setup();
     const { unmount } = render(<AgentSection />);
 
     expect(await screen.findByText("Использовано 82 %")).toBeTruthy();
-    expect(screen.getByText("12:41")).toBeTruthy();
+    expect(screen.getByText("Использовано 16 %")).toBeTruthy();
+    expect(screen.getAllByText("сброс в 23:09")).toHaveLength(2);
+    expect(screen.getAllByText(MEASURED_AT_12_41)).toHaveLength(2);
+
+    // «Проверить снова» polls the limit too.
+    await user.click(screen.getByRole("button", { name: "Проверить снова" }));
+    await waitFor(() =>
+      expect(invokedWith("agent_limit_refresh")).toHaveLength(1)
+    );
     unmount();
 
-    fake.answers.set("agent_usage", () => null);
+    act(() => fake.setLimit(NO_LIMIT_DATA));
     render(<AgentSection />);
-    expect(await screen.findByText("нет данных")).toBeTruthy();
+    expect(await screen.findAllByText("нет данных")).toHaveLength(2);
+  });
+
+  it("Пороги: 90 % of the session and 80 % of the week; a change goes to the settings", async () => {
+    const user = userEvent.setup();
+    render(<AgentSection />);
+
+    // The row and its segments are both named after the threshold.
+    const segments = (name: string) =>
+      screen
+        .getAllByRole("group", { name })
+        .find((group) =>
+          within(group).queryByRole("button", { name: "90 %" })
+        ) ?? screen.getByRole("group", { name });
+    await screen.findAllByRole("group", { name: "Порог сессии" });
+    const session = segments("Порог сессии");
+    const week = segments("Порог недели");
+    expect(
+      within(session)
+        .getByRole("button", { name: "90 %" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(
+      within(week)
+        .getByRole("button", { name: "80 %" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+
+    await user.click(within(session).getByRole("button", { name: "70 %" }));
+    await user.click(
+      within(week).getByRole("button", { name: "Без ограничения" })
+    );
+    await waitFor(() =>
+      expect(settingPatches()).toContainEqual({ agentLimitWeek: "off" })
+    );
+    expect(settingPatches()).toContainEqual({ agentLimitSession: "70" });
   });
 
   it("checks another path and saves only a CLI that answers", async () => {

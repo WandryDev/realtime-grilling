@@ -52,6 +52,7 @@ use crate::{
         claude_cli::{self, Agent, AgentError, AgentRequest, CallOptions, OutputKind},
         fast_loop::scheduler::{AgentProvider, LoopHost, database, in_savepoint, save, with_usage},
         halt::{AgentHalt, Halted},
+        limit::SubscriptionLimit,
         process::TreeSlot,
     },
     storage::{
@@ -81,6 +82,9 @@ pub struct SlowConfig {
     pub call_timeout: Duration,
     /// How long a cancelled call may take to stop.
     pub cancel_wait: Duration,
+    /// The share of the subscription limit, whose thresholds stop the calls
+    /// with the fast loop's (agent-limit-guard design.md, decision 5).
+    pub limit: SubscriptionLimit,
 }
 
 impl SlowConfig {
@@ -92,6 +96,7 @@ impl SlowConfig {
             retry_after: Duration::from_secs(60),
             call_timeout: claude_cli::TIMEOUT + Duration::from_secs(2),
             cancel_wait: Duration::from_secs(5),
+            limit: SubscriptionLimit::default(),
         }
     }
 }
@@ -433,6 +438,7 @@ impl Scheduler {
     async fn run(mut self, mut messages: mpsc::UnboundedReceiver<Message>) {
         let mut call: Option<JoinHandle<CallEnd>> = None;
         let mut stopping = false;
+        let mut limit_news = self.inner().config.limit.subscribe();
         while !(stopping && call.is_none()) {
             let due_at = self.due_at().filter(|_| call.is_none() && !stopping);
             tokio::select! {
@@ -460,10 +466,12 @@ impl Scheduler {
                 () = sleep_until(due_at) => {
                     // A wake-up at the limit's reset is no call by itself.
                     let due = self.call_due().is_some_and(|due| due <= Instant::now());
-                    if self.inner().halt.active().is_none() && due {
+                    if self.inner().halt.active().is_none() && !self.grill_limited() && due {
                         call = self.start_call().await;
                     }
                 }
+                // A threshold that let go makes the next call due again.
+                Ok(()) = limit_news.changed(), if !stopping => {}
             }
         }
         if let Err(error) = std::fs::remove_file(&self.call.prompt_file)
@@ -485,7 +493,7 @@ impl Scheduler {
     /// retry after an error, nor while the calls are stopped (until the
     /// limit resets, when known).
     fn due_at(&self) -> Option<Instant> {
-        if self.waiting_for_agent {
+        if self.waiting_for_agent || self.grill_limited() {
             return None;
         }
         if let Some(halted) = self.inner().halt.active() {
@@ -496,6 +504,16 @@ impl Scheduler {
             };
         }
         self.call_due()
+    }
+
+    /// A threshold of Grill stops the calls of this recording (silently, as
+    /// a used-up limit does).
+    fn grill_limited(&self) -> bool {
+        self.inner()
+            .config
+            .limit
+            .blocks(&self.call.recording_id)
+            .is_some()
     }
 
     /// When the next call is due by the topic, the client's words and the

@@ -23,6 +23,7 @@ use crate::{
             scheduler::FastLoop,
         },
         install::{self, AgentInstallProgress},
+        limit::{self, LimitPolicy, LimitThresholds, SubscriptionLimit, SubscriptionLimitView},
         login,
         slow_loop::{app as slow_loop_app, scheduler::SlowLoop},
     },
@@ -56,7 +57,7 @@ use crate::{
     },
     storage::{
         Storage, call_records,
-        call_state::{self, AgentUsage, QuestionAction},
+        call_state::{self, QuestionAction},
         calls::{self, Call, CallCreate, CallStatus, CallUpdate},
         data::{self, DataSummary, RecordingsInfo},
         people::{self, Person, PersonCreate, PersonUpdate},
@@ -191,7 +192,8 @@ pub async fn project_sources_remove(
 
 /// Starts building the project's brief with the agent, in the background,
 /// and returns at once: `BriefProgress` follows the stages (1…5) to `done`,
-/// `failed` or `cancelled`. While a build of the project runs, does nothing
+/// `failed` or `cancelled`. A reached threshold of Grill fails it before
+/// the agent (`grillLimit`) unless `overLimit` («Собрать сверх лимита»). While a build of the project runs, does nothing
 /// (follow that one). `NotFound` for an unknown project.
 #[tauri::command]
 #[specta::specta]
@@ -200,10 +202,17 @@ pub async fn brief_build(
     storage: State<'_, Storage>,
     builds: State<'_, BriefBuilds>,
     project_id: String,
+    over_limit: bool,
 ) -> CommandResult<()> {
     let id = project_id.clone();
     storage.read(move |db| projects::exists(db, &id)).await?;
-    brief_run::start(&Arc::new(app), &builds, &project_id, None);
+    brief_run::start(
+        &Arc::new(app),
+        &builds,
+        &project_id,
+        None,
+        LimitPolicy::over(over_limit),
+    );
     Ok(())
 }
 
@@ -683,6 +692,8 @@ pub async fn settings_update(
 ) -> CommandResult<SettingsUpdateResult> {
     settings::validate(&patch)?;
     let count_changed = patch.contains_key(settings::QUESTION_COUNT);
+    let limits_changed = patch.contains_key(settings::AGENT_LIMIT_SESSION)
+        || patch.contains_key(settings::AGENT_LIMIT_WEEK);
     let microphone_changed = patch.contains_key(settings::MICROPHONE);
     let _one_at_a_time = lock.0.lock().await;
     // As `speech_model_select`: a ready model, not changed while recording.
@@ -735,6 +746,10 @@ pub async fn settings_update(
         for recording_id in recordings {
             call_state_changed(&app, &recording_id);
         }
+    }
+    if limits_changed && let Some(limit) = app.try_state::<SubscriptionLimit>() {
+        // At once, in a call that runs too.
+        limit.set_thresholds(LimitThresholds::of(&settings));
     }
     Ok(SettingsUpdateResult {
         settings,
@@ -1120,12 +1135,41 @@ pub async fn agent_check_path(app: AppHandle, path: String) -> CommandResult<Age
     Ok(agent::check_path(std::path::Path::new(path.trim()), &agent_workdir(&app)).await)
 }
 
-/// The last known share of the subscription limit, from the newest agent
-/// call that reported one; `null` without any.
+/// The share of the subscription limit of both windows, the thresholds of
+/// Grill and the outlook (agent-limit-guard design.md, decision 4).
+/// `SubscriptionLimitChanged` follows every change.
 #[tauri::command]
 #[specta::specta]
-pub async fn agent_usage(storage: State<'_, Storage>) -> CommandResult<Option<AgentUsage>> {
-    storage.read(call_state::latest_usage).await
+pub fn agent_limit_get(
+    limit: State<'_, SubscriptionLimit>,
+) -> CommandResult<SubscriptionLimitView> {
+    Ok(limit.view())
+}
+
+/// «Проверить»: polls `/usage` now (joining a poll that runs) when the
+/// agent is ready, and returns the share as it is then. A poll that
+/// failed keeps the measures; never calls the model.
+#[tauri::command]
+#[specta::specta]
+pub async fn agent_limit_refresh(
+    app: AppHandle,
+    limit: State<'_, SubscriptionLimit>,
+) -> CommandResult<SubscriptionLimitView> {
+    limit::app::refresh(&app).await;
+    Ok(limit.view())
+}
+
+/// «Продолжить сверх лимита»: the thresholds of Grill no longer stop the
+/// calls of the recording, until it ends. Neither the summary nor the
+/// brief build follow it.
+#[tauri::command]
+#[specta::specta]
+pub fn agent_limit_override(
+    limit: State<'_, SubscriptionLimit>,
+    recording_id: String,
+) -> CommandResult<()> {
+    limit.allow_over(&recording_id);
+    Ok(())
 }
 
 /// "Перезапустить": macOS shows a system audio access granted in this
@@ -1227,9 +1271,17 @@ pub fn call_current(calls: State<'_, CallManager>) -> CommandResult<CallSession>
 #[specta::specta]
 pub async fn call_start(
     calls: State<'_, CallManager>,
+    limit: State<'_, SubscriptionLimit>,
     input: CallStart,
 ) -> CommandResult<CallSession> {
-    calls.start(input).await
+    let over_limit = input.over_limit == Some(true);
+    let session = calls.start(input).await?;
+    // «Начать сверх лимита»: as if «Продолжить сверх лимита» was chosen
+    // before the first call of the recording.
+    if over_limit && let Some(recording_id) = &session.recording_id {
+        limit.allow_over(recording_id);
+    }
+    Ok(session)
 }
 
 /// "Завершить" of the live call: the recording stops, the call gets its
@@ -1329,6 +1381,8 @@ pub async fn summary_get(
 
 /// «Собрать итоги»: builds the summary of a finished call again, in the
 /// background, and returns at once; `SummaryProgress` follows the stages.
+/// `overLimit` («Собрать сверх лимита») builds it whatever the thresholds
+/// of Grill; otherwise a reached one leaves it `failed` / `grillLimit`.
 /// The previous summary stays until the new one is saved. While a build
 /// of the call runs, does nothing (follow that one). `NotFound` for an
 /// unknown call, `Invalid` for a live one.
@@ -1339,7 +1393,10 @@ pub async fn summary_build(
     storage: State<'_, Storage>,
     builds: State<'_, SummaryBuilds>,
     call_id: String,
+    over_limit: bool,
 ) -> CommandResult<()> {
+    // «Собрать сверх лимита»: the thresholds of Grill don't stop it.
+    let limit = LimitPolicy::over(over_limit);
     let id = call_id.clone();
     let call = storage.read(move |db| calls::get(db, &id)).await?;
     if call.status == CallStatus::Live {
@@ -1347,7 +1404,7 @@ pub async fn summary_build(
             "Итоги собираются после звонка: сначала завершите его",
         ));
     }
-    summary_run::start(&Arc::new(app), &builds, &call_id);
+    summary_run::start(&Arc::new(app), &builds, &call_id, limit);
     Ok(())
 }
 

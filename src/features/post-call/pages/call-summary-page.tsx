@@ -4,6 +4,7 @@ import { toast } from "@grill/ui/toast";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { CallRecording } from "@/bindings";
+import { useLimitOutlook } from "@/data/agent-limit";
 import {
   useCallCards,
   useCallQuestions,
@@ -19,6 +20,7 @@ import {
 import { usePeople } from "@/data/people";
 import { useProject } from "@/data/projects";
 import { countPending, useCallProposals } from "@/data/proposals";
+import { GRILL_LIMIT } from "@/data/services/summaries";
 import {
   buildFinishingSummary,
   buildSummary,
@@ -36,6 +38,7 @@ import { CallSummaryScreen } from "../screens/call-summary-screen";
 import {
   cardsOverview,
   failureReason,
+  grillLimitDetail,
   processingSteps,
   summaryChips,
   summaryTopics,
@@ -52,7 +55,9 @@ import { knowledgeTargets } from "./proposal-data";
  * итогов" at the stage of `SummaryProgress`, also after a reload, with
  * «Остановить»; then the summary and the "Итоги сохранены" toast. A
  * summary that was not built says why and offers «Собрать итоги» over
- * what the records still give: the questions, counters and cards.
+ * what the records still give: the questions, counters and cards. One a
+ * threshold of Grill held back (`grillLimit`) tells the threshold and its
+ * reset and offers «Собрать сверх лимита» while it is reached.
  *
  * In the browser the mock plays the build on a timer and the page closes
  * the call when it ends, as Rust would. `?demo=processing` replays the
@@ -110,6 +115,7 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
   const proposals = useCallProposals(call.id).data;
   const people = usePeople(call.projectId);
   const project = useProject(call.projectId);
+  const outlook = useLimitOutlook();
 
   const justFinished =
     session.status === "finishing" && session.callId === call.id;
@@ -142,7 +148,10 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
     cancelSummary(call.id);
   }, [call.id]);
   const rebuild = useCallback(() => {
-    buildSummary(call.id);
+    buildSummary(call.id, false);
+  }, [call.id]);
+  const rebuildOverLimit = useCallback(() => {
+    buildSummary(call.id, true);
   }, [call.id]);
 
   const steps = useMemo(
@@ -193,13 +202,24 @@ function SummaryOfCall({ call }: { call: CallRecord }) {
     [questions, titles]
   );
   const overview = useMemo(() => cardsOverview(cards.cards), [cards]);
-  const failure = useMemo(
-    () =>
-      summary?.state === "failed"
-        ? { onRebuild: rebuild, reason: failureReason(summary.error) }
-        : null,
-    [rebuild, summary]
-  );
+  const failure = useMemo(() => {
+    if (summary?.state !== "failed") {
+      return null;
+    }
+    const reason = failureReason(summary.error);
+    if (summary.error !== GRILL_LIMIT) {
+      return { onRebuild: rebuild, reason };
+    }
+    // Held back by a threshold of Grill: past it while it is reached, an
+    // ordinary build once it let go.
+    const reached = outlook.kind === "reached";
+    return {
+      detail: grillLimitDetail(outlook),
+      onRebuild: reached ? rebuildOverLimit : rebuild,
+      reason,
+      rebuildLabel: reached ? "Собрать сверх лимита" : undefined,
+    };
+  }, [outlook, rebuild, rebuildOverLimit, summary]);
   const targets = useMemo(
     () => knowledgeTargets(proposals, people),
     [people, proposals]

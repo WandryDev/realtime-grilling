@@ -21,7 +21,10 @@ use super::{
     tests::CallData,
 };
 use crate::{
-    agent::claude_cli::{Agent, AgentError, AgentFuture, AgentReply, AgentRequest, Usage},
+    agent::{
+        claude_cli::{Agent, AgentError, AgentFuture, AgentReply, AgentRequest, Usage},
+        limit::{LimitHit, LimitPolicy, SubscriptionLimit},
+    },
     call::CallManager,
     events::{DataChanged, EventSink, testing::RecordingSink},
     projects::brief::run::AgentLookup,
@@ -58,6 +61,8 @@ pub struct TestHost {
     pub silence: Mutex<Duration>,
     /// `close_call` goes to it when set.
     pub calls: OnceLock<CallManager>,
+    /// Its thresholds stop the agent stages; no measures by default.
+    pub limit: SubscriptionLimit,
 }
 
 impl TestHost {
@@ -76,6 +81,7 @@ impl TestHost {
             state_changed: Mutex::new(Vec::new()),
             silence: Mutex::new(Duration::from_secs(5)),
             calls: OnceLock::new(),
+            limit: SubscriptionLimit::default(),
         })
     }
 
@@ -164,6 +170,10 @@ impl SummaryHost for TestHost {
 
     fn silence(&self) -> Duration {
         *self.silence.lock().unwrap()
+    }
+
+    fn grill_limit(&self) -> Option<LimitHit> {
+        self.limit.reached()
     }
 }
 
@@ -402,7 +412,7 @@ pub fn proposals_reply() -> Value {
 }
 
 fn build(host: &Arc<TestHost>, builds: &SummaryBuilds, call_id: &str) {
-    let running = run::start(host, builds, call_id).expect("a build starts");
+    let running = run::start(host, builds, call_id, LimitPolicy::Respect).expect("a build starts");
     block_on(running).unwrap();
 }
 
@@ -836,7 +846,7 @@ fn a_stop_after_the_reply_but_before_the_save_saves_nothing() {
         *agent_for_b.before.lock().unwrap() = Some(hook);
     }));
 
-    let running = run::start(&host, &builds, &call.call).unwrap();
+    let running = run::start(&host, &builds, &call.call, LimitPolicy::Respect).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !host.stages().contains(&(Saving, Running)) {
         assert!(std::time::Instant::now() < deadline, "saving did not start");
