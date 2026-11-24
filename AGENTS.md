@@ -165,3 +165,7 @@ Backend calls go through [Effect](https://effect.website/) 4 services. Before wr
 - the main window (`src/features/shell/app-frame.tsx`) waits for the first read, shows a full-window error on a failed one (`Storage`), and opens the routes of `events.navigate`.
 
 **Errors and tests.** Errors are `Schema.TaggedError`, handled with `Effect.catchTag` at the edge. Test services with `@effect/vitest` (`it.effect`, `TestClock`). To run screens in Tauri mode, mock the IPC with `src/__tests__/helpers/fake-tauri.ts` (see `tauri-stores.test.tsx`).
+
+# GitHub
+
+The T3 Code tools (`pull_request_*`) are signed in to another GitHub account, which is not a collaborator of `WandryDev/realtime-grilling`: creating a PR through them fails with `must be a collaborator`. Use the `gh` CLI for PRs, reviews and comments; it is signed in as the repository's account. After `gh pr create`, link the PR to the thread with `link_pull_request`.
