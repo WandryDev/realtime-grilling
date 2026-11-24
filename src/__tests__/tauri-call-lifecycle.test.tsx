@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Effect, Fiber, Stream } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 /*
  * The call from «Начать» to «завершён» in Tauri mode, over the fake IPC
@@ -521,6 +521,11 @@ describe("call window and overlay", () => {
   });
 
   it("shows the backend's countdown in both windows", async () => {
+    // The wall clock stands still: a slow runner would see «4:59».
+    vi.useFakeTimers({ toFake: ["Date"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const now = Date.now();
     fake.setSession(
       liveSession({
